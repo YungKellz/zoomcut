@@ -27,6 +27,9 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
+    // Bind to IPv4 explicitly: on Windows Vite may listen on [::1] only while Electron
+    // resolves "localhost" to 127.0.0.1, which makes the dev window fail to load.
+    server: { host: '127.0.0.1', port: 5173 },
     build: {
       rollupOptions: {
         input: { index: resolve('src/renderer/index.html') }
