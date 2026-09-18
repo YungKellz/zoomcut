@@ -79,6 +79,8 @@ export async function runExport({ project, settings, followPath, onProgress, sig
 
     begun = await window.zc.export.begin({ fileName: settings.fileName, folder: settings.folder, format: settings.format })
     const exportId = begun.exportId
+    // cancelling while ffmpeg runs in the main process has to kill it there
+    signal.addEventListener('abort', () => void window.zc.export.cancel(exportId).catch(() => undefined))
     const writable = new WritableStream<StreamTargetChunk>({
       async write(chunk) {
         await window.zc.export.write(exportId, chunk.position, toArrayBuffer(chunk.data))
@@ -165,6 +167,7 @@ export async function runExport({ project, settings, followPath, onProgress, sig
     if (output) await output.cancel().catch(() => undefined)
     input.dispose()
     if (begun) await window.zc.export.cancel(begun.exportId).catch(() => undefined)
+    if (signal.aborted) throw new DOMException('Export cancelled', 'AbortError')
     throw err
   }
 }

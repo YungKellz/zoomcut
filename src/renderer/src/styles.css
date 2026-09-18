@@ -516,8 +516,9 @@ input[type='checkbox'] {
   background: var(--bg-elev);
 }
 
-.name-input {
+input.name-input {
   width: 280px;
+  flex: none;
   background: transparent;
   border: 1px solid transparent;
   font-weight: 600;

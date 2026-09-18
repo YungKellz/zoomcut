@@ -126,7 +126,18 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
             <button className={'seg-btn' + (settings.format === 'mp4' ? ' active' : '')} disabled={running} onClick={() => set({ format: 'mp4', fps: MP4_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 30 })}>
               MP4 video
             </button>
-            <button className={'seg-btn' + (settings.format === 'gif' ? ' active' : '')} disabled={running} onClick={() => set({ format: 'gif', fps: GIF_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 15 })}>
+            <button
+              className={'seg-btn' + (settings.format === 'gif' ? ' active' : '')}
+              disabled={running}
+              onClick={() =>
+                set({
+                  format: 'gif',
+                  fps: GIF_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 15,
+                  // big GIFs get huge fast: default to half size for large recordings
+                  scale: settings.scale === 1 && outputSize(project, 1).outW > 1400 ? 0.5 : settings.scale
+                })
+              }
+            >
               GIF animation
             </button>
           </div>

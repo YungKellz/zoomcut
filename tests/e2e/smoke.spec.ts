@@ -27,8 +27,10 @@ test.beforeAll(async () => {
   rmSync(tmpRoot, { recursive: true, force: true })
   mkdirSync(recordingsDir, { recursive: true })
   mkdirSync(exportDir, { recursive: true })
+  // ZOOMCUT_EXE=release\win-unpacked\ZoomCut.exe runs the same test against the packaged app.
+  const exe = process.env['ZOOMCUT_EXE']
   app = await electron.launch({
-    args: ['.'],
+    ...(exe ? { executablePath: resolve(exe) } : { args: ['.'] }),
     env: { ...process.env, ZOOMCUT_RECORDINGS_DIR: recordingsDir, ZOOMCUT_E2E: '1' }
   })
   win = await app.firstWindow()
@@ -41,8 +43,12 @@ test.afterAll(async () => {
   await app?.close()
 })
 
+const shotsDir = join(tmpRoot, 'shots')
+
 test('record → edit → export GIF and MP4', async () => {
+  mkdirSync(shotsDir, { recursive: true })
   await win.waitForSelector('.btn-record:not([disabled])', { timeout: 30_000 })
+  await win.screenshot({ path: join(shotsDir, '1-home.png') })
   await win.click('.btn-record')
 
   const bar = await waitForBar()
@@ -72,10 +78,16 @@ test('record → edit → export GIF and MP4', async () => {
   await win.click('.tab:has-text("Clip")')
   await win.click('button:has-text("Trim start")')
   await expect(win.locator('.region.cut')).toHaveCount(1)
+  await win.click('.region.text')
+  await win.keyboard.press('Shift+ArrowRight')
+  await win.screenshot({ path: join(shotsDir, '2-editor.png') })
+  await win.click('.tab:has-text("Cursor")')
+  await win.screenshot({ path: join(shotsDir, '3-editor-cursor-tab.png') })
 
   // export GIF
   await win.click('button:has-text("Export")')
   await win.click('.seg-btn:has-text("GIF animation")')
+  await win.screenshot({ path: join(shotsDir, '4-export-gif.png') })
   await win.fill('input[placeholder="Choose a folder…"]', exportDir)
   await win.fill('.modal input[spellcheck="false"] >> nth=0', 'smoke')
   await win.click('button:has-text("Export GIF")')
