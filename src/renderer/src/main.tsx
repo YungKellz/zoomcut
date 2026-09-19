@@ -25,6 +25,21 @@ useStore.subscribe((state, prev) => {
   }, 700)
 })
 
+// The last used cursor / frame settings become the defaults for new projects.
+let defaultsTimer: number | null = null
+useStore.subscribe((state, prev) => {
+  const p = state.project
+  const q = prev.project
+  if (!p || !q || p.id !== q.id) return
+  if (p.cursor === q.cursor && p.frame === q.frame) return
+  if (defaultsTimer) window.clearTimeout(defaultsTimer)
+  defaultsTimer = window.setTimeout(() => {
+    void window.zc.app
+      .setSettings({ cursorDefaults: { ...p.cursor, offsetMs: 0 }, frameDefaults: { ...p.frame } })
+      .catch((err) => console.error('saving defaults failed', err))
+  }, 800)
+})
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

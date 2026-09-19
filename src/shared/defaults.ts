@@ -8,7 +8,7 @@ import type {
 } from './types'
 
 export const DEFAULT_CURSOR_SETTINGS: CursorSettings = {
-  highlight: true,
+  highlight: false,
   highlightColor: '#ffd60a',
   highlightRadius: 26,
   highlightOpacity: 0.35,

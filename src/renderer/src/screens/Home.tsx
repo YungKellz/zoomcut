@@ -46,6 +46,13 @@ export function Home(): JSX.Element {
     if (recorder.phase === 'idle') void refreshProjects()
   }, [recorder.phase, refreshProjects])
 
+  // displays come and go (docking, projectors): keep the list fresh while idle
+  useEffect(() => {
+    if (recorder.phase !== 'idle') return
+    const timer = window.setInterval(() => void refreshDisplays(), 5000)
+    return () => window.clearInterval(timer)
+  }, [recorder.phase, refreshDisplays])
+
   const open = async (id: string): Promise<void> => {
     setBusy(id)
     try {
@@ -86,7 +93,9 @@ export function Home(): JSX.Element {
           {info && (
             <>
               <span>v{info.version}</span>
-              <span title={info.recordingsDir}>{t('home.recordingsDir', { dir: info.recordingsDir })}</span>
+              <button className="link folder-link" title={t('home.openRecordingsDir')} onClick={() => void window.zc.app.openPath(info.recordingsDir)}>
+                {t('home.recordingsDir', { dir: info.recordingsDir })}
+              </button>
               {!info.ffmpegPath && <span className="warn">{t('home.ffmpegMissing')}</span>}
             </>
           )}

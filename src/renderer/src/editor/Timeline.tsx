@@ -164,12 +164,11 @@ export function Timeline(): JSX.Element {
   const laneCount = Math.max(1, ...Array.from(textLanes.values()).map((l) => l + 1))
 
   const clickMarks = useMemo(() => {
-    const offset = project.cursor.offsetMs
     return project.cursorData.clicks
-      .map((c) => c.t - offset)
+      .map((c) => c.t)
       .filter((tm) => segments.some((s) => tm >= s.start && tm < s.end))
       .map((tm) => ({ src: tm, out: srcToOut(tm, segments) }))
-  }, [project.cursorData.clicks, project.cursor.offsetMs, segments])
+  }, [project.cursorData.clicks, segments])
 
   const outFromEvent = (e: { clientX: number }, el: HTMLElement): number => {
     const rect = el.getBoundingClientRect()

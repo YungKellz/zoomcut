@@ -5,7 +5,13 @@ import type { AppSettings, Project, ProjectSummary } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, DEFAULT_GIF_SETTINGS } from '@shared/defaults'
 import { allowMediaRoot } from './mediaProtocol'
 
-const DEFAULT_SETTINGS: AppSettings = { lastExportFolder: null, lastDisplayId: null, language: 'system' }
+const DEFAULT_SETTINGS: AppSettings = {
+  lastExportFolder: null,
+  lastDisplayId: null,
+  language: 'system',
+  cursorDefaults: null,
+  frameDefaults: null
+}
 
 export function recordingsRoot(): string {
   // ZOOMCUT_RECORDINGS_DIR lets tests keep their recordings out of the user's Videos folder.

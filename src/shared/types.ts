@@ -267,6 +267,9 @@ export interface AppSettings {
   lastExportFolder: string | null
   lastDisplayId: number | null
   language: Language
+  /** last used cursor / frame settings, applied to new projects */
+  cursorDefaults: CursorSettings | null
+  frameDefaults: FrameStyle | null
 }
 
 export interface AppInfo {

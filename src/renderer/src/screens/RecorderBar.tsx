@@ -18,12 +18,17 @@ export function RecorderBar(): JSX.Element {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
+    // the bar lives in a transparent window: the page background must be transparent too
+    document.documentElement.classList.add('bar-window')
+    document.body.classList.add('bar-window')
     void window.zc.bar.requestState().then(setState)
     const off = window.zc.bar.onState(setState)
     const timer = window.setInterval(() => setNow(Date.now()), 200)
     return () => {
       off()
       window.clearInterval(timer)
+      document.documentElement.classList.remove('bar-window')
+      document.body.classList.remove('bar-window')
     }
   }, [])
 

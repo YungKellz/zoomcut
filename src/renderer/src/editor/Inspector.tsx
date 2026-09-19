@@ -222,12 +222,14 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
   const removeZoom = useStore((s) => s.removeZoom)
   const setZooms = useStore((s) => s.setZooms)
   const setPlayhead = useStore((s) => s.setPlayhead)
-  const setMode = useStore((s) => s.setMode)
+  const beginPick = useStore((s) => s.beginPick)
   const checkpoint = useStore((s) => s.checkpoint)
   const duration = project.recording.durationMs
   const zoom: ZoomSegment | undefined = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const playheadMs = useStore((s) => s.playheadMs)
   const zoomAtPlayhead = findZoom(project.zooms, playheadMs)
+  // no point in an "edit" button when the zoom under the playhead is the one being edited
+  const showAddEdit = !(zoomAtPlayhead && zoom && zoomAtPlayhead.id === zoom.id)
 
   const autoZooms = (): void => {
     const generated = generateZoomsFromClicks(project.cursorData.clicks, duration, project.cuts)
@@ -239,18 +241,14 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
     setZooms(generated)
   }
 
-  const pickOnFrame = (): void => {
-    if (!zoom) return
-    setPlayhead(Math.min(zoom.end - 1, zoom.start + Math.min(zoom.easeInMs, (zoom.end - zoom.start) / 2) + 50), true)
-    setMode('pickTarget')
-  }
-
   return (
     <>
       <div className="btn-row">
-        <button className="btn btn-small" onClick={() => addZoom()}>
-          <ZoomIn size={14} /> {zoomAtPlayhead ? t('zoom.edit') : t('zoom.add')}
-        </button>
+        {showAddEdit && (
+          <button className="btn btn-small" onClick={() => addZoom()}>
+            <ZoomIn size={14} /> {zoomAtPlayhead ? t('zoom.edit') : t('zoom.add')}
+          </button>
+        )}
         <button className="btn btn-small" onClick={autoZooms} title={t('zoom.autoTitle')}>
           <Sparkles size={14} /> {t('zoom.auto')}
         </button>
@@ -270,18 +268,22 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
               </button>
             </div>
           </Field>
-          <button className="btn btn-small" onClick={pickOnFrame}>
-            <Crosshair size={14} /> {t('zoom.pick')}
-          </button>
-          <p className="muted small">{t('zoom.pickHelp')}</p>
+          {zoom.mode === 'fixed' && (
+            <>
+              <button className="btn btn-small" onClick={() => beginPick(zoom.id)}>
+                <Crosshair size={14} /> {t('zoom.pick')}
+              </button>
+              <p className="muted small">{t('zoom.pickHelp')}</p>
+            </>
+          )}
           <div className="row2">
             <TimeInput label={t('zoom.start')} value={zoom.start} max={duration} onChange={(v) => updateZoom(zoom.id, { start: Math.min(v, zoom.end - 200) })} />
             <TimeInput label={t('zoom.end')} value={zoom.end} max={duration} onChange={(v) => updateZoom(zoom.id, { end: Math.max(v, zoom.start + 200) })} />
           </div>
           <details className="adv">
             <summary>{t('common.advanced')}</summary>
-            <Slider label={t('zoom.easeIn')} value={zoom.easeInMs} min={100} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeInMs: v }, false)} />
-            <Slider label={t('zoom.easeOut')} value={zoom.easeOutMs} min={100} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeOutMs: v }, false)} />
+            <Slider label={t('zoom.easeIn')} value={zoom.easeInMs} min={0} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeInMs: v }, false)} />
+            <Slider label={t('zoom.easeOut')} value={zoom.easeOutMs} min={0} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeOutMs: v }, false)} />
           </details>
           <button className="btn btn-small danger" onClick={() => removeZoom(zoom.id)}>
             <Trash2 size={14} /> {t('zoom.delete')}
@@ -371,7 +373,7 @@ function TextPanel({ t }: PanelProps): JSX.Element {
                 <option value="pop">{t('text.anim.pop')}</option>
               </select>
             </Field>
-            <Slider label={t('text.animTime')} value={text.animationMs} min={80} max={800} step={20} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { animationMs: v }, false)} />
+            <Slider label={t('text.animTime')} value={text.animationMs} min={0} max={800} step={20} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { animationMs: v }, false)} />
           </div>
           <p className="muted small">{t('text.dragHint')}</p>
           <button className="btn btn-small danger" onClick={() => removeText(text.id)}>

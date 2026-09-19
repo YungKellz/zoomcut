@@ -52,6 +52,9 @@ export function Editor(): JSX.Element {
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         s.deleteSelected()
+      } else if (e.key === 'Enter' && s.mode === 'pickTarget') {
+        e.preventDefault()
+        s.applyPick()
       } else if (e.key === 'Escape') {
         if (s.mode !== 'normal') s.setMode('normal')
         else if (s.range) s.setRange(null)

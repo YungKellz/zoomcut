@@ -29,6 +29,7 @@ interface ActiveRecording {
   stream: WriteStream | null
   bytes: number
   windowsAtStart: Promise<WindowRect[]>
+  stopRequestedAt: number | null
 }
 
 export class RecordingController {
@@ -104,7 +105,8 @@ export class RecordingController {
       stream: null,
       bytes: 0,
       // window layout is captured in the background; used later for "crop to window"
-      windowsAtStart: snapshotWindows(display)
+      windowsAtStart: snapshotWindows(display),
+      stopRequestedAt: null
     }
     await updateSettings({ lastDisplayId: displayId })
     await this.tracker.start(display)
@@ -144,6 +146,7 @@ export class RecordingController {
 
   requestStop(): void {
     if (!this.active) return
+    this.active.stopRequestedAt = Date.now()
     this.setBarState({ ...this.barState, phase: 'processing' })
     getMainWindow()?.webContents.send('recorder:stop')
   }
@@ -162,7 +165,7 @@ export class RecordingController {
       if (!a.startedAt || !a.meta || !a.rawPath || !a.stream) {
         throw new Error('Recording never started')
       }
-      const cursorData = this.tracker.stop(a.startedAt)
+      const cursorData = this.tracker.stop(a.startedAt, a.stopRequestedAt)
       const stoppedAt = Date.now()
       await new Promise<void>((resolve, reject) => {
         a.stream!.end((err?: Error | null) => (err ? reject(err) : resolve()))
@@ -207,9 +210,10 @@ export class RecordingController {
         cuts: [],
         texts: [],
         zooms: [],
-        cursor: { ...DEFAULT_CURSOR_SETTINGS },
+        // last used cursor / frame settings become the defaults of a new project
+        cursor: { ...DEFAULT_CURSOR_SETTINGS, ...(settings.cursorDefaults ?? {}), offsetMs: 0 },
         crop: { x: 0, y: 0, w: 1, h: 1 },
-        frame: { ...DEFAULT_FRAME_STYLE },
+        frame: { ...DEFAULT_FRAME_STYLE, ...(settings.frameDefaults ?? {}) },
         export: {
           ...DEFAULT_EXPORT_SETTINGS,
           gif: { ...DEFAULT_EXPORT_SETTINGS.gif },

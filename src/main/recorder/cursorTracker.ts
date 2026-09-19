@@ -69,8 +69,11 @@ export class CursorTracker {
     }
   }
 
-  /** Stops tracking and converts the raw data into recording-relative, normalized samples. */
-  stop(startedAt: number | null): CursorData {
+  /**
+   * Stops tracking and converts the raw data into recording-relative, normalized samples.
+   * Clicks from `stopRequestedAt` on (the click on the Stop button itself) are dropped.
+   */
+  stop(startedAt: number | null, stopRequestedAt: number | null = null): CursorData {
     const display = this.display
     const rawSamples = this.samples
     const rawClicks = this.clicks
@@ -88,8 +91,9 @@ export class CursorTracker {
     // keep one sample from before the start so the cursor has a position at t=0
     const firstIdx = Math.max(0, rawSamples.findIndex((s) => s.t >= startedAt) - 1)
     const samples = rawSamples.slice(firstIdx === -1 ? 0 : firstIdx).map(norm)
+    const clickCutoff = stopRequestedAt !== null ? stopRequestedAt - 80 : Number.POSITIVE_INFINITY
     const clicks = rawClicks
-      .filter((c) => c.t >= startedAt)
+      .filter((c) => c.t >= startedAt && c.t < clickCutoff)
       .map((c) => ({ ...norm(c), button: c.button }))
 
     return { samples, clicks, source }

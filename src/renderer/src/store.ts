@@ -13,6 +13,7 @@ import { TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
 import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts } from './engine/timeline'
 import { findZoom, resolveZoomOverlaps } from './engine/camera'
+import { clamp } from './util/format'
 import { t } from './i18n'
 
 export type Selection = { kind: 'cut' | 'zoom' | 'text'; id: string } | null
@@ -21,6 +22,16 @@ export interface RangeSelection {
   start: number
   end: number
 }
+
+/** Zoom area being picked, in crop-normalized coordinates; size = 1 / zoom scale. */
+export interface PickRect {
+  cx: number
+  cy: number
+  size: number
+}
+
+export const PICK_MIN_SIZE = 1 / 5
+export const PICK_MAX_SIZE = 1 / 1.2
 
 const HISTORY_LIMIT = 60
 
@@ -34,6 +45,7 @@ export interface EditorState {
   selection: Selection
   range: RangeSelection | null
   mode: EditorMode
+  pickRect: PickRect | null
   pxPerMs: number
   history: Project[]
   future: Project[]
@@ -48,6 +60,9 @@ export interface EditorState {
   select(selection: Selection): void
   setRange(range: RangeSelection | null): void
   setMode(mode: EditorMode): void
+  beginPick(zoomId: string): void
+  setPickRect(rect: PickRect): void
+  applyPick(): void
   setPxPerMs(value: number): void
   setExportOpen(open: boolean): void
 
@@ -82,6 +97,7 @@ export const useStore = create<EditorState>((set, get) => ({
   selection: null,
   range: null,
   mode: 'normal',
+  pickRect: null,
   pxPerMs: 0.08,
   history: [],
   future: [],
@@ -119,7 +135,45 @@ export const useStore = create<EditorState>((set, get) => ({
   },
   select: (selection) => set({ selection, range: selection ? null : get().range }),
   setRange: (range) => set({ range, selection: range ? null : get().selection }),
-  setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false }),
+  setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false, pickRect: mode === 'pickTarget' ? get().pickRect : null }),
+
+  beginPick: (zoomId) => {
+    const p = get().project
+    const z = p?.zooms.find((x) => x.id === zoomId)
+    if (!p || !z) return
+    const crop = p.crop
+    const size = clamp(1 / z.scale, PICK_MIN_SIZE, PICK_MAX_SIZE)
+    let cx = 0.5
+    let cy = 0.5
+    if (z.mode === 'fixed') {
+      cx = (z.target.x - crop.x) / crop.w
+      cy = (z.target.y - crop.y) / crop.h
+    }
+    cx = clamp(cx, size / 2, 1 - size / 2)
+    cy = clamp(cy, size / 2, 1 - size / 2)
+    const playhead = clamp(z.start + Math.min(z.easeInMs, (z.end - z.start) / 2) + 50, z.start, Math.max(z.start, z.end - 1))
+    set({
+      mode: 'pickTarget',
+      pickRect: { cx, cy, size },
+      selection: { kind: 'zoom', id: zoomId },
+      range: null,
+      playing: false,
+      playheadMs: playhead,
+      seekSeq: get().seekSeq + 1
+    })
+  },
+
+  setPickRect: (rect) => set({ pickRect: rect }),
+
+  applyPick: () => {
+    const { project: p, pickRect: r, selection } = get()
+    if (!p || !r || selection?.kind !== 'zoom') return
+    const crop = p.crop
+    const target = { x: crop.x + r.cx * crop.w, y: crop.y + r.cy * crop.h }
+    const scale = clamp(Math.round((1 / r.size) * 10) / 10, 1.2, 5)
+    get().updateZoom(selection.id, { mode: 'fixed', target, scale })
+    set({ mode: 'normal', pickRect: null })
+  },
   setPxPerMs: (value) => set({ pxPerMs: Math.max(0.005, Math.min(2, value)) }),
   setExportOpen: (exportOpen) => set({ exportOpen, playing: false }),
 
@@ -184,8 +238,13 @@ export const useStore = create<EditorState>((set, get) => ({
       return existing.id
     }
     const id = uid('zoom')
-    const start = Math.max(0, Math.min(t, p.recording.durationMs - 500))
-    const zoom: ZoomSegment = { ...ZOOM_DEFAULTS, id, start, end: Math.min(p.recording.durationMs, start + 3000) }
+    const duration = p.recording.durationMs
+    const at0 = Math.max(0, Math.min(t, duration - 500))
+    // the ease-in runs *before* the current frame, so the frame you are looking at is already zoomed;
+    // near the start of the video the ease-in shrinks to whatever room there is
+    const start = Math.max(0, at0 - ZOOM_DEFAULTS.easeInMs)
+    const easeInMs = at0 - start < 100 ? 0 : at0 - start
+    const zoom: ZoomSegment = { ...ZOOM_DEFAULTS, id, start, easeInMs, end: Math.min(duration, at0 + 2500) }
     get().mutate((proj) => ({ ...proj, zooms: resolveZoomOverlaps([...proj.zooms, zoom], id, proj.recording.durationMs) }))
     set({ selection: { kind: 'zoom', id } })
     return id
@@ -210,13 +269,18 @@ export const useStore = create<EditorState>((set, get) => ({
     if (!p) return null
     const time = at ?? get().playheadMs
     const id = uid('text')
-    const start = Math.max(0, Math.min(time, p.recording.durationMs - 500))
+    const duration = p.recording.durationMs
+    const at0 = Math.max(0, Math.min(time, duration - 500))
+    // same idea as zooms: the fade-in ends at the current frame
+    const start = Math.max(0, at0 - TEXT_DEFAULTS.animationMs)
+    const animationMs = at0 - start < 80 ? 0 : at0 - start
     const text: TextOverlay = {
       ...TEXT_DEFAULTS,
       text: t('text.default'),
       id,
       start,
-      end: Math.min(p.recording.durationMs, start + 3000)
+      animationMs,
+      end: Math.min(duration, at0 + 2500)
     }
     get().mutate((proj) => ({ ...proj, texts: [...proj.texts, text] }))
     set({ selection: { kind: 'text', id } })

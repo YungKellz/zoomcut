@@ -1,9 +1,9 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Pause, Play, RotateCcw, SkipBack } from 'lucide-react'
+import { Check, Pause, Play, RotateCcw, SkipBack, X } from 'lucide-react'
 import type { CropRect, Project, WindowRect } from '@shared/types'
-import { useProject, useStore } from '../store'
+import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
 import type { FollowPath } from '../engine/cursor'
 import { composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
@@ -37,9 +37,12 @@ function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, Si
   return [ref, size]
 }
 
-/** Project variant used while editing the crop or picking a zoom target: full source, no frame. */
-function rawProject(project: Project): Project {
-  return { ...project, crop: { x: 0, y: 0, w: 1, h: 1 }, frame: { ...project.frame, padding: 0, cornerRadius: 0 } }
+/** Crop mode shows the whole source; pick mode shows the cropped source without the frame. */
+function stageProject(project: Project, mode: string): Project {
+  const flatFrame = { ...project.frame, padding: 0, cornerRadius: 0 }
+  if (mode === 'crop') return { ...project, crop: { x: 0, y: 0, w: 1, h: 1 }, frame: flatFrame }
+  if (mode === 'pickTarget') return { ...project, frame: flatFrame }
+  return project
 }
 
 interface PxRect {
@@ -57,6 +60,8 @@ function nextSegmentIndex(segments: Segment[], t: number): number {
   return segments.findIndex((s) => s.start > t - 1)
 }
 
+type Corner = 'nw' | 'ne' | 'sw' | 'se'
+
 /**
  * Preview player. Two <video> elements share the source: while one plays a kept
  * segment, the other is already seeked to the start of the next one, so jumping over
@@ -70,12 +75,14 @@ export function Preview({ followPath }: Props): JSX.Element {
   const seekSeq = useStore((s) => s.seekSeq)
   const selection = useStore((s) => s.selection)
   const playheadMs = useStore((s) => s.playheadMs)
+  const pickRect = useStore((s) => s.pickRect)
+  const setPickRect = useStore((s) => s.setPickRect)
+  const applyPick = useStore((s) => s.applyPick)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const togglePlay = useStore((s) => s.togglePlay)
   const playFromStart = useStore((s) => s.playFromStart)
   const updateText = useStore((s) => s.updateText)
-  const updateZoom = useStore((s) => s.updateZoom)
   const setCrop = useStore((s) => s.setCrop)
   const checkpoint = useStore((s) => s.checkpoint)
   const setMode = useStore((s) => s.setMode)
@@ -88,14 +95,13 @@ export function Preview({ followPath }: Props): JSX.Element {
   const standby = useRef<{ segIndex: number; ready: boolean }>({ segIndex: -1, ready: false })
   const [readyCount, setReadyCount] = useState(0)
   const ready = readyCount >= 2
-  const [pickRect, setPickRect] = useState<PxRect | null>(null)
   const [hoverWindow, setHoverWindow] = useState<number | null>(null)
 
   const activeVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoARef.current : videoBRef.current), [])
   const standbyVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoBRef.current : videoARef.current), [])
 
   const editRaw = mode !== 'normal'
-  const viewProject = useMemo(() => (editRaw ? rawProject(project) : project), [editRaw, project])
+  const viewProject = useMemo(() => stageProject(project, mode), [project, mode])
   const size: OutputSize = useMemo(
     () => outputSize(viewProject, 1, { maxW: Math.max(64, viewport.w - 24), maxH: Math.max(64, viewport.h - 24) }),
     [viewProject, viewport.w, viewport.h]
@@ -241,7 +247,6 @@ export function Preview({ followPath }: Props): JSX.Element {
 
   // ---- overlays ----
   const selectedText = selection?.kind === 'text' ? project.texts.find((x) => x.id === selection.id) : undefined
-  const selectedZoom = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const textBox = useMemo(() => {
     if (!selectedText || editRaw || !textIsActive(selectedText, playheadMs)) return null
     const ctx = canvasRef.current?.getContext('2d')
@@ -276,78 +281,77 @@ export function Preview({ followPath }: Props): JSX.Element {
     el.addEventListener('pointerup', up)
   }
 
-  // the source crop in stage pixels (the stage shows the full source in pick / crop modes)
-  const cropPx: PxRect = useMemo(
-    () => ({ x: project.crop.x * size.outW, y: project.crop.y * size.outH, w: project.crop.w * size.outW, h: project.crop.h * size.outH }),
-    [project.crop, size.outW, size.outH]
-  )
-
-  /**
-   * Pick mode: a click sets the focus point, dragging draws a rectangle that keeps the
-   * crop's proportions, stays inside the crop and never asks for more than 5× zoom.
-   */
-  const startPick = (e: React.PointerEvent<HTMLCanvasElement>): void => {
-    if (mode !== 'pickTarget' || !selectedZoom) return
-    e.preventDefault()
-    const el = e.currentTarget
-    el.setPointerCapture(e.pointerId)
-    const rect = el.getBoundingClientRect()
-    const aspect = cropPx.w / cropPx.h
-    const minW = cropPx.w / 5
-    const maxW = cropPx.w / 1.2
-    const p0 = {
-      x: clamp(e.clientX - rect.left, cropPx.x, cropPx.x + cropPx.w),
-      y: clamp(e.clientY - rect.top, cropPx.y, cropPx.y + cropPx.h)
-    }
-    const rectFrom = (px: number, py: number): PxRect => {
-      const dx = px - p0.x
-      const dy = py - p0.y
-      const sx = dx >= 0 ? 1 : -1
-      const sy = dy >= 0 ? 1 : -1
-      const availW = sx > 0 ? cropPx.x + cropPx.w - p0.x : p0.x - cropPx.x
-      const availH = sy > 0 ? cropPx.y + cropPx.h - p0.y : p0.y - cropPx.y
-      let w = Math.max(Math.abs(dx), Math.abs(dy) * aspect)
-      w = Math.min(w, maxW, availW, availH * aspect)
-      const h = w / aspect
-      return { x: sx > 0 ? p0.x : p0.x - w, y: sy > 0 ? p0.y : p0.y - h, w, h }
-    }
-    const enforceMin = (r: PxRect): PxRect => {
-      if (r.w >= minW) return r
-      const w = minW
-      const h = minW / aspect
-      const cx = r.x + r.w / 2
-      const cy = r.y + r.h / 2
-      return {
-        x: clamp(cx - w / 2, cropPx.x, cropPx.x + cropPx.w - w),
-        y: clamp(cy - h / 2, cropPx.y, cropPx.y + cropPx.h - h),
-        w,
-        h
+  // ---- pick area (zoom target) ----
+  const pickPx: PxRect | null = pickRect
+    ? {
+        x: (pickRect.cx - pickRect.size / 2) * size.outW,
+        y: (pickRect.cy - pickRect.size / 2) * size.outH,
+        w: pickRect.size * size.outW,
+        h: pickRect.size * size.outH
       }
-    }
-    setPickRect(null)
+    : null
+
+  const clampCenter = (r: PickRect): PickRect => ({
+    ...r,
+    cx: clamp(r.cx, r.size / 2, 1 - r.size / 2),
+    cy: clamp(r.cy, r.size / 2, 1 - r.size / 2)
+  })
+
+  const startPickMove = (e: React.PointerEvent): void => {
+    if (!pickRect) return
+    e.preventDefault()
+    e.stopPropagation()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    const origin = { ...pickRect }
+    const sx = e.clientX
+    const sy = e.clientY
     const move = (ev: PointerEvent): void => {
-      const r = rectFrom(ev.clientX - rect.left, ev.clientY - rect.top)
-      setPickRect(r.w < 6 ? null : enforceMin(r))
+      setPickRect(clampCenter({ ...origin, cx: origin.cx + (ev.clientX - sx) / size.outW, cy: origin.cy + (ev.clientY - sy) / size.outH }))
     }
-    const up = (ev: PointerEvent): void => {
+    const up = (): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
-      setPickRect(null)
-      const r = rectFrom(ev.clientX - rect.left, ev.clientY - rect.top)
-      if (r.w < 6) {
-        updateZoom(selectedZoom.id, { mode: 'fixed', target: { x: p0.x / rect.width, y: p0.y / rect.height } })
-      } else {
-        const fr = enforceMin(r)
-        updateZoom(selectedZoom.id, {
-          mode: 'fixed',
-          target: { x: (fr.x + fr.w / 2) / rect.width, y: (fr.y + fr.h / 2) / rect.height },
-          scale: clamp(Math.round((cropPx.w / fr.w) * 10) / 10, 1.2, 5)
-        })
-      }
-      setMode('normal')
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
+  }
+
+  const startPickResize = (corner: Corner) => (e: React.PointerEvent) => {
+    if (!pickRect) return
+    e.preventDefault()
+    e.stopPropagation()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    const stage = el.closest('.preview-stage')?.getBoundingClientRect()
+    if (!stage) return
+    const half = pickRect.size / 2
+    // the opposite corner stays where it is
+    const ax = corner.includes('w') ? pickRect.cx + half : pickRect.cx - half
+    const ay = corner.includes('n') ? pickRect.cy + half : pickRect.cy - half
+    const sxDir = corner.includes('w') ? -1 : 1
+    const syDir = corner.includes('n') ? -1 : 1
+    const move = (ev: PointerEvent): void => {
+      const px = (ev.clientX - stage.left) / size.outW
+      const py = (ev.clientY - stage.top) / size.outH
+      const avail = Math.min(sxDir > 0 ? 1 - ax : ax, syDir > 0 ? 1 - ay : ay)
+      const wanted = Math.max((px - ax) * sxDir, (py - ay) * syDir)
+      const s = clamp(wanted, PICK_MIN_SIZE, Math.min(PICK_MAX_SIZE, avail))
+      setPickRect({ cx: ax + (sxDir * s) / 2, cy: ay + (syDir * s) / 2, size: s })
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+  }
+
+  /** In pick mode a click on the frame recenters the rectangle there. */
+  const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    if (mode !== 'pickTarget' || !pickRect) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    setPickRect(clampCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
   }
 
   const cropToWindow = (w: WindowRect): void => {
@@ -355,7 +359,7 @@ export function Preview({ followPath }: Props): JSX.Element {
     setCrop(windowToCrop(w), false)
   }
 
-  const showCropShade = mode === 'crop' || mode === 'pickTarget'
+  const cropPx: PxRect = { x: project.crop.x * size.outW, y: project.crop.y * size.outH, w: project.crop.w * size.outW, h: project.crop.h * size.outH }
 
   return (
     <div className="preview">
@@ -366,7 +370,7 @@ export function Preview({ followPath }: Props): JSX.Element {
             className={'preview-canvas' + (mode === 'pickTarget' ? ' picking' : '')}
             width={size.outW}
             height={size.outH}
-            onPointerDown={startPick}
+            onPointerDown={onCanvasPointerDown}
           />
           {!ready && <div className="preview-loading">{t('preview.loading')}</div>}
 
@@ -379,13 +383,15 @@ export function Preview({ followPath }: Props): JSX.Element {
             />
           )}
 
-          {showCropShade && <CropShade crop={cropPx} stage={size} />}
-
-          {mode === 'pickTarget' && selectedZoom && !pickRect && (
-            <div className="target-marker" style={{ left: selectedZoom.target.x * size.outW, top: selectedZoom.target.y * size.outH }} />
+          {mode === 'pickTarget' && pickPx && (
+            <div className="pick-rect" style={{ left: pickPx.x, top: pickPx.y, width: pickPx.w, height: pickPx.h }} onPointerDown={startPickMove}>
+              {(['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+                <div key={c} className={`pick-handle pick-${c}`} onPointerDown={startPickResize(c)} />
+              ))}
+            </div>
           )}
-          {pickRect && <div className="pick-rect" style={{ left: pickRect.x, top: pickRect.y, width: pickRect.w, height: pickRect.h }} />}
 
+          {mode === 'crop' && <CropShade crop={cropPx} stage={size} />}
           {mode === 'crop' &&
             windows.map((w, i) => (
               <div
@@ -403,7 +409,6 @@ export function Preview({ followPath }: Props): JSX.Element {
                 <span>{w.title}</span>
               </div>
             ))}
-
           {mode === 'crop' && <CropEditor crop={project.crop} size={size} onChange={(c, commit) => setCrop(c, commit)} onBegin={checkpoint} />}
         </div>
       </div>
@@ -428,7 +433,17 @@ export function Preview({ followPath }: Props): JSX.Element {
         <span className="timecode">{formatTimecode(srcToOut(playheadMs, segments))}</span>
         <span className="muted">/ {formatTimecode(outDur)}</span>
         <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>
-        {mode === 'pickTarget' && <span className="hint">{t('preview.pickHint')}</span>}
+        {mode === 'pickTarget' && (
+          <span className="hint">
+            {t('preview.pickHint')}{' '}
+            <button className="btn btn-small btn-primary" onClick={applyPick}>
+              <Check size={13} /> {t('common.apply')}
+            </button>{' '}
+            <button className="btn btn-small" onClick={() => setMode('normal')}>
+              <X size={13} /> {t('common.cancel')}
+            </button>
+          </span>
+        )}
         {mode === 'crop' && (
           <span className="hint">
             {windows.length > 0 ? t('preview.cropWindowHint') + ' ' : ''}
