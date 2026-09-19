@@ -22,6 +22,7 @@ function project(zooms: ZoomSegment[], samples = [{ t: 0, x: 0.9, y: 0.9 }]): Pr
       displayName: ''
     },
     cursorData: { samples, clicks: [], source: 'polling' },
+    windows: [],
     cuts: [],
     texts: [],
     zooms,

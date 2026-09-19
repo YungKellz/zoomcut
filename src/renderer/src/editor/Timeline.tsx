@@ -1,10 +1,11 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Maximize2, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { CutRange, TextOverlay } from '@shared/types'
+import { Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
+import type { TextOverlay } from '@shared/types'
 import { useProject, useStore } from '../store'
-import { keepSegments, normalizeCuts, outToSrc, outputDuration, srcToOut, type Segment } from '../engine/timeline'
+import { keepSegments, outToSrc, outputDuration, srcToOut } from '../engine/timeline'
+import { useThumbnails } from '../hooks/useThumbnails'
 import { clamp, formatTimecode } from '../util/format'
 import { useT } from '../i18n'
 
@@ -87,15 +88,9 @@ function assignLanes(items: TextOverlay[]): Map<string, number> {
   return out
 }
 
-/** Finds the cut that sits right before a kept segment (its seam on the timeline). */
-function cutBeforeSegment(cuts: CutRange[], segment: Segment): CutRange | undefined {
-  return cuts.find((c) => Math.abs(c.end - segment.start) < 1) ?? cuts.find((c) => c.end <= segment.start && c.start < segment.start)
-}
-
 /**
- * The timeline shows OUTPUT time: cut pieces are gone and only a thin seam marks
- * where they were. The store keeps everything in source time, so positions are
- * mapped with srcToOut / outToSrc at the edges.
+ * The timeline shows OUTPUT time: cut pieces are simply gone. The store keeps
+ * everything in source time, so positions are mapped with srcToOut / outToSrc.
  */
 export function Timeline(): JSX.Element {
   const t = useT()
@@ -117,9 +112,9 @@ export function Timeline(): JSX.Element {
   const updateZoom = useStore((s) => s.updateZoom)
   const updateText = useStore((s) => s.updateText)
   const checkpoint = useStore((s) => s.checkpoint)
+  const { stepMs: thumbStep, thumbs } = useThumbnails(project)
 
   const segments = useMemo(() => keepSegments(duration, project.cuts), [duration, project.cuts])
-  const cuts = useMemo(() => normalizeCuts(project.cuts, duration), [project.cuts, duration])
   const outDur = outputDuration(segments)
   const toOut = (src: number): number => srcToOut(src, segments)
   const toSrc = (out: number): number => outToSrc(out, segments)
@@ -200,7 +195,6 @@ export function Timeline(): JSX.Element {
   }
 
   const selectRange = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if ((e.target as HTMLElement).closest('.seam')) return
     const el = e.currentTarget
     el.setPointerCapture(e.pointerId)
     const startOut = outFromEvent(e, el)
@@ -247,6 +241,7 @@ export function Timeline(): JSX.Element {
   }
 
   const rangeOut = range ? { start: toOut(range.start), end: toOut(range.end) } : null
+  const half = thumbStep / 2
 
   return (
     <div className="timeline">
@@ -298,27 +293,30 @@ export function Timeline(): JSX.Element {
             </div>
 
             <div className="track track-video" onPointerDown={selectRange}>
-              {segments.map((seg, i) => {
-                const left = toOut(seg.start) * pxPerMs
-                const width = (seg.end - seg.start) * pxPerMs
-                const cut = i > 0 ? cutBeforeSegment(cuts, seg) : undefined
+              {segments.map((seg) => {
+                const segOut = toOut(seg.start)
                 return (
-                  <div key={seg.start} className="clip" style={{ left, width }}>
-                    {cut && (
-                      <div
-                        className={'seam' + (selection?.kind === 'cut' && selection.id === cut.id ? ' selected' : '')}
-                        title={t('timeline.seam', { from: formatTimecode(cut.start), to: formatTimecode(cut.end) })}
-                        onPointerDown={(e) => {
-                          e.stopPropagation()
-                          select({ kind: 'cut', id: cut.id })
-                        }}
-                      />
-                    )}
+                  <div key={seg.start} className="clip" style={{ left: segOut * pxPerMs, width: (seg.end - seg.start) * pxPerMs }}>
+                    {thumbs
+                      .filter((th) => th.t + half > seg.start && th.t - half < seg.end)
+                      .map((th) => {
+                        const s = Math.max(seg.start, th.t - half)
+                        const e = Math.min(seg.end, th.t + half)
+                        return (
+                          <div
+                            key={th.t}
+                            className="thumb"
+                            style={{ left: (s - seg.start) * pxPerMs, width: Math.max(1, (e - s) * pxPerMs), backgroundImage: `url(${th.url})` }}
+                          />
+                        )
+                      })}
                   </div>
                 )
               })}
               {clickMarks.map((m, i) => (
-                <div key={i} className="click-mark" style={{ left: m.out * pxPerMs }} title={t('timeline.click', { time: formatTimecode(m.out) })} />
+                <div key={i} className="click-mark" style={{ left: m.out * pxPerMs }} title={t('timeline.click', { time: formatTimecode(m.out) })}>
+                  <MousePointerClick size={11} />
+                </div>
               ))}
               {rangeOut && (
                 <div

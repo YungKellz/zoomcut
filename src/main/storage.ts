@@ -92,6 +92,7 @@ export async function loadProject(id: string): Promise<Project> {
     ...raw,
     recording: { ...raw.recording, dir, videoPath: join(dir, 'source.mp4') },
     cursorData: raw.cursorData ?? { samples: [], clicks: [], source: 'none' },
+    windows: raw.windows ?? [],
     cuts: raw.cuts ?? [],
     texts: raw.texts ?? [],
     zooms: raw.zooms ?? [],

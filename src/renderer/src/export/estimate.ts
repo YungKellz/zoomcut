@@ -2,6 +2,7 @@ import type { ExportSettings, Project } from '@shared/types'
 import type { FollowPath } from '../engine/cursor'
 import { composeFrame, outputSize } from '../engine/compose'
 import { keepSegments, outToSrc, outputDuration, segmentAt } from '../engine/timeline'
+import { seekVideo as seek } from '../util/video'
 
 export interface SizeEstimate {
   bytes: number
@@ -9,34 +10,6 @@ export interface SizeEstimate {
   motion: number
   /** how "busy" the picture is: fraction of pixels that differ from their left neighbour (0..1) */
   detail: number
-}
-
-/** Seeks and waits until the new frame is actually presented (seeked alone can still show the old frame). */
-function seek(video: HTMLVideoElement, ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const target = ms / 1000
-    let done = false
-    const finish = (): void => {
-      if (done) return
-      done = true
-      resolve()
-    }
-    const afterSeek = (): void => {
-      if (typeof video.requestVideoFrameCallback === 'function') {
-        video.requestVideoFrameCallback(() => finish())
-        window.setTimeout(finish, 250)
-      } else {
-        window.setTimeout(finish, 40)
-      }
-    }
-    if (Math.abs(video.currentTime - target) < 0.0005) {
-      afterSeek()
-      return
-    }
-    video.addEventListener('seeked', afterSeek, { once: true })
-    video.currentTime = target
-    window.setTimeout(finish, 1500)
-  })
 }
 
 function changedFraction(a: ImageData, b: ImageData): number {

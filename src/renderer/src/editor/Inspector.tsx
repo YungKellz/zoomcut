@@ -1,11 +1,13 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
-import { Crosshair, Crop, MousePointer2, Scissors, Sparkles, Trash2, Type, ZoomIn } from 'lucide-react'
+import { AppWindow, Crosshair, Crop, MousePointer2, Scissors, Sparkles, Trash2, Type, Undo2, ZoomIn } from 'lucide-react'
 import type { TextOverlay, ZoomSegment } from '@shared/types'
 import { GRADIENT_PRESETS } from '@shared/defaults'
 import { useProject, useStore } from '../store'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
+import { findZoom } from '../engine/camera'
+import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { formatTimecode } from '../util/format'
 import { useT, type Translate } from '../i18n'
@@ -136,6 +138,7 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
   const duration = project.recording.durationMs
   const crop = project.crop
   const isCropped = crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1
+  const windows = uniqueWindows(project.windows)
 
   return (
     <>
@@ -161,8 +164,8 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
                 <button className="list-main" onClick={() => select({ kind: 'cut', id: c.id })}>
                   {formatTimecode(c.start)} – {formatTimecode(c.end)}
                 </button>
-                <button className="btn btn-ghost danger" onClick={() => removeCut(c.id)} title={t('clip.restore')}>
-                  <Trash2 size={14} />
+                <button className="btn btn-ghost" onClick={() => removeCut(c.id)} title={t('clip.restore')}>
+                  <Undo2 size={14} />
                 </button>
               </li>
             ))}
@@ -189,6 +192,23 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
             })
           : t('clip.cropFull')}
       </p>
+      <h3>{t('clip.windows')}</h3>
+      {windows.length === 0 ? (
+        <p className="muted small">{t('clip.noWindows')}</p>
+      ) : (
+        <>
+          <ul className="list">
+            {windows.map((w, i) => (
+              <li key={i} className="list-item">
+                <button className="list-main" onClick={() => setCrop(windowToCrop(w))} title={w.title}>
+                  <AppWindow size={13} /> {w.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">{t('clip.windowsHelp')}</p>
+        </>
+      )}
     </>
   )
 }
@@ -206,6 +226,8 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
   const checkpoint = useStore((s) => s.checkpoint)
   const duration = project.recording.durationMs
   const zoom: ZoomSegment | undefined = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
+  const playheadMs = useStore((s) => s.playheadMs)
+  const zoomAtPlayhead = findZoom(project.zooms, playheadMs)
 
   const autoZooms = (): void => {
     const generated = generateZoomsFromClicks(project.cursorData.clicks, duration, project.cuts)
@@ -227,7 +249,7 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
     <>
       <div className="btn-row">
         <button className="btn btn-small" onClick={() => addZoom()}>
-          <ZoomIn size={14} /> {t('zoom.add')}
+          <ZoomIn size={14} /> {zoomAtPlayhead ? t('zoom.edit') : t('zoom.add')}
         </button>
         <button className="btn btn-small" onClick={autoZooms} title={t('zoom.autoTitle')}>
           <Sparkles size={14} /> {t('zoom.auto')}
@@ -283,6 +305,9 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
                   }}
                 >
                   {formatTimecode(z.start)} – {formatTimecode(z.end)} · {z.scale.toFixed(1)}× {z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}
+                </button>
+                <button className="btn btn-ghost danger" onClick={() => removeZoom(z.id)} title={t('zoom.delete')}>
+                  <Trash2 size={14} />
                 </button>
               </li>
             ))}
@@ -370,6 +395,9 @@ function TextPanel({ t }: PanelProps): JSX.Element {
                   }}
                 >
                   {formatTimecode(x.start)} · {x.text.split('\n')[0] || '…'}
+                </button>
+                <button className="btn btn-ghost danger" onClick={() => removeText(x.id)} title={t('text.delete')}>
+                  <Trash2 size={14} />
                 </button>
               </li>
             ))}

@@ -13,6 +13,8 @@ import { createBarWindow, getMainWindow } from '../windows'
 import { getSettings, newRecordingId, projectDir, saveProject, updateSettings } from '../storage'
 import { probeVideo, transcodeRecording } from '../media/ffmpeg'
 import { CursorTracker } from './cursorTracker'
+import { snapshotWindows } from './windowsSnapshot'
+import type { WindowRect } from '@shared/types'
 
 export const STOP_SHORTCUT = 'CommandOrControl+Alt+R'
 
@@ -26,6 +28,7 @@ interface ActiveRecording {
   rawPath: string | null
   stream: WriteStream | null
   bytes: number
+  windowsAtStart: Promise<WindowRect[]>
 }
 
 export class RecordingController {
@@ -99,7 +102,9 @@ export class RecordingController {
       meta: null,
       rawPath: null,
       stream: null,
-      bytes: 0
+      bytes: 0,
+      // window layout is captured in the background; used later for "crop to window"
+      windowsAtStart: snapshotWindows(display)
     }
     await updateSettings({ lastDisplayId: displayId })
     await this.tracker.start(display)
@@ -158,9 +163,13 @@ export class RecordingController {
         throw new Error('Recording never started')
       }
       const cursorData = this.tracker.stop(a.startedAt)
+      const stoppedAt = Date.now()
       await new Promise<void>((resolve, reject) => {
         a.stream!.end((err?: Error | null) => (err ? reject(err) : resolve()))
       })
+      // second window snapshot while our own windows are still hidden
+      const windowsAtEnd = await snapshotWindows(a.display)
+      const windowsAtStart = await a.windowsAtStart
       this.teardownRecordingUi()
 
       const estimatedDuration = Date.now() - a.startedAt
@@ -191,6 +200,10 @@ export class RecordingController {
           displayName: a.displayName
         },
         cursorData,
+        windows: [
+          { t: 0, windows: windowsAtStart },
+          { t: stoppedAt - a.startedAt, windows: windowsAtEnd }
+        ],
         cuts: [],
         texts: [],
         zooms: [],

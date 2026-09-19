@@ -128,6 +128,9 @@ export async function transcodeRecording(
       '-preset', 'veryfast',
       '-crf', '17',
       '-pix_fmt', 'yuv420p',
+      // a keyframe every 30 frames keeps seeks (scrubbing, jumping over cuts) fast
+      '-g', '30',
+      '-keyint_min', '30',
       '-fps_mode', 'cfr',
       '-r', String(safeFps),
       '-movflags', '+faststart',

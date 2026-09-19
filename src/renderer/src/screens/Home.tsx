@@ -10,7 +10,7 @@ import { Logo } from '../components/Logo'
 
 export function Home(): JSX.Element {
   const t = useT()
-  const langSetting = useI18n((s) => s.setting)
+  const lang = useI18n((s) => s.lang)
   const openProject = useStore((s) => s.openProject)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
@@ -78,8 +78,7 @@ export function Home(): JSX.Element {
         <div className="home-meta">
           <label className="lang-select">
             <span>{t('common.language')}</span>
-            <select value={langSetting} onChange={(e) => void changeLanguage(e.target.value as Language)}>
-              <option value="system">{t('common.lang.system')}</option>
+            <select value={lang} onChange={(e) => void changeLanguage(e.target.value as Language)}>
               <option value="en">{t('common.lang.en')}</option>
               <option value="ru">{t('common.lang.ru')}</option>
             </select>

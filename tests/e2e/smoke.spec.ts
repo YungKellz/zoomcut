@@ -82,9 +82,10 @@ test('record → edit → export GIF and MP4', async () => {
   await win.keyboard.press('Shift+ArrowRight')
   await win.keyboard.press('o')
   await win.keyboard.press('c')
-  await expect(win.locator('.seam')).toHaveCount(1)
   await win.click('.tab:has-text("Clip")')
+  await expect(win.locator('.panel .list-item')).toHaveCount(1)
   await win.click('button:has-text("Trim start")')
+  await expect(win.locator('.panel .list-item')).toHaveCount(1) // adjacent cuts merge
   await win.click('.region.text')
   await win.keyboard.press('Shift+ArrowRight')
   await win.screenshot({ path: join(shotsDir, '2-editor.png') })

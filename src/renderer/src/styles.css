@@ -24,6 +24,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
@@ -613,6 +614,7 @@ input.name-input:focus {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  background: repeating-linear-gradient(135deg, #202226 0 14px, #26292e 14px 28px);
 }
 
 .preview-stage {
@@ -724,6 +726,34 @@ input.name-input:focus {
   border: 1.5px solid var(--accent-2);
   cursor: move;
   box-sizing: border-box;
+  z-index: 3;
+}
+
+.win-outline {
+  position: absolute;
+  border: 1px dashed rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+.win-outline span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+
+.win-outline.hover {
+  border: 2px solid var(--accent-2);
+  background: rgba(79, 140, 255, 0.15);
 }
 
 .crop-handle {
@@ -953,6 +983,8 @@ input.name-input:focus {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  max-height: 46vh;
   overflow: hidden;
 }
 
@@ -987,8 +1019,9 @@ input.name-input:focus {
 
 .timeline-body {
   display: flex;
-  max-height: 260px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .track-labels {
@@ -1022,10 +1055,23 @@ input.name-input:focus {
 .timeline-scroll {
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
+  overflow-x: scroll;
   overflow-y: hidden;
   position: relative;
   background: #0b0c0f;
+}
+
+.timeline-scroll::-webkit-scrollbar {
+  height: 9px;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: #0b0c0f;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: #3a414b;
+  border-radius: 5px;
 }
 
 .timeline-content {
@@ -1070,39 +1116,34 @@ input.name-input:focus {
   position: absolute;
   top: 4px;
   bottom: 4px;
-  background: repeating-linear-gradient(90deg, #26303f 0 60px, #2b3646 60px 120px);
+  background: #1f2530;
   border-radius: 4px;
-  overflow: visible;
+  overflow: hidden;
 }
 
-.seam {
+.thumb {
   position: absolute;
-  left: -3px;
-  top: -4px;
-  bottom: -4px;
-  width: 6px;
-  background: var(--record);
-  border-radius: 2px;
-  cursor: pointer;
-  opacity: 0.75;
-  z-index: 2;
-}
-
-.seam:hover,
-.seam.selected {
-  opacity: 1;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+  top: 0;
+  bottom: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.9;
 }
 
 .click-mark {
   position: absolute;
-  bottom: 3px;
-  width: 5px;
-  height: 5px;
-  margin-left: -2px;
-  border-radius: 50%;
-  background: rgba(255, 176, 32, 0.85);
-  pointer-events: none;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.6);
+  cursor: help;
   z-index: 1;
 }
 

@@ -166,12 +166,29 @@ export interface ExportSettings {
   gif: GifSettings
 }
 
+/** A top-level window seen on the recorded display, normalized to the display. */
+export interface WindowRect {
+  title: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface WindowSnapshot {
+  /** ms since recording start (0 = at start, duration = at the end) */
+  t: number
+  windows: WindowRect[]
+}
+
 export interface Project {
   version: 1
   id: string
   name: string
   recording: RecordingInfo
   cursorData: CursorData
+  /** window layout captured at the start and the end of the recording (for crop-to-window) */
+  windows: WindowSnapshot[]
   cuts: CutRange[]
   texts: TextOverlay[]
   zooms: ZoomSegment[]
