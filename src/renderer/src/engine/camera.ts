@@ -86,10 +86,15 @@ export function resolveZoomOverlaps(zooms: ZoomSegment[], changedId: string, dur
   const z = { ...sorted[idx] }
   const prev = sorted[idx - 1]
   const next = sorted[idx + 1]
-  z.start = Math.max(0, prev ? Math.max(prev.end, z.start) : z.start)
-  z.end = Math.min(durationMs, next ? Math.min(next.start, z.end) : z.end)
-  if (z.end - z.start < 200) {
-    z.end = Math.min(durationMs, z.start + 200)
+  // the room between the neighbours; the segment never leaves it
+  const lo = prev ? prev.end : 0
+  const hi = next ? next.start : durationMs
+  const minLength = 200
+  z.start = Math.max(lo, Math.min(hi, z.start))
+  z.end = Math.max(lo, Math.min(hi, z.end))
+  if (z.end - z.start < minLength) {
+    z.end = Math.min(hi, z.start + minLength)
+    if (z.end - z.start < minLength) z.start = Math.max(lo, z.end - minLength)
   }
   sorted[idx] = z
   return sorted.filter((s) => s.end - s.start >= 50)

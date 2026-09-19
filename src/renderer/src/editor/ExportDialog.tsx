@@ -66,6 +66,18 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
 
   useEffect(() => window.zc.export.onProgress(setFfmpeg), [])
 
+  // Escape closes the dialog (cancels a running export first)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      abortRef.current?.abort()
+      setExportOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setExportOpen])
+
   const segments = useMemo(() => keepSegments(project.recording.durationMs, project.cuts), [project.recording.durationMs, project.cuts])
   const outMs = outputDuration(segments)
   const size = outputSize(project, settings.scale)

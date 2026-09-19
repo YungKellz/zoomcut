@@ -16,7 +16,7 @@ const MIME: Record<string, string> = {
 }
 
 export function allowMediaRoot(dir: string): void {
-  allowedRoots.push(normalize(dir).toLowerCase())
+  allowedRoots.push(normalize(dir).toLowerCase().replace(/[\\/]+$/, ''))
 }
 
 export function encodeMediaPath(filePath: string): string {
@@ -29,7 +29,8 @@ export function decodeMediaPath(encoded: string): string {
 
 function isAllowed(filePath: string): boolean {
   const n = normalize(filePath).toLowerCase()
-  return allowedRoots.some((root) => n.startsWith(root))
+  // the file must be *inside* an allowed root, not merely share its prefix
+  return allowedRoots.some((root) => n === root || n.startsWith(root + '\\') || n.startsWith(root + '/'))
 }
 
 /**

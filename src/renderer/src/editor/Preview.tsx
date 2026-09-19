@@ -227,6 +227,12 @@ export function Preview({ followPath }: Props): JSX.Element {
           }
           return
         }
+        if (active.ended) {
+          // the media can be a hair shorter than the probed duration: treat the end as the end
+          useStore.getState().setPlaying(false)
+          useStore.getState().setPlayhead(lastKeptTime(segs), true)
+          return
+        }
         if (idx + 1 < segs.length && standby.current.segIndex !== idx + 1) prepareStandby(idx + 1)
         if (active.paused) void active.play().catch(() => undefined)
         tm = vt

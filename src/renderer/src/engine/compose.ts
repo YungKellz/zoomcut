@@ -136,10 +136,11 @@ export function layoutText(ctx: CanvasRenderingContext2D, overlay: TextOverlay, 
 }
 
 function drawText(ctx: CanvasRenderingContext2D, overlay: TextOverlay, t: number, outW: number, outH: number): void {
-  const anim = overlay.animationMs > 0 ? overlay.animationMs : 1
+  // the fade never takes longer than half of the overlay, so short texts stay readable
+  const anim = Math.max(1, Math.min(overlay.animationMs, (overlay.end - overlay.start) / 2))
   let alpha = 1
   let scale = 1
-  if (overlay.animation !== 'none') {
+  if (overlay.animation !== 'none' && overlay.animationMs > 0) {
     const inP = Math.min(1, (t - overlay.start) / anim)
     const outP = Math.min(1, (overlay.end - t) / anim)
     alpha = Math.max(0, Math.min(inP, outP))

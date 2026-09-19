@@ -19,18 +19,27 @@ export function pickMimeType(): string {
   return ''
 }
 
+/**
+ * One recording attempt. It exists from the moment the user presses Start, so that
+ * Stop / Discard from the floating bar work during the countdown as well.
+ */
 interface ActiveSession {
-  id: string
-  recorder: MediaRecorder
-  stream: MediaStream
-  probe: HTMLVideoElement
+  id: string | null
+  recorder: MediaRecorder | null
+  stream: MediaStream | null
+  probe: HTMLVideoElement | null
   chain: Promise<void>
+  /** discard everything (bar X, or Stop before anything was captured) */
   cancelled: boolean
 }
 
 interface FrameMeta {
   captureTime?: DOMHighResTimeStamp
   receiveTime?: DOMHighResTimeStamp
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -60,24 +69,31 @@ export function useRecorder(onDone: (project: Project) => void): {
   const onDoneRef = useRef(onDone)
   onDoneRef.current = onDone
 
+  /** Releases the capture and tells the main process to drop the attempt. */
+  const discard = useCallback(async (s: ActiveSession) => {
+    s.stream?.getTracks().forEach((t) => t.stop())
+    if (s.probe) s.probe.srcObject = null
+    if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
+    if (session.current === s) session.current = null
+    setPhase('idle')
+  }, [])
+
   const stop = useCallback(() => {
     const s = session.current
-    if (s && s.recorder.state !== 'inactive') s.recorder.stop()
+    if (!s) return
+    if (s.recorder && s.recorder.state !== 'inactive') {
+      s.recorder.stop()
+    } else {
+      // nothing captured yet (countdown): stopping means dropping the attempt
+      s.cancelled = true
+    }
   }, [])
 
   const cancel = useCallback(() => {
     const s = session.current
     if (!s) return
     s.cancelled = true
-    if (s.recorder.state !== 'inactive') {
-      s.recorder.stop()
-    } else {
-      s.stream.getTracks().forEach((t) => t.stop())
-      s.probe.srcObject = null
-      void window.zc.recording.cancel(s.id)
-      session.current = null
-      setPhase('idle')
-    }
+    if (s.recorder && s.recorder.state !== 'inactive') s.recorder.stop()
   }, [])
 
   useEffect(() => {
@@ -97,24 +113,37 @@ export function useRecorder(onDone: (project: Project) => void): {
       setError(null)
       setProgress(null)
       setPhase('starting')
+      const s: ActiveSession = { id: null, recorder: null, stream: null, probe: null, chain: Promise.resolve(), cancelled: false }
+      session.current = s
 
-      let prepared: { id: string; countdownEndsAt: number } | null = null
-      let stream: MediaStream | null = null
+      let countdownEndsAt = Date.now() + 3000
       try {
-        prepared = await window.zc.recording.prepare(displayId)
-        stream = await navigator.mediaDevices.getDisplayMedia({
+        const prepared = await window.zc.recording.prepare(displayId)
+        s.id = prepared.id
+        countdownEndsAt = prepared.countdownEndsAt
+        if (s.cancelled) {
+          await discard(s)
+          return
+        }
+        s.stream = await navigator.mediaDevices.getDisplayMedia({
           video: { frameRate: { ideal: 60, max: 60 } },
           audio: false
         })
       } catch (err) {
-        if (prepared) void window.zc.recording.cancel(prepared.id)
-        stream?.getTracks().forEach((t) => t.stop())
-        setError(err instanceof Error ? err.message : String(err))
-        setPhase('error')
+        await discard(s)
+        if (!s.cancelled) {
+          setError(err instanceof Error ? err.message : String(err))
+          setPhase('error')
+        }
+        return
+      }
+      if (s.cancelled) {
+        await discard(s)
         return
       }
 
-      const recordingId = prepared.id
+      const recordingId = s.id!
+      const stream = s.stream
       const track = stream.getVideoTracks()[0]
       const settings = track.getSettings()
       const mimeType = pickMimeType()
@@ -122,16 +151,15 @@ export function useRecorder(onDone: (project: Project) => void): {
         mimeType: mimeType || undefined,
         videoBitsPerSecond: 25_000_000
       })
+      s.recorder = recorder
 
       // probe video: lets us observe when frames actually arrive
       const probe = document.createElement('video')
       probe.muted = true
       probe.playsInline = true
       probe.srcObject = stream
+      s.probe = probe
       await probe.play().catch(() => undefined)
-
-      const s: ActiveSession = { id: recordingId, recorder, stream, probe, chain: Promise.resolve(), cancelled: false }
-      session.current = s
 
       let startedResolve: (startedAt: number) => void = () => undefined
       const startedAt = new Promise<number>((resolve) => {
@@ -199,19 +227,26 @@ export function useRecorder(onDone: (project: Project) => void): {
           setError(err instanceof Error ? err.message : String(err))
           setPhase('error')
         } finally {
-          session.current = null
+          if (session.current === s) session.current = null
         }
       }
       track.addEventListener('ended', stop)
 
       // The floating bar counts down on the main process' clock; start when it hits zero.
+      // Stop / Discard pressed meanwhile abort the attempt.
       setPhase('countdown')
-      const wait = Math.max(300, prepared.countdownEndsAt - Date.now())
-      await new Promise((resolve) => setTimeout(resolve, wait))
-      if (s.cancelled) return
+      const deadline = Math.max(Date.now() + 300, countdownEndsAt)
+      while (Date.now() < deadline) {
+        if (s.cancelled) break
+        await sleep(50)
+      }
+      if (s.cancelled) {
+        await discard(s)
+        return
+      }
       recorder.start(1000)
     },
-    [stop]
+    [stop, discard]
   )
 
   return { phase, progress, error, start, stop, cancel, reset: () => setPhase('idle') }

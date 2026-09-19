@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import { useStore } from './store'
 import { useI18n } from './i18n'
+import type { Project } from '@shared/types'
 import './styles.css'
 
 // Language: system by default, overridden by the saved setting.
@@ -11,18 +12,30 @@ void window.zc.app
   .then((s) => useI18n.getState().apply(s.language ?? 'system'))
   .catch(() => undefined)
 
-// Autosave: persist the project ~700 ms after the last change.
+// Autosave: persist the project ~700 ms after the last change. Closing the editor
+// flushes the pending save at once, so a project deleted right afterwards cannot be
+// resurrected by a late write.
 let saveTimer: number | null = null
 let lastSaved: unknown = null
-useStore.subscribe((state, prev) => {
-  if (state.project === prev.project || !state.project) return
+let pending: Project | null = null
+function flushSave(): void {
   if (saveTimer) window.clearTimeout(saveTimer)
-  const project = state.project
-  saveTimer = window.setTimeout(() => {
-    if (project === lastSaved) return
-    lastSaved = project
-    void window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
-  }, 700)
+  saveTimer = null
+  const project = pending
+  pending = null
+  if (!project || project === lastSaved) return
+  lastSaved = project
+  void window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
+}
+useStore.subscribe((state, prev) => {
+  if (state.project === prev.project) return
+  if (!state.project) {
+    flushSave()
+    return
+  }
+  pending = state.project
+  if (saveTimer) window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(flushSave, 700)
 })
 
 // The last used cursor / frame settings become the defaults for new projects.

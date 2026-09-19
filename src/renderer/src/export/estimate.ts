@@ -107,9 +107,11 @@ export async function estimateExportSize(
   } else {
     const colorFactor = { 256: 1, 128: 0.85, 64: 0.7, 32: 0.55 }[settings.gif.colors]
     const ditherFactor = { none: 1, bayer: 1.6, floyd_steinberg: 2.2, sierra2_4a: 2.1 }[settings.gif.dither]
-    const bppFull = 0.08 + 0.45 * detail
-    const first = px * (0.15 + 0.5 * detail) * colorFactor * ditherFactor
-    const perFrame = px * Math.max(0.02, Math.min(1, motion * 1.3)) * bppFull * colorFactor * ditherFactor
+    // transparent frames lose ffmpeg's transparency-based frame differencing: measured 6–20× bigger
+    const alphaFactor = project.frame.background === 'transparent' ? 8 : 1
+    const bppFull = 0.14 + 0.55 * detail
+    const first = px * (0.25 + 0.5 * detail) * colorFactor * ditherFactor
+    const perFrame = px * Math.max(0.03, Math.min(1, motion * 1.3)) * bppFull * colorFactor * ditherFactor * alphaFactor
     bytes = first + (frames - 1) * perFrame
   }
   return { bytes: Math.round(bytes), motion, detail }

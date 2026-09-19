@@ -75,6 +75,22 @@ describe('camera', () => {
     const resolved = resolveZoomOverlaps(zooms, 'b', 10000)
     expect(resolved.find((z) => z.id === 'b')?.start).toBe(2000)
   })
+
+  it('never expands a short segment over its neighbour', () => {
+    const zooms = [
+      { ...zoom, id: 'a', start: 400, end: 3000 },
+      { ...zoom, id: 'c', start: 3150, end: 7500 },
+      { ...zoom, id: 'b', start: 3000, end: 6000 }
+    ]
+    const resolved = resolveZoomOverlaps(zooms, 'b', 10000)
+    const b = resolved.find((z) => z.id === 'b')
+    expect(b).toBeDefined()
+    expect(b!.start).toBeGreaterThanOrEqual(3000)
+    expect(b!.end).toBeLessThanOrEqual(3150)
+    for (let i = 1; i < resolved.length; i++) {
+      expect(resolved[i].start).toBeGreaterThanOrEqual(resolved[i - 1].end)
+    }
+  })
 })
 
 describe('cursor', () => {

@@ -35,6 +35,9 @@ export const PICK_MAX_SIZE = 1 / 1.2
 
 const HISTORY_LIMIT = 60
 
+/** snapshot taken by checkpoint(), committed by the first unrecorded mutation that changes something */
+let pendingCheckpoint: Project | null = null
+
 export interface EditorState {
   screen: 'home' | 'editor'
   project: Project | null
@@ -182,17 +185,30 @@ export const useStore = create<EditorState>((set, get) => ({
     if (!project) return
     const next = fn(project)
     if (next === project) return
+    // an unrecorded change (drag, slider, typing) commits the checkpoint taken when the
+    // interaction began; a recorded change makes its own history entry
+    const checkpointed = pendingCheckpoint
+    pendingCheckpoint = null
+    const history = record
+      ? [...get().history.slice(-(HISTORY_LIMIT - 1)), project]
+      : checkpointed && checkpointed !== project
+        ? [...get().history.slice(-(HISTORY_LIMIT - 1)), checkpointed]
+        : checkpointed === project
+          ? [...get().history.slice(-(HISTORY_LIMIT - 1)), project]
+          : get().history
     set({
       project: { ...next, updatedAt: Date.now() },
-      history: record ? [...get().history.slice(-(HISTORY_LIMIT - 1)), project] : get().history,
-      future: record ? [] : get().future
+      history,
+      future: record || checkpointed ? [] : get().future
     })
   },
 
+  // Lazy: the snapshot is only pushed to history if the interaction actually changes
+  // something, so a mere selecting click or focusing a field costs no undo step.
   checkpoint: () => {
     const project = get().project
     if (!project) return
-    set({ history: [...get().history.slice(-(HISTORY_LIMIT - 1)), project], future: [] })
+    pendingCheckpoint = project
   },
 
   undo: () => {

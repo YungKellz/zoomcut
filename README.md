@@ -16,9 +16,9 @@ pick the file name and folder.
   clicks are captured with a global mouse hook; the cursor track is anchored on the first recorded frame,
   so highlights and zooms line up with the real cursor.
 - **Cut & trim**: remove any number of ranges (drag on the video track, `I`/`O`, or trim to the playhead).
-  The timeline shows the *result*: removed pieces disappear and leave a thin red seam (click it and press
-  `Delete` to restore, or use the list in the Clip tab / `Ctrl+Z`). Click marks on the video track show
-  where you clicked while recording.
+  The timeline shows the *result*: removed pieces simply disappear; restore them from the list in the
+  Clip tab or with `Ctrl+Z`. The video track is a filmstrip of the cropped source with marks where you
+  clicked while recording.
 - **Text overlays**: any number of texts with start/end, position (drag on the preview), size, colours,
   background, alignment, fade/pop animation. Overlapping texts get their own lanes.
 - **Zoom**: segments from 1.2× to 5× with eased transitions. *Follow cursor* pans smoothly after the recorded
@@ -65,7 +65,7 @@ Other scripts:
 | `C`                    | cut the selected range                  |
 | `Z`                    | add a zoom at the playhead              |
 | `T`                    | add a text at the playhead              |
-| `Delete`               | delete the selected item / cut the range / restore a selected seam |
+| `Delete`               | delete the selected item / cut the range / restore a selected removed piece |
 | `Ctrl+Z` / `Ctrl+Y`    | undo / redo                             |
 | `Esc`                  | leave crop / pick mode, clear selection |
 | `Ctrl` + wheel         | zoom the timeline                       |
@@ -101,7 +101,7 @@ scripts        render-icon.cjs renders build/logo.svg into the app icon
 2. Выберите дисплей и нажмите **Начать запись**. Окно спрячется, внизу экрана появится панель с таймером;
    она не попадает в запись. Остановить: кнопка **Стоп** или `Ctrl+Alt+R`.
 3. Запись откроется в редакторе: выделите диапазон на дорожке видео и нажмите **Вырезать выделение** (или `C`) –
-   кусок исчезнет с таймлайна, останется тонкий красный шов (клик по шву и `Delete` вернут кусок).
+   кусок исчезнет с таймлайна (вернуть его можно из списка во вкладке «Клип» или через Ctrl+Z).
    `Z` добавляет зум, `T` – текст (перетаскивается прямо на превью). Во вкладке **Зум** кнопка «Указать на кадре»
    позволяет кликнуть точку или нарисовать область, к которой приблизить кадр. Вкладка **Курсор** отвечает за
    подсветку курсора и кликов.

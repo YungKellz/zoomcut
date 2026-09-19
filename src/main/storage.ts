@@ -82,12 +82,35 @@ export async function exists(path: string): Promise<boolean> {
   }
 }
 
-export async function saveProject(project: Project): Promise<void> {
+const saveQueues = new Map<string, Promise<void>>()
+
+export function saveProject(project: Project): Promise<void> {
+  // saves of the same project are serialized: two concurrent tmp→json renames collide on Windows
+  const previous = saveQueues.get(project.id) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(() => saveProjectNow(project))
+  saveQueues.set(project.id, next)
+  return next
+}
+
+async function saveProjectNow(project: Project): Promise<void> {
+  // a project whose folder is gone was deleted: a late autosave must not recreate it
+  if (!(await exists(projectDir(project.id)))) return
   project.updatedAt = Date.now()
-  await fsp.mkdir(projectDir(project.id), { recursive: true })
-  const tmp = projectFile(project.id) + '.tmp'
-  await fsp.writeFile(tmp, JSON.stringify(project), 'utf8')
-  await fsp.rename(tmp, projectFile(project.id))
+  const target = projectFile(project.id)
+  const tmp = target + '.tmp'
+  const json = JSON.stringify(project)
+  await fsp.writeFile(tmp, json, 'utf8')
+  // a reader (project list, antivirus) can hold the target for a moment: retry, then write directly
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fsp.rename(tmp, target)
+      return
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)))
+    }
+  }
+  await fsp.writeFile(target, json, 'utf8')
+  await fsp.rm(tmp, { force: true }).catch(() => undefined)
 }
 
 /** Loads a project and fills in defaults for fields added in later versions. */
@@ -140,5 +163,14 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  await fsp.rm(projectDir(id), { recursive: true, force: true })
+  // Windows refuses to remove files that are being written (a save in flight): retry briefly
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fsp.rm(projectDir(id), { recursive: true, force: true })
+      return
+    } catch (err) {
+      if (attempt >= 5) throw err
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+  }
 }

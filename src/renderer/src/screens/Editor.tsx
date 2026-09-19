@@ -66,11 +66,14 @@ export function Editor(): JSX.Element {
       } else if (key === 'c' && !ctrl) {
         if (s.range) s.addCut(s.range.start, s.range.end)
       } else if (key === 'i' && !ctrl) {
-        const end = s.range?.end ?? s.project!.recording.durationMs
-        s.setRange({ start: Math.min(s.playheadMs, end - 1), end: Math.max(end, s.playheadMs + 1) })
+        const duration = s.project!.recording.durationMs
+        const start = s.playheadMs
+        const end = s.range && s.range.end > start + 10 ? s.range.end : duration
+        if (end - start >= 10) s.setRange({ start, end })
       } else if (key === 'o' && !ctrl) {
-        const start = s.range?.start ?? 0
-        s.setRange({ start: Math.min(start, s.playheadMs - 1), end: Math.max(s.playheadMs, start + 1) })
+        const end = s.playheadMs
+        const start = s.range && s.range.start < end - 10 ? s.range.start : 0
+        if (end - start >= 10) s.setRange({ start, end })
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
         const step = e.shiftKey ? 1000 : 1000 / (s.project?.recording.fps || 30)

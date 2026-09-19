@@ -224,20 +224,27 @@ export function Timeline(): JSX.Element {
     seekTo(outFromEvent(e, e.currentTarget))
   }
 
-  const onWheel = (e: React.WheelEvent): void => {
-    if (!e.ctrlKey) return
-    e.preventDefault()
+  // Ctrl + wheel zooms the timeline around the mouse. React's onWheel is passive
+  // (preventDefault would be ignored), so this is a native non-passive listener.
+  useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const rect = el.getBoundingClientRect()
-    const mouseMs = (el.scrollLeft + e.clientX - rect.left) / pxPerMs
-    const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2
-    const next = clamp(pxPerMs * factor, 0.005, 2)
-    setPxPerMs(next)
-    requestAnimationFrame(() => {
-      el.scrollLeft = Math.max(0, mouseMs * next - (e.clientX - rect.left))
-    })
-  }
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      const current = useStore.getState().pxPerMs
+      const rect = el.getBoundingClientRect()
+      const mouseMs = (el.scrollLeft + e.clientX - rect.left) / current
+      const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2
+      const next = clamp(current * factor, 0.005, 2)
+      useStore.getState().setPxPerMs(next)
+      requestAnimationFrame(() => {
+        el.scrollLeft = Math.max(0, mouseMs * next - (e.clientX - rect.left))
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   const rangeOut = range ? { start: toOut(range.start), end: toOut(range.end) } : null
   const half = thumbStep / 2
@@ -281,7 +288,7 @@ export function Timeline(): JSX.Element {
           </div>
         </div>
 
-        <div className="timeline-scroll" ref={scrollRef} onWheel={onWheel}>
+        <div className="timeline-scroll" ref={scrollRef}>
           <div className="timeline-content" style={{ width: contentWidth }}>
             <div className="ruler" onPointerDown={scrub}>
               {ticks.out.map((tm) => (
