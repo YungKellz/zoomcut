@@ -158,7 +158,7 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
       {project.cuts.length > 0 && (
         <>
           <h3>{t('clip.removedPieces')}</h3>
-          <ul className="list">
+          <ul className="list cuts-list">
             {project.cuts.map((c) => (
               <li key={c.id} className="list-item">
                 <button className="list-main" onClick={() => select({ kind: 'cut', id: c.id })}>
@@ -197,7 +197,7 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
         <p className="muted small">{t('clip.noWindows')}</p>
       ) : (
         <>
-          <ul className="list">
+          <ul className="list windows-list">
             {windows.map((w, i) => (
               <li key={i} className="list-item">
                 <button className="list-main" onClick={() => setCrop(windowToCrop(w))} title={w.title}>

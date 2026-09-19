@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process'
+import { promises as fsp } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Display } from 'electron'
 import type { WindowRect } from '@shared/types'
 
@@ -62,9 +65,12 @@ interface RawWindow {
   title: string
 }
 
-function runPowerShell(script: string, timeoutMs = 10_000): Promise<string> {
+// PowerShell 5.1 does not run a multi-line script piped into '-Command -', so it goes through a file.
+async function runPowerShell(script: string, timeoutMs = 10_000): Promise<string> {
+  const scriptPath = join(tmpdir(), 'zoomcut-winenum.ps1')
+  await fsp.writeFile(scriptPath, script, 'utf8')
   return new Promise((resolve, reject) => {
-    const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
+    const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -85,8 +91,7 @@ function runPowerShell(script: string, timeoutMs = 10_000): Promise<string> {
       if (code === 0) resolve(out)
       else reject(new Error(`powershell exited with ${code}: ${err.slice(-500)}`))
     })
-    proc.stdin.on('error', () => undefined)
-    proc.stdin.end(script)
+    proc.stdin.end()
   })
 }
 
