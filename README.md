@@ -2,31 +2,36 @@
 
 Free, open-source screen recorder and demo editor for showing product features to your team.
 Windows first (macOS/Linux should work but are untested). MIT licensed, no accounts, no watermarks, no paid tier.
+UI in English and Russian.
 
-**Flow:** record a display → the recording opens in the editor → trim, cut pieces out, add timed text,
-add smooth zooms that follow the mouse, highlight the cursor and clicks → export MP4 or GIF with full
-control over size, frame rate and (for GIF) palette and dithering → pick the file name and folder.
+**Flow:** record a display → the recording opens in the editor → cut pieces out, add timed text,
+add smooth zooms that follow the mouse (or zoom into an area you draw), highlight the cursor and clicks →
+export MP4 or GIF with full control over size, frame rate and (for GIF) palette, dithering and transparency →
+pick the file name and folder.
 
 ## Features
 
 - **Recording**: any display, 60 fps H.264/VP9 capture, the app hides itself and shows a small floating bar
   (excluded from the capture). Stop with the bar or `Ctrl+Alt+R`. Mouse position is sampled at 60 Hz and
-  clicks are captured with a global mouse hook, so highlights and zooms can be added *after* recording.
-- **Trim & cut**: cut any number of ranges out of the recording (drag on the video track, `I`/`O`, or trim to the playhead).
-  Cuts are skipped in playback and export.
-- **Text overlays**: any number of texts with start/end time, position (drag on the preview), size, colours,
+  clicks are captured with a global mouse hook; the cursor track is anchored on the first recorded frame,
+  so highlights and zooms line up with the real cursor.
+- **Cut & trim**: remove any number of ranges (drag on the video track, `I`/`O`, or trim to the playhead).
+  The timeline shows the *result*: removed pieces disappear and leave a thin red seam (click it and press
+  `Delete` to restore, or use the list in the Clip tab / `Ctrl+Z`). Click marks on the video track show
+  where you clicked while recording.
+- **Text overlays**: any number of texts with start/end, position (drag on the preview), size, colours,
   background, alignment, fade/pop animation. Overlapping texts get their own lanes.
-- **Zoom**: zoom segments (1.2×–4×) with eased in/out transitions. *Follow cursor* mode pans smoothly after the
-  recorded mouse with a dead zone and adjustable smoothing; *fixed point* mode zooms on a point you pick on the frame.
-  "Auto from clicks" builds zooms around click clusters in one click.
-- **Cursor**: persistent highlight circle (colour, radius, opacity, outline) and click ripples (left/right colours).
-  Sync offset slider in case the highlight runs ahead of the real cursor.
-- **Crop & style**: crop to a region of the screen, optional padding with a colour/gradient background,
-  rounded corners and shadow.
-- **Export**: MP4 (x264, CRF quality levels) or GIF (10–25 fps, 32–256 colours, palette computed globally / on
-  changing pixels / per frame, dithering none / Sierra / Floyd–Steinberg / Bayer, loop on/off), at 100/75/50 % size.
-  The "Crisp UI" GIF preset (no dithering, 256 colours, diff palette) keeps thin grey UI elements sharp.
-  Choose the file name and the folder; the last folder is remembered.
+- **Zoom**: segments from 1.2× to 5× with eased transitions. *Follow cursor* pans smoothly after the recorded
+  mouse with a dead zone and smoothing; *Fixed* zooms into a point you click or an area you draw on the frame
+  ("Pick on the frame"). "Auto from clicks" builds zooms around click clusters.
+- **Cursor**: persistent highlight circle (colour, radius, opacity, outline) and click ripples (left/right colours),
+  plus a sync offset slider for fine tuning.
+- **Crop & style**: crop to a region, optional padding with a colour/gradient background, rounded corners,
+  shadow, or a **transparent background** (exported to GIF).
+- **Export**: MP4 (x264, four CRF quality levels) or GIF (10–25 fps, 32–256 colours, palette computed
+  globally / on changing pixels / per frame, dithering none / Sierra / Floyd–Steinberg / Bayer, loop on/off),
+  at 100/75/50 % size, with a rough size estimate before you start. The "Crisp UI" preset keeps thin grey UI
+  elements sharp. Choose the file name and the folder; the last folder is remembered.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
 
 ## Run from source
@@ -47,7 +52,7 @@ Other scripts:
 | `npm run dist`      | Windows installer + portable exe in `release/` (electron-builder)   |
 | `npm run typecheck` | TypeScript checks for main, preload and renderer                    |
 | `npm test`          | unit tests for the timeline / camera / cursor engine (vitest)       |
-| `npm run e2e`       | real end-to-end test: records the screen, edits, exports GIF + MP4 (needs a display; run `npm run build` first) |
+| `npm run e2e`       | real end-to-end test: records the screen, edits, exports GIF + MP4 (needs a display; run `npm run build` first; `ZOOMCUT_EXE=release/win-unpacked/ZoomCut.exe` tests the packaged app) |
 
 ## Keyboard shortcuts (editor)
 
@@ -60,7 +65,7 @@ Other scripts:
 | `C`                    | cut the selected range                  |
 | `Z`                    | add a zoom at the playhead              |
 | `T`                    | add a text at the playhead              |
-| `Delete`               | delete the selected item / cut the range|
+| `Delete`               | delete the selected item / cut the range / restore a selected seam |
 | `Ctrl+Z` / `Ctrl+Y`    | undo / redo                             |
 | `Esc`                  | leave crop / pick mode, clear selection |
 | `Ctrl` + wheel         | zoom the timeline                       |
@@ -75,7 +80,8 @@ Other scripts:
 - The editor composites every frame on a 2D canvas (`src/renderer/src/engine/compose.ts`) – the same function is used
   for the live preview and the export, so what you see is what you get.
 - Export renders frames through [Mediabunny](https://mediabunny.dev) (WebCodecs H.264 encode, streamed to disk),
-  then ffmpeg produces the final MP4 (`libx264`) or GIF (two-pass `palettegen` / `paletteuse`).
+  or as raw RGBA frames into a lossless ffv1 file when the background is transparent; then ffmpeg produces the
+  final MP4 (`libx264`) or GIF (two-pass `palettegen` / `paletteuse`).
 - ffmpeg comes from [`ffmpeg-static`](https://www.npmjs.com/package/ffmpeg-static) (GPL build; ZoomCut's own code is MIT).
 
 ## Project layout
@@ -83,19 +89,22 @@ Other scripts:
 ```
 src/main       Electron main process: windows, recording controller, cursor tracker, ffmpeg, export, storage
 src/preload    contextBridge API (window.zc)
-src/renderer   React app: Home (record), Editor (preview, timeline, inspector, export dialog), engine/
+src/renderer   React app: Home (record), Editor (preview, timeline, inspector, export dialog), engine/, i18n/
 src/shared     data model, defaults and the API contract
 tests/e2e      Playwright end-to-end smoke test
+scripts        render-icon.cjs renders build/logo.svg into the app icon
 ```
 
 ## Быстрый старт (RU)
 
-1. `npm install`, затем `npm run dev`.
-2. Выберите дисплей и нажмите **Start recording**. Окно спрячется, внизу экрана появится панель с таймером;
-   она не попадает в запись. Остановить: кнопка **Stop** или `Ctrl+Alt+R`.
-3. Запись откроется в редакторе: выделите диапазон на дорожке видео и нажмите **Cut selection** (или `C`),
-   `Z` добавляет зум в позиции курсора таймлайна, `T` добавляет текст (перетаскивается прямо на превью).
-   Вкладка **Cursor** включает подсветку курсора и кликов, вкладка **Zoom** переключает режим слежения за мышкой.
-4. **Export** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Crisp UI**
-   (без дизеринга, 256 цветов, палитра по изменяющимся пикселям); для градиентов – **Smooth gradients**.
-   Имя файла и папка задаются в том же диалоге.
+1. `npm install`, затем `npm run dev`. Язык интерфейса берётся из системы; переключатель – на главном экране.
+2. Выберите дисплей и нажмите **Начать запись**. Окно спрячется, внизу экрана появится панель с таймером;
+   она не попадает в запись. Остановить: кнопка **Стоп** или `Ctrl+Alt+R`.
+3. Запись откроется в редакторе: выделите диапазон на дорожке видео и нажмите **Вырезать выделение** (или `C`) –
+   кусок исчезнет с таймлайна, останется тонкий красный шов (клик по шву и `Delete` вернут кусок).
+   `Z` добавляет зум, `T` – текст (перетаскивается прямо на превью). Во вкладке **Зум** кнопка «Указать на кадре»
+   позволяет кликнуть точку или нарисовать область, к которой приблизить кадр. Вкладка **Курсор** отвечает за
+   подсветку курсора и кликов.
+4. **Экспорт** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Чёткий UI**;
+   для градиентов – **Плавные градиенты**. Диалог показывает ориентировочный вес файла. Имя файла и папка
+   задаются там же. Прозрачный фон (вкладка **Стиль**) экспортируется в GIF.

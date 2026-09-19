@@ -1,14 +1,15 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Pause, Play, SkipBack } from 'lucide-react'
+import { Pause, Play, Rewind, SkipBack } from 'lucide-react'
 import type { CropRect, Project } from '@shared/types'
 import { useProject, useStore } from '../store'
 import type { FollowPath } from '../engine/cursor'
-import { composeFrame, layoutText, outputSize, textIsActive, type OutputSize } from '../engine/compose'
-import { keepSegments, lastKeptTime, resolvePlayableTime } from '../engine/timeline'
+import { composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
+import { keepSegments, lastKeptTime, outputDuration, resolvePlayableTime, srcToOut } from '../engine/timeline'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
+import { useT } from '../i18n'
 
 interface Props {
   followPath: FollowPath | null
@@ -40,7 +41,15 @@ function rawProject(project: Project): Project {
   return { ...project, crop: { x: 0, y: 0, w: 1, h: 1 }, frame: { ...project.frame, padding: 0, cornerRadius: 0 } }
 }
 
+interface PickRect {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
 export function Preview({ followPath }: Props): JSX.Element {
+  const t = useT()
   const project = useProject()
   const mode = useStore((s) => s.mode)
   const playing = useStore((s) => s.playing)
@@ -50,24 +59,28 @@ export function Preview({ followPath }: Props): JSX.Element {
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const togglePlay = useStore((s) => s.togglePlay)
+  const playFromStart = useStore((s) => s.playFromStart)
   const updateText = useStore((s) => s.updateText)
   const updateZoom = useStore((s) => s.updateZoom)
   const setCrop = useStore((s) => s.setCrop)
   const checkpoint = useStore((s) => s.checkpoint)
   const setMode = useStore((s) => s.setMode)
 
-  const [containerRef, container] = useElementSize<HTMLDivElement>()
+  const [viewportRef, viewport] = useElementSize<HTMLDivElement>()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [ready, setReady] = useState(false)
+  const [pickRect, setPickRect] = useState<PickRect | null>(null)
 
   const editRaw = mode !== 'normal'
   const viewProject = useMemo(() => (editRaw ? rawProject(project) : project), [editRaw, project])
   const size: OutputSize = useMemo(
-    () => outputSize(viewProject, 1, { maxW: Math.max(64, container.w - 24), maxH: Math.max(64, container.h - 24) }),
-    [viewProject, container.w, container.h]
+    () => outputSize(viewProject, 1, { maxW: Math.max(64, viewport.w - 24), maxH: Math.max(64, viewport.h - 24) }),
+    [viewProject, viewport.w, viewport.h]
   )
   const segments = useMemo(() => keepSegments(project.recording.durationMs, project.cuts), [project.recording.durationMs, project.cuts])
+  const outDur = outputDuration(segments)
+  const transparent = project.frame.background === TRANSPARENT_BACKGROUND && !editRaw
 
   // keep the latest values in refs for the render loop
   const latest = useRef({ project: viewProject, size, followPath, playing, segments, editRaw })
@@ -89,8 +102,8 @@ export function Preview({ followPath }: Props): JSX.Element {
   useEffect(() => {
     const video = videoRef.current
     if (!video || !ready) return
-    const t = useStore.getState().playheadMs / 1000
-    if (Math.abs(video.currentTime - t) > 0.001) video.currentTime = t
+    const tSec = useStore.getState().playheadMs / 1000
+    if (Math.abs(video.currentTime - tSec) > 0.001) video.currentTime = tSec
   }, [seekSeq, ready])
 
   // play / pause
@@ -98,12 +111,12 @@ export function Preview({ followPath }: Props): JSX.Element {
     const video = videoRef.current
     if (!video || !ready) return
     if (playing) {
-      const t = resolvePlayableTime(useStore.getState().playheadMs, latest.current.segments)
-      if (t === null) {
+      const playable = resolvePlayableTime(useStore.getState().playheadMs, latest.current.segments)
+      if (playable === null) {
         setPlaying(false)
         return
       }
-      if (Math.abs(video.currentTime * 1000 - t) > 30) video.currentTime = t / 1000
+      if (Math.abs(video.currentTime * 1000 - playable) > 30) video.currentTime = playable / 1000
       void video.play().catch(() => setPlaying(false))
     } else {
       video.pause()
@@ -123,8 +136,9 @@ export function Preview({ followPath }: Props): JSX.Element {
         canvas.width = sz.outW
         canvas.height = sz.outH
       }
-      let t = useStore.getState().playheadMs
+      let tm = useStore.getState().playheadMs
       if (isPlaying) {
+        if (video.seeking) return // a jump over a cut is in flight; wait for it
         const vt = video.currentTime * 1000
         const playable = resolvePlayableTime(vt, segs)
         if (playable === null || video.ended) {
@@ -133,16 +147,18 @@ export function Preview({ followPath }: Props): JSX.Element {
           useStore.getState().setPlayhead(lastKeptTime(segs), true)
           return
         }
-        if (playable !== vt) {
+        if (playable - vt > 1) {
+          // inside a removed piece: jump to the next kept segment
           video.currentTime = playable / 1000
           return
         }
-        t = vt
-        useStore.getState().setPlayhead(t)
+        if (video.paused) void video.play().catch(() => undefined)
+        tm = vt
+        useStore.getState().setPlayhead(tm)
       }
-      const ctx = canvas.getContext('2d', { alpha: false })
+      const ctx = canvas.getContext('2d')
       if (!ctx) return
-      composeFrame(ctx, video, p.recording.width, p.recording.height, p, t, sz, fp, {
+      composeFrame(ctx, video, p.recording.width, p.recording.height, p, tm, sz, fp, {
         disableZoom: raw,
         disableFrame: raw,
         disableTexts: raw,
@@ -154,12 +170,11 @@ export function Preview({ followPath }: Props): JSX.Element {
   }, [ready])
 
   // ---- overlays ----
-  const selectedText = selection?.kind === 'text' ? project.texts.find((t) => t.id === selection.id) : undefined
+  const selectedText = selection?.kind === 'text' ? project.texts.find((x) => x.id === selection.id) : undefined
   const selectedZoom = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const textBox = useMemo(() => {
     if (!selectedText || editRaw || !textIsActive(selectedText, playheadMs)) return null
-    const canvas = canvasRef.current
-    const ctx = canvas?.getContext('2d')
+    const ctx = canvasRef.current?.getContext('2d')
     if (!ctx) return null
     return layoutText(ctx, selectedText, size.outW, size.outH)
   }, [selectedText, editRaw, playheadMs, size.outW, size.outH])
@@ -191,51 +206,86 @@ export function Preview({ followPath }: Props): JSX.Element {
     el.addEventListener('pointerup', up)
   }
 
-  const onCanvasClick = (e: React.MouseEvent): void => {
+  /** Pick mode: a click sets the focus point, dragging a rectangle sets point + zoom level. */
+  const startPick = (e: React.PointerEvent<HTMLCanvasElement>): void => {
     if (mode !== 'pickTarget' || !selectedZoom) return
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    const x = clamp((e.clientX - rect.left) / rect.width, 0, 1)
-    const y = clamp((e.clientY - rect.top) / rect.height, 0, 1)
-    updateZoom(selectedZoom.id, { target: { x, y }, mode: 'fixed' })
-    setMode('normal')
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const rect = el.getBoundingClientRect()
+    const x0 = clamp(e.clientX - rect.left, 0, rect.width)
+    const y0 = clamp(e.clientY - rect.top, 0, rect.height)
+    setPickRect({ x0, y0, x1: x0, y1: y0 })
+    const move = (ev: PointerEvent): void => {
+      setPickRect({ x0, y0, x1: clamp(ev.clientX - rect.left, 0, rect.width), y1: clamp(ev.clientY - rect.top, 0, rect.height) })
+    }
+    const up = (ev: PointerEvent): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      setPickRect(null)
+      const x1 = clamp(ev.clientX - rect.left, 0, rect.width)
+      const y1 = clamp(ev.clientY - rect.top, 0, rect.height)
+      const w = Math.abs(x1 - x0)
+      const h = Math.abs(y1 - y0)
+      const crop = project.crop
+      if (w < 6 || h < 6) {
+        updateZoom(selectedZoom.id, { mode: 'fixed', target: { x: x0 / rect.width, y: y0 / rect.height } })
+      } else {
+        // area → the zoom level that makes the rectangle fill the (cropped) frame
+        const rw = w / rect.width / crop.w
+        const rh = h / rect.height / crop.h
+        const scale = clamp(Math.min(1 / rw, 1 / rh), 1.2, 5)
+        updateZoom(selectedZoom.id, {
+          mode: 'fixed',
+          target: { x: (x0 + x1) / 2 / rect.width, y: (y0 + y1) / 2 / rect.height },
+          scale: Math.round(scale * 10) / 10
+        })
+      }
+      setMode('normal')
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
   }
 
   return (
-    <div className="preview" ref={containerRef}>
-      <div className="preview-stage" style={{ width: size.outW, height: size.outH }}>
-        <canvas
-          ref={canvasRef}
-          className={'preview-canvas' + (mode === 'pickTarget' ? ' picking' : '')}
-          width={size.outW}
-          height={size.outH}
-          onClick={onCanvasClick}
-        />
-        {!ready && <div className="preview-loading">Loading video…</div>}
-
-        {textBox && (
-          <div
-            className="text-box"
-            style={{ left: textBox.x, top: textBox.y, width: textBox.w, height: textBox.h }}
-            onPointerDown={startTextDrag}
-            title="Drag to move"
+    <div className="preview">
+      <div className="preview-viewport" ref={viewportRef}>
+        <div className={'preview-stage' + (transparent ? ' checker' : '')} style={{ width: size.outW, height: size.outH }}>
+          <canvas
+            ref={canvasRef}
+            className={'preview-canvas' + (mode === 'pickTarget' ? ' picking' : '')}
+            width={size.outW}
+            height={size.outH}
+            onPointerDown={startPick}
           />
-        )}
+          {!ready && <div className="preview-loading">{t('preview.loading')}</div>}
 
-        {mode === 'pickTarget' && selectedZoom && (
-          <div
-            className="target-marker"
-            style={{ left: selectedZoom.target.x * size.outW, top: selectedZoom.target.y * size.outH }}
-          />
-        )}
+          {textBox && (
+            <div
+              className="text-box"
+              style={{ left: textBox.x, top: textBox.y, width: textBox.w, height: textBox.h }}
+              onPointerDown={startTextDrag}
+              title={t('preview.dragToMove')}
+            />
+          )}
 
-        {mode === 'crop' && (
-          <CropEditor
-            crop={project.crop}
-            size={size}
-            onChange={(c, commit) => setCrop(c, commit)}
-            onBegin={checkpoint}
-          />
-        )}
+          {mode === 'pickTarget' && selectedZoom && !pickRect && (
+            <div className="target-marker" style={{ left: selectedZoom.target.x * size.outW, top: selectedZoom.target.y * size.outH }} />
+          )}
+          {pickRect && (
+            <div
+              className="pick-rect"
+              style={{
+                left: Math.min(pickRect.x0, pickRect.x1),
+                top: Math.min(pickRect.y0, pickRect.y1),
+                width: Math.abs(pickRect.x1 - pickRect.x0),
+                height: Math.abs(pickRect.y1 - pickRect.y0)
+              }}
+            />
+          )}
+
+          {mode === 'crop' && <CropEditor crop={project.crop} size={size} onChange={(c, commit) => setCrop(c, commit)} onBegin={checkpoint} />}
+        </div>
       </div>
 
       <div className="preview-controls">
@@ -243,28 +293,32 @@ export function Preview({ followPath }: Props): JSX.Element {
           className="btn btn-ghost"
           onClick={() => {
             setPlaying(false)
-            setPlayhead(0, true)
+            setPlayhead(segments[0]?.start ?? 0, true)
           }}
-          title="Go to start (Home)"
+          title={t('preview.goStart')}
         >
           <SkipBack size={16} />
         </button>
-        <button className="btn btn-ghost" onClick={togglePlay} disabled={mode !== 'normal'} title="Play / pause (Space)">
+        <button className="btn btn-ghost" onClick={playFromStart} disabled={mode !== 'normal'} title={t('preview.playFromStart')}>
+          <Rewind size={16} />
+        </button>
+        <button className="btn btn-ghost" onClick={togglePlay} disabled={mode !== 'normal'} title={t('preview.playPause')}>
           {playing ? <Pause size={18} /> : <Play size={18} />}
         </button>
-        <span className="timecode">{formatTimecode(playheadMs)}</span>
-        <span className="muted">/ {formatTimecode(project.recording.durationMs)} (source time)</span>
-        {mode === 'pickTarget' && <span className="hint">Click on the frame to set the zoom focus point · Esc to cancel</span>}
+        <span className="timecode">{formatTimecode(srcToOut(playheadMs, segments))}</span>
+        <span className="muted">/ {formatTimecode(outDur)}</span>
+        <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>
+        {mode === 'pickTarget' && <span className="hint">{t('preview.pickHint')}</span>}
         {mode === 'crop' && (
           <span className="hint">
-            Drag the edges of the crop rectangle ·{' '}
+            {t('preview.cropHint')}{' '}
             <button className="link" onClick={() => setMode('normal')}>
-              Done
+              {t('common.done')}
             </button>
           </span>
         )}
       </div>
-      <video ref={videoRef} className="hidden-video" muted playsInline preload="auto" />
+      <video ref={videoRef} className="hidden-video" muted playsInline preload="auto" crossOrigin="anonymous" />
     </div>
   )
 }

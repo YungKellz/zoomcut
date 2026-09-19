@@ -1,8 +1,13 @@
-import { BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import type { Rect } from '@shared/types'
 
 let mainWindow: BrowserWindow | null = null
+
+/** In development the exe has no icon, so point the window at the icon in build/. */
+function windowIcon(): string | undefined {
+  return app.isPackaged ? undefined : join(process.cwd(), 'build', 'icon.png')
+}
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
@@ -37,6 +42,7 @@ export function createMainWindow(): BrowserWindow {
     backgroundColor: '#0e0f12',
     autoHideMenuBar: true,
     title: 'ZoomCut',
+    icon: windowIcon(),
     webPreferences: webPreferences()
   })
 

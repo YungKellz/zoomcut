@@ -5,7 +5,7 @@ import type { AppSettings, Project, ProjectSummary } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, DEFAULT_GIF_SETTINGS } from '@shared/defaults'
 import { allowMediaRoot } from './mediaProtocol'
 
-const DEFAULT_SETTINGS: AppSettings = { lastExportFolder: null, lastDisplayId: null }
+const DEFAULT_SETTINGS: AppSettings = { lastExportFolder: null, lastDisplayId: null, language: 'system' }
 
 export function recordingsRoot(): string {
   // ZOOMCUT_RECORDINGS_DIR lets tests keep their recordings out of the user's Videos folder.
@@ -29,12 +29,16 @@ export async function ensureDirs(): Promise<void> {
 }
 
 export async function getSettings(): Promise<AppSettings> {
+  let settings: AppSettings
   try {
     const raw = JSON.parse(await fsp.readFile(settingsPath(), 'utf8')) as Partial<AppSettings>
-    return { ...DEFAULT_SETTINGS, ...raw }
+    settings = { ...DEFAULT_SETTINGS, ...raw }
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    settings = { ...DEFAULT_SETTINGS }
   }
+  // a remembered export folder that no longer exists must not be offered again
+  if (settings.lastExportFolder && !(await exists(settings.lastExportFolder))) settings.lastExportFolder = null
+  return settings
 }
 
 export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {

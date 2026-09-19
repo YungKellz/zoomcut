@@ -11,8 +11,9 @@ import type {
 } from '@shared/types'
 import { TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
-import { keepSegments, normalizeCuts } from './engine/timeline'
+import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts } from './engine/timeline'
 import { findZoom, resolveZoomOverlaps } from './engine/camera'
+import { t } from './i18n'
 
 export type Selection = { kind: 'cut' | 'zoom' | 'text'; id: string } | null
 export type EditorMode = 'normal' | 'pickTarget' | 'crop'
@@ -43,6 +44,7 @@ export interface EditorState {
   setPlayhead(ms: number, seek?: boolean): void
   setPlaying(playing: boolean): void
   togglePlay(): void
+  playFromStart(): void
   select(selection: Selection): void
   setRange(range: RangeSelection | null): void
   setMode(mode: EditorMode): void
@@ -109,6 +111,12 @@ export const useStore = create<EditorState>((set, get) => ({
   },
   setPlaying: (playing) => set({ playing }),
   togglePlay: () => set({ playing: !get().playing }),
+  playFromStart: () => {
+    const p = get().project
+    if (!p) return
+    const start = firstKeptTime(keepSegments(p.recording.durationMs, p.cuts))
+    set({ playheadMs: start, seekSeq: get().seekSeq + 1, playing: true, mode: 'normal' })
+  },
   select: (selection) => set({ selection, range: selection ? null : get().range }),
   setRange: (range) => set({ range, selection: range ? null : get().selection }),
   setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false }),
@@ -148,10 +156,16 @@ export const useStore = create<EditorState>((set, get) => ({
   },
 
   addCut: (start, end) => {
-    get().mutate((p) => ({
-      ...p,
-      cuts: normalizeCuts([...p.cuts, { id: uid('cut'), start, end }], p.recording.durationMs)
-    }))
+    get().mutate((p) => {
+      const duration = p.recording.durationMs
+      const cuts = normalizeCuts([...p.cuts, { id: uid('cut'), start, end }], duration)
+      return {
+        ...p,
+        cuts,
+        zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200),
+        texts: clipRegionsToCuts(p.texts, cuts, duration, 100)
+      }
+    })
     set({ range: null, selection: null })
   },
 
@@ -194,10 +208,16 @@ export const useStore = create<EditorState>((set, get) => ({
   addText: (at) => {
     const p = get().project
     if (!p) return null
-    const t = at ?? get().playheadMs
+    const time = at ?? get().playheadMs
     const id = uid('text')
-    const start = Math.max(0, Math.min(t, p.recording.durationMs - 500))
-    const text: TextOverlay = { ...TEXT_DEFAULTS, id, start, end: Math.min(p.recording.durationMs, start + 3000) }
+    const start = Math.max(0, Math.min(time, p.recording.durationMs - 500))
+    const text: TextOverlay = {
+      ...TEXT_DEFAULTS,
+      text: t('text.default'),
+      id,
+      start,
+      end: Math.min(p.recording.durationMs, start + 3000)
+    }
     get().mutate((proj) => ({ ...proj, texts: [...proj.texts, text] }))
     set({ selection: { kind: 'text', id } })
     return id

@@ -11,9 +11,6 @@
   --record: #ff453a;
   --warn: #ffb020;
   --ok: #34c759;
-  --zoom: #4f8cff;
-  --textc: #34c759;
-  --cut: #ff453a;
   --radius: 10px;
   --font: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -214,6 +211,36 @@ input[type='checkbox'] {
   text-decoration: underline;
 }
 
+details.adv {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
+details.adv summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+details.adv[open] summary {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.checker {
+  background-color: #7a7a7a;
+  background-image:
+    linear-gradient(45deg, #b0b0b0 25%, transparent 25%),
+    linear-gradient(-45deg, #b0b0b0 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #b0b0b0 75%),
+    linear-gradient(-45deg, transparent 75%, #b0b0b0 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
 /* ---------- home ---------- */
 
 .home {
@@ -228,6 +255,7 @@ input[type='checkbox'] {
   align-items: flex-start;
   gap: 20px;
   margin-bottom: 24px;
+  max-width: 860px;
 }
 
 .brand {
@@ -245,29 +273,38 @@ input[type='checkbox'] {
   margin: 2px 0 0;
 }
 
-.brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--accent), #b04fff);
-  box-shadow: 0 6px 20px rgba(79, 140, 255, 0.35);
+.logo {
+  filter: drop-shadow(0 6px 16px rgba(79, 140, 255, 0.35));
 }
 
 .home-meta {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
-  max-width: 420px;
+  max-width: 380px;
   text-align: right;
 }
 
-.home-grid {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 20px;
+.lang-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.lang-select select {
+  width: auto;
+  padding: 4px 8px;
+}
+
+.home-main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 860px;
 }
 
 .card {
@@ -293,15 +330,16 @@ input[type='checkbox'] {
 
 .display-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  max-width: 560px;
 }
 
 .display-card {
   background: var(--bg);
   border: 2px solid var(--border);
   border-radius: 10px;
-  padding: 6px;
+  padding: 5px;
   cursor: pointer;
   text-align: left;
 }
@@ -419,7 +457,6 @@ input[type='checkbox'] {
 /* ---------- floating recorder bar ---------- */
 
 .bar {
-  height: 100vh;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -503,8 +540,11 @@ input[type='checkbox'] {
 
 .editor {
   height: 100%;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
   display: grid;
-  grid-template-rows: 48px 1fr auto;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
 }
 
 .editor-top {
@@ -514,10 +554,11 @@ input[type='checkbox'] {
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
+  min-width: 0;
 }
 
 input.name-input {
-  width: 280px;
+  width: 260px;
   flex: none;
   background: transparent;
   border: 1px solid transparent;
@@ -525,26 +566,32 @@ input.name-input {
   font-size: 14px;
 }
 
-.name-input:hover,
-.name-input:focus {
+input.name-input:hover,
+input.name-input:focus {
   border-color: var(--border);
   background: var(--bg);
 }
 
 .editor-top-info {
   flex: 1;
+  min-width: 0;
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .editor-top-actions {
   display: flex;
   gap: 6px;
+  flex: none;
 }
 
 .editor-main {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   min-height: 0;
+  min-width: 0;
 }
 
 /* ---------- preview ---------- */
@@ -555,17 +602,24 @@ input.name-input {
   min-width: 0;
   min-height: 0;
   background: #08090b;
+  overflow: hidden;
 }
 
-.preview {
+.preview-viewport {
+  flex: 1;
+  min-height: 0;
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 .preview-stage {
   position: relative;
-  margin: auto;
   background: #000;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  flex: none;
 }
 
 .preview-canvas {
@@ -601,6 +655,10 @@ input.name-input {
   border-top: 1px solid var(--border);
   background: var(--bg-elev);
   font-variant-numeric: tabular-nums;
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .timecode {
@@ -608,9 +666,14 @@ input.name-input {
   min-width: 70px;
 }
 
+.source-time {
+  margin-left: 10px;
+}
+
 .hint {
   color: var(--accent-2);
   margin-left: 12px;
+  white-space: normal;
 }
 
 .text-box {
@@ -641,6 +704,13 @@ input.name-input {
   height: 4px;
   border-radius: 50%;
   background: var(--accent-2);
+}
+
+.pick-rect {
+  position: absolute;
+  border: 1.5px solid var(--accent-2);
+  background: rgba(79, 140, 255, 0.18);
+  pointer-events: none;
 }
 
 .crop-shade {
@@ -882,6 +952,8 @@ input.name-input {
   background: var(--bg-elev);
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .timeline-toolbar {
@@ -890,10 +962,12 @@ input.name-input {
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .timeline-hint {
   flex: 1;
+  min-width: 0;
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
@@ -904,6 +978,7 @@ input.name-input {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: none;
 }
 
 .timeline-zoom input {
@@ -913,6 +988,7 @@ input.name-input {
 .timeline-body {
   display: flex;
   max-height: 260px;
+  min-width: 0;
 }
 
 .track-labels {
@@ -945,9 +1021,11 @@ input.name-input {
 
 .timeline-scroll {
   flex: 1;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   position: relative;
+  background: #0b0c0f;
 }
 
 .timeline-content {
@@ -985,8 +1063,47 @@ input.name-input {
 
 .track-video {
   height: 44px;
-  background: repeating-linear-gradient(90deg, #26303f 0 60px, #2b3646 60px 120px);
   cursor: text;
+}
+
+.clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: repeating-linear-gradient(90deg, #26303f 0 60px, #2b3646 60px 120px);
+  border-radius: 4px;
+  overflow: visible;
+}
+
+.seam {
+  position: absolute;
+  left: -3px;
+  top: -4px;
+  bottom: -4px;
+  width: 6px;
+  background: var(--record);
+  border-radius: 2px;
+  cursor: pointer;
+  opacity: 0.75;
+  z-index: 2;
+}
+
+.seam:hover,
+.seam.selected {
+  opacity: 1;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.click-mark {
+  position: absolute;
+  bottom: 3px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: rgba(255, 176, 32, 0.85);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .track-zoom {
@@ -1002,6 +1119,11 @@ input.name-input {
   left: 0;
   right: 0;
   height: 30px;
+  pointer-events: none;
+}
+
+.lane .region {
+  pointer-events: auto;
 }
 
 .range-sel {
@@ -1048,11 +1170,6 @@ input.name-input {
   background: rgba(255, 255, 255, 0.18);
 }
 
-.region.cut {
-  background: repeating-linear-gradient(135deg, rgba(255, 69, 58, 0.55) 0 6px, rgba(255, 69, 58, 0.3) 6px 12px);
-  color: #fff;
-}
-
 .region.zoom {
   background: rgba(79, 140, 255, 0.45);
   color: #dce9ff;
@@ -1061,6 +1178,24 @@ input.name-input {
 .region.text {
   background: rgba(52, 199, 89, 0.4);
   color: #d9ffe3;
+}
+
+.timeline-end {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.timeline-end span {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .playhead {
@@ -1105,6 +1240,7 @@ input.name-input {
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  position: relative;
 }
 
 .modal-head {

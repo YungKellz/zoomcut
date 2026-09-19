@@ -92,3 +92,36 @@ export function resolvePlayableTime(tSrc: number, segments: Segment[]): number |
 export function lastKeptTime(segments: Segment[]): number {
   return segments.length ? segments[segments.length - 1].end : 0
 }
+
+export function firstKeptTime(segments: Segment[]): number {
+  return segments.length ? segments[0].start : 0
+}
+
+export interface TimedRegion {
+  start: number
+  end: number
+}
+
+/**
+ * Applies cuts to timed regions (zooms, texts): regions fully inside a cut are dropped,
+ * regions overlapping a cut's edge are shortened, regions spanning a whole cut are kept.
+ */
+export function clipRegionsToCuts<T extends TimedRegion>(regions: T[], cuts: CutRange[], durationMs: number, minLength = 50): T[] {
+  const removed = normalizeCuts(cuts, durationMs)
+  const out: T[] = []
+  for (const region of regions) {
+    let { start, end } = region
+    let dropped = false
+    for (const cut of removed) {
+      if (start >= cut.start && end <= cut.end) {
+        dropped = true
+        break
+      }
+      if (cut.start <= start && start < cut.end) start = cut.end
+      else if (cut.start < end && end <= cut.end) end = cut.start
+    }
+    if (dropped || end - start < minLength) continue
+    out.push(start === region.start && end === region.end ? region : { ...region, start, end })
+  }
+  return out
+}

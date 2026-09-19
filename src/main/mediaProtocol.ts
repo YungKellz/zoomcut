@@ -50,7 +50,10 @@ export function registerMediaProtocol(): void {
       const baseHeaders: Record<string, string> = {
         'Accept-Ranges': 'bytes',
         'Content-Type': type,
-        'Cache-Control': 'no-store'
+        'Cache-Control': 'no-store',
+        // lets <video crossorigin="anonymous"> frames be read back from a canvas
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
       }
 
       if (request.method === 'HEAD') {

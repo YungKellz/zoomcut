@@ -43,11 +43,14 @@ test.afterAll(async () => {
   await app?.close()
 })
 
-const shotsDir = join(tmpRoot, 'shots')
+const shotsDir = join(tmpRoot, "shots")
 
 test('record → edit → export GIF and MP4', async () => {
   mkdirSync(shotsDir, { recursive: true })
   await win.waitForSelector('.btn-record:not([disabled])', { timeout: 30_000 })
+  // the UI follows the system language; the test drives the English labels
+  await win.selectOption('.lang-select select', 'en')
+  await win.waitForSelector('button:has-text("Start recording")')
   await win.screenshot({ path: join(shotsDir, '1-home.png') })
   await win.click('.btn-record')
 
@@ -72,12 +75,16 @@ test('record → edit → export GIF and MP4', async () => {
   await expect(win.locator('.region.zoom')).toHaveCount(1)
   await expect(win.locator('.region.text')).toHaveCount(1)
 
-  // cut the first 500 ms
+  // cut out 1 s – 2 s (I / O set the range from the playhead, C cuts it): one seam remains
   await win.keyboard.press('Home')
   await win.keyboard.press('Shift+ArrowRight')
+  await win.keyboard.press('i')
+  await win.keyboard.press('Shift+ArrowRight')
+  await win.keyboard.press('o')
+  await win.keyboard.press('c')
+  await expect(win.locator('.seam')).toHaveCount(1)
   await win.click('.tab:has-text("Clip")')
   await win.click('button:has-text("Trim start")')
-  await expect(win.locator('.region.cut')).toHaveCount(1)
   await win.click('.region.text')
   await win.keyboard.press('Shift+ArrowRight')
   await win.screenshot({ path: join(shotsDir, '2-editor.png') })
@@ -87,6 +94,7 @@ test('record → edit → export GIF and MP4', async () => {
   // export GIF
   await win.click('button:has-text("Export")')
   await win.click('.seg-btn:has-text("GIF animation")')
+  await win.waitForSelector('text=/estimated size/', { timeout: 30_000 })
   await win.screenshot({ path: join(shotsDir, '4-export-gif.png') })
   await win.fill('input[placeholder="Choose a folder…"]', exportDir)
   await win.fill('.modal input[spellcheck="false"] >> nth=0', 'smoke')
@@ -103,4 +111,18 @@ test('record → edit → export GIF and MP4', async () => {
   const mp4 = join(exportDir, 'smoke.mp4')
   expect(existsSync(mp4)).toBe(true)
   expect(statSync(mp4).size).toBeGreaterThan(1000)
+
+  // transparent background with padding → GIF through the raw RGBA / ffv1 path
+  await win.click('.modal-foot button:has-text("Close")')
+  await win.click('.tab:has-text("Style")')
+  await win.click('.swatch.checker')
+  await win.fill('.modal input[spellcheck="false"] >> nth=0', 'x').catch(() => undefined)
+  await win.click('button:has-text("Export")')
+  await win.click('.seg-btn:has-text("GIF animation")')
+  await win.fill('.modal input[spellcheck="false"] >> nth=0', 'smoke-alpha')
+  await win.click('button:has-text("Export GIF")')
+  await win.waitForSelector('.export-result:has-text("smoke-alpha")', { timeout: 180_000 })
+  const alphaGif = join(exportDir, 'smoke-alpha.gif')
+  expect(existsSync(alphaGif)).toBe(true)
+  expect(statSync(alphaGif).size).toBeGreaterThan(1000)
 })

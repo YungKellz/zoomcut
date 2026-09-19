@@ -136,7 +136,7 @@ export interface FrameStyle {
   padding: number
   /** corner radius in px at 1080p */
   cornerRadius: number
-  /** css color, or a gradient preset id starting with "gradient:" */
+  /** css color, a gradient preset id starting with "gradient:", or "transparent" (GIF only) */
   background: string
   shadow: boolean
 }
@@ -220,6 +220,11 @@ export interface ExportBeginRequest {
   fileName: string
   folder: string
   format: ExportFormat
+  /**
+   * When set, frames are streamed as raw RGBA into ffmpeg (lossless intermediate with alpha)
+   * instead of being encoded with WebCodecs. Used for transparent GIFs and as a fallback.
+   */
+  raw?: { width: number; height: number; fps: number }
 }
 
 export interface ExportBeginResult {
@@ -239,9 +244,12 @@ export interface ExportProgress {
   message?: string
 }
 
+export type Language = 'system' | 'en' | 'ru'
+
 export interface AppSettings {
   lastExportFolder: string | null
   lastDisplayId: number | null
+  language: Language
 }
 
 export interface AppInfo {

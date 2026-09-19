@@ -2,18 +2,21 @@ import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { TextOverlay, ZoomSegment } from '@shared/types'
+import type { CutRange, TextOverlay } from '@shared/types'
 import { useProject, useStore } from '../store'
-import { normalizeCuts } from '../engine/timeline'
+import { keepSegments, normalizeCuts, outToSrc, outputDuration, srcToOut, type Segment } from '../engine/timeline'
 import { clamp, formatTimecode } from '../util/format'
+import { useT } from '../i18n'
 
 const TICK_STEPS = [100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000]
+const END_PAD_PX = 56
 
+/** A draggable / resizable block. All times are output-time milliseconds. */
 interface RegionProps {
   start: number
   end: number
   pxPerMs: number
-  duration: number
+  maxEnd: number
   className: string
   label: string
   selected: boolean
@@ -21,11 +24,10 @@ interface RegionProps {
   onSelect: () => void
   onBegin: () => void
   onChange: (start: number, end: number) => void
-  onDoubleClick?: () => void
 }
 
 function Region(props: RegionProps): JSX.Element {
-  const { start, end, pxPerMs, duration, className, label, selected, minLength = 150, onSelect, onBegin, onChange, onDoubleClick } = props
+  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, onSelect, onBegin, onChange } = props
 
   const begin = (kind: 'move' | 'l' | 'r') => (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -40,12 +42,12 @@ function Region(props: RegionProps): JSX.Element {
     const move = (ev: PointerEvent): void => {
       const dMs = (ev.clientX - sx) / pxPerMs
       if (kind === 'move') {
-        const s = clamp(o.start + dMs, 0, duration - len)
+        const s = clamp(o.start + dMs, 0, Math.max(0, maxEnd - len))
         onChange(s, s + len)
       } else if (kind === 'l') {
         onChange(clamp(o.start + dMs, 0, o.end - minLength), o.end)
       } else {
-        onChange(o.start, clamp(o.end + dMs, o.start + minLength, duration))
+        onChange(o.start, clamp(o.end + dMs, o.start + minLength, maxEnd))
       }
     }
     const up = (): void => {
@@ -61,7 +63,6 @@ function Region(props: RegionProps): JSX.Element {
       className={`region ${className}${selected ? ' selected' : ''}`}
       style={{ left: start * pxPerMs, width: Math.max(4, (end - start) * pxPerMs) }}
       onPointerDown={begin('move')}
-      onDoubleClick={onDoubleClick}
       title={`${formatTimecode(start)} – ${formatTimecode(end)}`}
     >
       <div className="region-handle l" onPointerDown={begin('l')} />
@@ -86,7 +87,18 @@ function assignLanes(items: TextOverlay[]): Map<string, number> {
   return out
 }
 
+/** Finds the cut that sits right before a kept segment (its seam on the timeline). */
+function cutBeforeSegment(cuts: CutRange[], segment: Segment): CutRange | undefined {
+  return cuts.find((c) => Math.abs(c.end - segment.start) < 1) ?? cuts.find((c) => c.end <= segment.start && c.start < segment.start)
+}
+
+/**
+ * The timeline shows OUTPUT time: cut pieces are gone and only a thin seam marks
+ * where they were. The store keeps everything in source time, so positions are
+ * mapped with srcToOut / outToSrc at the edges.
+ */
 export function Timeline(): JSX.Element {
+  const t = useT()
   const project = useProject()
   const duration = project.recording.durationMs
   const playheadMs = useStore((s) => s.playheadMs)
@@ -105,11 +117,16 @@ export function Timeline(): JSX.Element {
   const updateZoom = useStore((s) => s.updateZoom)
   const updateText = useStore((s) => s.updateText)
   const checkpoint = useStore((s) => s.checkpoint)
-  const mutate = useStore((s) => s.mutate)
+
+  const segments = useMemo(() => keepSegments(duration, project.cuts), [duration, project.cuts])
+  const cuts = useMemo(() => normalizeCuts(project.cuts, duration), [project.cuts, duration])
+  const outDur = outputDuration(segments)
+  const toOut = (src: number): number => srcToOut(src, segments)
+  const toSrc = (out: number): number => outToSrc(out, segments)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(800)
-  const contentWidth = Math.max(duration * pxPerMs, 10)
+  const contentWidth = Math.max(outDur * pxPerMs + END_PAD_PX, 10)
 
   useEffect(() => {
     const el = scrollRef.current
@@ -120,45 +137,60 @@ export function Timeline(): JSX.Element {
     return () => ro.disconnect()
   }, [])
 
+  const fit = (): void => setPxPerMs((viewportWidth - END_PAD_PX - 8) / Math.max(1000, outDur))
+
   // initial fit
   const fitted = useRef(false)
   useEffect(() => {
     if (fitted.current || viewportWidth < 50) return
     fitted.current = true
-    setPxPerMs((viewportWidth - 32) / Math.max(1000, duration))
-  }, [viewportWidth, duration, setPxPerMs])
+    setPxPerMs((viewportWidth - END_PAD_PX - 8) / Math.max(1000, outDur))
+  }, [viewportWidth, outDur, setPxPerMs])
 
   // keep the playhead visible while playing
+  const playheadOut = toOut(playheadMs)
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !playing) return
-    const px = playheadMs * pxPerMs
+    const px = playheadOut * pxPerMs
     if (px < el.scrollLeft || px > el.scrollLeft + el.clientWidth - 40) {
       el.scrollLeft = Math.max(0, px - 80)
     }
-  }, [playheadMs, playing, pxPerMs])
+  }, [playheadOut, playing, pxPerMs])
 
   const ticks = useMemo(() => {
     const step = TICK_STEPS.find((s) => s * pxPerMs >= 70) ?? 60000
     const out: number[] = []
-    for (let t = 0; t <= duration; t += step) out.push(t)
+    for (let tm = 0; tm <= outDur; tm += step) out.push(tm)
     return { step, out }
-  }, [pxPerMs, duration])
+  }, [pxPerMs, outDur])
 
   const textLanes = useMemo(() => assignLanes(project.texts), [project.texts])
   const laneCount = Math.max(1, ...Array.from(textLanes.values()).map((l) => l + 1))
 
-  const msFromEvent = (e: { clientX: number }, el: HTMLElement): number => {
+  const clickMarks = useMemo(() => {
+    const offset = project.cursor.offsetMs
+    return project.cursorData.clicks
+      .map((c) => c.t - offset)
+      .filter((tm) => segments.some((s) => tm >= s.start && tm < s.end))
+      .map((tm) => ({ src: tm, out: srcToOut(tm, segments) }))
+  }, [project.cursorData.clicks, project.cursor.offsetMs, segments])
+
+  const outFromEvent = (e: { clientX: number }, el: HTMLElement): number => {
     const rect = el.getBoundingClientRect()
-    return clamp((e.clientX - rect.left) / pxPerMs, 0, duration)
+    return clamp((e.clientX - rect.left) / pxPerMs, 0, outDur)
+  }
+
+  const seekTo = (outMs: number): void => {
+    setPlaying(false)
+    setPlayhead(toSrc(outMs), true)
   }
 
   const scrub = (e: React.PointerEvent<HTMLDivElement>): void => {
     const el = e.currentTarget
     el.setPointerCapture(e.pointerId)
-    setPlaying(false)
-    setPlayhead(msFromEvent(e, el), true)
-    const move = (ev: PointerEvent): void => setPlayhead(msFromEvent(ev, el), true)
+    seekTo(outFromEvent(e, el))
+    const move = (ev: PointerEvent): void => setPlayhead(toSrc(outFromEvent(ev, el)), true)
     const up = (): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
@@ -168,16 +200,16 @@ export function Timeline(): JSX.Element {
   }
 
   const selectRange = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if ((e.target as HTMLElement).closest('.cut')) return
+    if ((e.target as HTMLElement).closest('.seam')) return
     const el = e.currentTarget
     el.setPointerCapture(e.pointerId)
-    const startMs = msFromEvent(e, el)
+    const startOut = outFromEvent(e, el)
     let moved = false
     const move = (ev: PointerEvent): void => {
-      const cur = msFromEvent(ev, el)
-      if (!moved && Math.abs(cur - startMs) * pxPerMs < 4) return
+      const cur = outFromEvent(ev, el)
+      if (!moved && Math.abs(cur - startOut) * pxPerMs < 4) return
       moved = true
-      setRange({ start: Math.min(startMs, cur), end: Math.max(startMs, cur) })
+      setRange({ start: toSrc(Math.min(startOut, cur)), end: toSrc(Math.max(startOut, cur)) })
     }
     const up = (): void => {
       el.removeEventListener('pointermove', move)
@@ -185,12 +217,18 @@ export function Timeline(): JSX.Element {
       if (!moved) {
         setRange(null)
         select(null)
-        setPlaying(false)
-        setPlayhead(startMs, true)
+        seekTo(startOut)
       }
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
+  }
+
+  /** Click on the empty part of the zoom / text tracks: move the playhead there. */
+  const emptyTrackClick = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if ((e.target as HTMLElement).closest('.region')) return
+    select(null)
+    seekTo(outFromEvent(e, e.currentTarget))
   }
 
   const onWheel = (e: React.WheelEvent): void => {
@@ -208,40 +246,23 @@ export function Timeline(): JSX.Element {
     })
   }
 
-  const updateCut = (id: string, start: number, end: number): void => {
-    mutate(
-      (p) => ({
-        ...p,
-        cuts: normalizeCuts(p.cuts.map((c) => (c.id === id ? { ...c, start, end } : c)), p.recording.durationMs)
-      }),
-      false
-    )
-  }
-
-  const fit = (): void => setPxPerMs((viewportWidth - 32) / Math.max(1000, duration))
+  const rangeOut = range ? { start: toOut(range.start), end: toOut(range.end) } : null
 
   return (
     <div className="timeline">
       <div className="timeline-toolbar">
-        <button
-          className="btn btn-small"
-          disabled={!range}
-          onClick={() => range && addCut(range.start, range.end)}
-          title="Remove the selected range from the video (C)"
-        >
-          <Scissors size={14} /> Cut selection
+        <button className="btn btn-small" disabled={!range} onClick={() => range && addCut(range.start, range.end)} title={t('timeline.cutSelectionTitle')}>
+          <Scissors size={14} /> {t('timeline.cutSelection')}
         </button>
-        <button className="btn btn-small" onClick={() => addZoom()} title="Add a zoom at the playhead (Z)">
-          <ZoomIn size={14} /> Zoom
+        <button className="btn btn-small" onClick={() => addZoom()} title={t('timeline.zoomTitle')}>
+          <ZoomIn size={14} /> {t('timeline.zoom')}
         </button>
-        <button className="btn btn-small" onClick={() => addText()} title="Add text at the playhead (T)">
-          <Type size={14} /> Text
+        <button className="btn btn-small" onClick={() => addText()} title={t('timeline.textTitle')}>
+          <Type size={14} /> {t('timeline.text')}
         </button>
-        <span className="muted timeline-hint">
-          Drag on the video track to select a range · I / O set range from the playhead · Delete removes the selection
-        </span>
+        <span className="muted timeline-hint">{t('timeline.hint')}</span>
         <div className="timeline-zoom">
-          <button className="btn btn-ghost btn-small" onClick={fit} title="Fit timeline">
+          <button className="btn btn-ghost btn-small" onClick={fit} title={t('timeline.fit')}>
             <Maximize2 size={14} />
           </button>
           <input
@@ -251,76 +272,83 @@ export function Timeline(): JSX.Element {
             step={0.005}
             value={pxPerMs}
             onChange={(e) => setPxPerMs(Number(e.target.value))}
-            title="Timeline zoom (Ctrl + wheel)"
+            title={t('timeline.zoomSlider')}
           />
         </div>
       </div>
 
       <div className="timeline-body">
         <div className="track-labels">
-          <div className="track-label ruler-label">time</div>
-          <div className="track-label video-label">video</div>
-          <div className="track-label zoom-label">zoom</div>
+          <div className="track-label ruler-label">{t('timeline.trackTime')}</div>
+          <div className="track-label video-label">{t('timeline.trackVideo')}</div>
+          <div className="track-label zoom-label">{t('timeline.trackZoom')}</div>
           <div className="track-label text-label" style={{ height: 30 * laneCount }}>
-            text
+            {t('timeline.trackText')}
           </div>
         </div>
 
         <div className="timeline-scroll" ref={scrollRef} onWheel={onWheel}>
           <div className="timeline-content" style={{ width: contentWidth }}>
             <div className="ruler" onPointerDown={scrub}>
-              {ticks.out.map((t) => (
-                <div key={t} className="tick" style={{ left: t * pxPerMs }}>
-                  <span className="tick-label">{formatTimecode(t).slice(0, ticks.step >= 1000 ? 5 : 8)}</span>
+              {ticks.out.map((tm) => (
+                <div key={tm} className="tick" style={{ left: tm * pxPerMs }}>
+                  <span className="tick-label">{formatTimecode(tm).slice(0, ticks.step >= 1000 ? 5 : 8)}</span>
                 </div>
               ))}
             </div>
 
             <div className="track track-video" onPointerDown={selectRange}>
-              {project.cuts.map((c) => (
-                <Region
-                  key={c.id}
-                  start={c.start}
-                  end={c.end}
-                  pxPerMs={pxPerMs}
-                  duration={duration}
-                  className="cut"
-                  label="cut"
-                  selected={selection?.kind === 'cut' && selection.id === c.id}
-                  minLength={40}
-                  onSelect={() => select({ kind: 'cut', id: c.id })}
-                  onBegin={checkpoint}
-                  onChange={(s, e) => updateCut(c.id, s, e)}
-                />
+              {segments.map((seg, i) => {
+                const left = toOut(seg.start) * pxPerMs
+                const width = (seg.end - seg.start) * pxPerMs
+                const cut = i > 0 ? cutBeforeSegment(cuts, seg) : undefined
+                return (
+                  <div key={seg.start} className="clip" style={{ left, width }}>
+                    {cut && (
+                      <div
+                        className={'seam' + (selection?.kind === 'cut' && selection.id === cut.id ? ' selected' : '')}
+                        title={t('timeline.seam', { from: formatTimecode(cut.start), to: formatTimecode(cut.end) })}
+                        onPointerDown={(e) => {
+                          e.stopPropagation()
+                          select({ kind: 'cut', id: cut.id })
+                        }}
+                      />
+                    )}
+                  </div>
+                )
+              })}
+              {clickMarks.map((m, i) => (
+                <div key={i} className="click-mark" style={{ left: m.out * pxPerMs }} title={t('timeline.click', { time: formatTimecode(m.out) })} />
               ))}
-              {range && (
+              {rangeOut && (
                 <div
                   className="range-sel"
-                  style={{ left: range.start * pxPerMs, width: Math.max(2, (range.end - range.start) * pxPerMs) }}
+                  style={{ left: rangeOut.start * pxPerMs, width: Math.max(2, (rangeOut.end - rangeOut.start) * pxPerMs) }}
                 />
               )}
             </div>
 
             <div
               className="track track-zoom"
+              onPointerDown={emptyTrackClick}
               onDoubleClick={(e) => {
                 if ((e.target as HTMLElement).closest('.region')) return
-                addZoom(msFromEvent(e, e.currentTarget))
+                addZoom(toSrc(outFromEvent(e, e.currentTarget)))
               }}
             >
-              {project.zooms.map((z: ZoomSegment) => (
+              {project.zooms.map((z) => (
                 <Region
                   key={z.id}
-                  start={z.start}
-                  end={z.end}
+                  start={toOut(z.start)}
+                  end={toOut(z.end)}
                   pxPerMs={pxPerMs}
-                  duration={duration}
+                  maxEnd={outDur}
                   className="zoom"
-                  label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? 'follow' : 'fixed'}`}
+                  label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}`}
                   selected={selection?.kind === 'zoom' && selection.id === z.id}
                   onSelect={() => select({ kind: 'zoom', id: z.id })}
                   onBegin={checkpoint}
-                  onChange={(s, e) => updateZoom(z.id, { start: s, end: e }, false)}
+                  onChange={(s, e) => updateZoom(z.id, { start: toSrc(s), end: toSrc(e) }, false)}
                 />
               ))}
             </div>
@@ -328,30 +356,34 @@ export function Timeline(): JSX.Element {
             <div
               className="track track-text"
               style={{ height: 30 * laneCount }}
+              onPointerDown={emptyTrackClick}
               onDoubleClick={(e) => {
                 if ((e.target as HTMLElement).closest('.region')) return
-                addText(msFromEvent(e, e.currentTarget))
+                addText(toSrc(outFromEvent(e, e.currentTarget)))
               }}
             >
-              {project.texts.map((t) => (
-                <div key={t.id} className="lane" style={{ top: (textLanes.get(t.id) ?? 0) * 30 }}>
+              {project.texts.map((tx) => (
+                <div key={tx.id} className="lane" style={{ top: (textLanes.get(tx.id) ?? 0) * 30 }}>
                   <Region
-                    start={t.start}
-                    end={t.end}
+                    start={toOut(tx.start)}
+                    end={toOut(tx.end)}
                     pxPerMs={pxPerMs}
-                    duration={duration}
+                    maxEnd={outDur}
                     className="text"
-                    label={t.text.split('\n')[0] || 'text'}
-                    selected={selection?.kind === 'text' && selection.id === t.id}
-                    onSelect={() => select({ kind: 'text', id: t.id })}
+                    label={tx.text.split('\n')[0] || t('timeline.text')}
+                    selected={selection?.kind === 'text' && selection.id === tx.id}
+                    onSelect={() => select({ kind: 'text', id: tx.id })}
                     onBegin={checkpoint}
-                    onChange={(s, e) => updateText(t.id, { start: s, end: e }, false)}
+                    onChange={(s, e) => updateText(tx.id, { start: toSrc(s), end: toSrc(e) }, false)}
                   />
                 </div>
               ))}
             </div>
 
-            <div className="playhead" style={{ left: playheadMs * pxPerMs }} />
+            <div className="timeline-end" style={{ left: outDur * pxPerMs }}>
+              <span>{t('timeline.end')} · {formatTimecode(outDur)}</span>
+            </div>
+            <div className="playhead" style={{ left: playheadOut * pxPerMs }} />
           </div>
         </div>
       </div>

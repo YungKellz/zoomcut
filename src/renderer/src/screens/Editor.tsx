@@ -9,6 +9,7 @@ import { Inspector } from '../editor/Inspector'
 import { ExportDialog } from '../editor/ExportDialog'
 import { keepSegments, outputDuration } from '../engine/timeline'
 import { formatDuration } from '../util/format'
+import { useT } from '../i18n'
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -17,6 +18,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export function Editor(): JSX.Element {
+  const t = useT()
   const project = useProject()
   const followPath = useFollowPath(project)
   const closeProject = useStore((s) => s.closeProject)
@@ -37,10 +39,11 @@ export function Editor(): JSX.Element {
       const s = useStore.getState()
       if (s.exportOpen) return
       const ctrl = e.ctrlKey || e.metaKey
-      if (ctrl && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      const key = e.key.toLowerCase()
+      if (ctrl && key === 'z' && !e.shiftKey) {
         e.preventDefault()
         s.undo()
-      } else if ((ctrl && e.key.toLowerCase() === 'y') || (ctrl && e.shiftKey && e.key.toLowerCase() === 'z')) {
+      } else if ((ctrl && key === 'y') || (ctrl && e.shiftKey && key === 'z')) {
         e.preventDefault()
         s.redo()
       } else if (e.key === ' ') {
@@ -53,16 +56,16 @@ export function Editor(): JSX.Element {
         if (s.mode !== 'normal') s.setMode('normal')
         else if (s.range) s.setRange(null)
         else s.select(null)
-      } else if (e.key.toLowerCase() === 'z' && !ctrl) {
+      } else if (key === 'z' && !ctrl) {
         s.addZoom()
-      } else if (e.key.toLowerCase() === 't' && !ctrl) {
+      } else if (key === 't' && !ctrl) {
         s.addText()
-      } else if (e.key.toLowerCase() === 'c' && !ctrl) {
+      } else if (key === 'c' && !ctrl) {
         if (s.range) s.addCut(s.range.start, s.range.end)
-      } else if (e.key.toLowerCase() === 'i' && !ctrl) {
+      } else if (key === 'i' && !ctrl) {
         const end = s.range?.end ?? s.project!.recording.durationMs
         s.setRange({ start: Math.min(s.playheadMs, end - 1), end: Math.max(end, s.playheadMs + 1) })
-      } else if (e.key.toLowerCase() === 'o' && !ctrl) {
+      } else if (key === 'o' && !ctrl) {
         const start = s.range?.start ?? 0
         s.setRange({ start: Math.min(start, s.playheadMs - 1), end: Math.max(s.playheadMs, start + 1) })
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -85,29 +88,28 @@ export function Editor(): JSX.Element {
   return (
     <div className="editor">
       <header className="editor-top">
-        <button className="btn btn-ghost" onClick={closeProject} title="Back to recordings">
-          <ArrowLeft size={16} /> Recordings
+        <button className="btn btn-ghost" onClick={closeProject} title={t('editor.back')}>
+          <ArrowLeft size={16} /> {t('editor.back')}
         </button>
-        <input
-          className="name-input"
-          value={project.name}
-          onChange={(e) => setName(e.target.value)}
-          spellCheck={false}
-          aria-label="Project name"
-        />
+        <input className="name-input" value={project.name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label={t('editor.projectName')} />
         <div className="editor-top-info muted">
-          {project.recording.width}×{project.recording.height} · {project.recording.fps} fps · source{' '}
-          {formatDuration(project.recording.durationMs)} · output {formatDuration(outDuration)}
+          {t('editor.info', {
+            w: project.recording.width,
+            h: project.recording.height,
+            fps: project.recording.fps,
+            src: formatDuration(project.recording.durationMs),
+            out: formatDuration(outDuration)
+          })}
         </div>
         <div className="editor-top-actions">
-          <button className="btn btn-ghost" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">
+          <button className="btn btn-ghost" onClick={undo} disabled={!canUndo} title={t('editor.undo')}>
             <Undo2 size={16} />
           </button>
-          <button className="btn btn-ghost" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">
+          <button className="btn btn-ghost" onClick={redo} disabled={!canRedo} title={t('editor.redo')}>
             <Redo2 size={16} />
           </button>
           <button className="btn btn-primary" onClick={() => setExportOpen(true)}>
-            <Download size={16} /> Export
+            <Download size={16} /> {t('editor.export')}
           </button>
         </div>
       </header>

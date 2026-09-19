@@ -1,12 +1,16 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { Circle, FolderOpen, Monitor, RefreshCw, Trash2 } from 'lucide-react'
-import type { AppInfo, DisplayInfo, ProjectSummary } from '@shared/types'
+import type { AppInfo, DisplayInfo, Language, ProjectSummary } from '@shared/types'
 import { useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
 import { formatDuration } from '../util/format'
+import { changeLanguage, useI18n, useT } from '../i18n'
+import { Logo } from '../components/Logo'
 
 export function Home(): JSX.Element {
+  const t = useT()
+  const langSetting = useI18n((s) => s.setting)
   const openProject = useStore((s) => s.openProject)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
@@ -47,14 +51,14 @@ export function Home(): JSX.Element {
     try {
       openProject(await window.zc.projects.load(id))
     } catch (err) {
-      alert('Could not open project: ' + (err instanceof Error ? err.message : String(err)))
+      alert(t('home.openFailed', { error: err instanceof Error ? err.message : String(err) }))
     } finally {
       setBusy(null)
     }
   }
 
   const remove = async (p: ProjectSummary): Promise<void> => {
-    if (!confirm(`Delete "${p.name}" and its recording? This cannot be undone.`)) return
+    if (!confirm(t('home.deleteConfirm', { name: p.name }))) return
     await window.zc.projects.remove(p.id)
     await refreshProjects()
   }
@@ -65,28 +69,38 @@ export function Home(): JSX.Element {
     <div className="home">
       <header className="home-header">
         <div className="brand">
-          <span className="brand-mark" />
+          <Logo size={44} />
           <div>
             <h1>ZoomCut</h1>
-            <p>Record a feature, cut it, add text and zooms, export MP4 or GIF.</p>
+            <p>{t('home.tagline')}</p>
           </div>
         </div>
-        {info && (
-          <div className="home-meta">
-            <span>v{info.version}</span>
-            <span title={info.recordingsDir}>Recordings: {info.recordingsDir}</span>
-            {!info.ffmpegPath && <span className="warn">ffmpeg not found – export and recording will fail</span>}
-          </div>
-        )}
+        <div className="home-meta">
+          <label className="lang-select">
+            <span>{t('common.language')}</span>
+            <select value={langSetting} onChange={(e) => void changeLanguage(e.target.value as Language)}>
+              <option value="system">{t('common.lang.system')}</option>
+              <option value="en">{t('common.lang.en')}</option>
+              <option value="ru">{t('common.lang.ru')}</option>
+            </select>
+          </label>
+          {info && (
+            <>
+              <span>v{info.version}</span>
+              <span title={info.recordingsDir}>{t('home.recordingsDir', { dir: info.recordingsDir })}</span>
+              {!info.ffmpegPath && <span className="warn">{t('home.ffmpegMissing')}</span>}
+            </>
+          )}
+        </div>
       </header>
 
-      <div className="home-grid">
+      <div className="home-main">
         <section className="card">
           <div className="card-head">
             <h2>
-              <Monitor size={18} /> New recording
+              <Monitor size={18} /> {t('home.newRecording')}
             </h2>
-            <button className="btn btn-ghost" onClick={() => void refreshDisplays()} title="Refresh displays">
+            <button className="btn btn-ghost" onClick={() => void refreshDisplays()} title={t('home.refreshDisplays')}>
               <RefreshCw size={15} />
             </button>
           </div>
@@ -102,7 +116,7 @@ export function Home(): JSX.Element {
                 {d.thumbnail ? <img src={d.thumbnail} alt="" /> : <div className="display-placeholder" />}
                 <div className="display-name">
                   {d.name}
-                  {d.primary ? ' · primary' : ''}
+                  {d.primary ? ` · ${t('home.primary')}` : ''}
                   <span className="muted">
                     {' '}
                     {Math.round(d.bounds.width * d.scaleFactor)}×{Math.round(d.bounds.height * d.scaleFactor)}
@@ -110,7 +124,7 @@ export function Home(): JSX.Element {
                 </div>
               </button>
             ))}
-            {displays.length === 0 && <p className="muted">No displays found.</p>}
+            {displays.length === 0 && <p className="muted">{t('home.noDisplays')}</p>}
           </div>
 
           <div className="record-actions">
@@ -120,19 +134,16 @@ export function Home(): JSX.Element {
               onClick={() => selectedDisplay !== null && void recorder.start(selectedDisplay)}
             >
               <Circle size={16} fill="currentColor" />
-              Start recording
+              {t('home.start')}
             </button>
-            <p className="muted">
-              The app hides itself while recording. Stop with the floating bar or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+
-              <kbd>R</kbd>. Mouse position and clicks are tracked for highlights and zooms.
-            </p>
+            <p className="muted">{t('home.hint', { shortcut: 'Ctrl+Alt+R' })}</p>
           </div>
 
           {recorder.phase === 'error' && (
             <div className="error-box">
-              <strong>Recording failed.</strong> {recorder.error}
+              <strong>{t('home.failed')}</strong> {recorder.error}
               <button className="btn btn-ghost" onClick={recorder.reset}>
-                Dismiss
+                {t('home.dismiss')}
               </button>
             </div>
           )}
@@ -141,10 +152,10 @@ export function Home(): JSX.Element {
         <section className="card">
           <div className="card-head">
             <h2>
-              <FolderOpen size={18} /> Recent recordings
+              <FolderOpen size={18} /> {t('home.recent')}
             </h2>
           </div>
-          {projects.length === 0 && <p className="muted">Nothing recorded yet.</p>}
+          {projects.length === 0 && <p className="muted">{t('home.nothingYet')}</p>}
           <ul className="project-list">
             {projects.map((p) => (
               <li key={p.id} className="project-row">
@@ -154,10 +165,10 @@ export function Home(): JSX.Element {
                     {formatDuration(p.durationMs)} · {p.width}×{p.height} · {new Date(p.createdAt).toLocaleString()}
                   </span>
                 </button>
-                <button className="btn btn-ghost" title="Show folder" onClick={() => void window.zc.projects.reveal(p.id)}>
+                <button className="btn btn-ghost" title={t('home.showFolder')} onClick={() => void window.zc.projects.reveal(p.id)}>
                   <FolderOpen size={15} />
                 </button>
-                <button className="btn btn-ghost danger" title="Delete" onClick={() => void remove(p)}>
+                <button className="btn btn-ghost danger" title={t('common.delete')} onClick={() => void remove(p)}>
                   <Trash2 size={15} />
                 </button>
               </li>
@@ -169,13 +180,13 @@ export function Home(): JSX.Element {
       {recording && (
         <div className="overlay">
           <div className="overlay-card">
-            {recorder.phase === 'starting' && <p>Preparing capture…</p>}
-            {recorder.phase === 'countdown' && <p>Starting in a moment…</p>}
+            {recorder.phase === 'starting' && <p>{t('home.preparing')}</p>}
+            {recorder.phase === 'countdown' && <p>{t('home.countdown')}</p>}
             {recorder.phase === 'recording' && (
               <>
-                <p>Recording…</p>
+                <p>{t('home.recording')}</p>
                 <button className="btn" onClick={recorder.stop}>
-                  Stop
+                  {t('home.stop')}
                 </button>
               </>
             )}
@@ -183,8 +194,8 @@ export function Home(): JSX.Element {
               <>
                 <p>
                   {recorder.progress?.phase === 'transcode'
-                    ? `Preparing video for editing… ${Math.round(recorder.progress.percent)}%`
-                    : 'Finishing…'}
+                    ? t('home.transcoding', { percent: Math.round(recorder.progress.percent) })
+                    : t('home.finishing')}
                 </p>
                 <div className="progress">
                   <div className="progress-bar" style={{ width: `${recorder.progress?.percent ?? 0}%` }} />

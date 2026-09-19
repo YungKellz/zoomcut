@@ -2,7 +2,14 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import { useStore } from './store'
+import { useI18n } from './i18n'
 import './styles.css'
+
+// Language: system by default, overridden by the saved setting.
+void window.zc.app
+  .getSettings()
+  .then((s) => useI18n.getState().apply(s.language ?? 'system'))
+  .catch(() => undefined)
 
 // Autosave: persist the project ~700 ms after the last change.
 let saveTimer: number | null = null

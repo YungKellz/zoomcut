@@ -61,7 +61,9 @@ export interface ZcApi {
   export: {
     begin(req: ExportBeginRequest): Promise<ExportBeginResult>
     write(exportId: string, position: number, data: ArrayBuffer): Promise<void>
-    finish(exportId: string, settings: ExportSettings, meta: { durationMs: number }): Promise<ExportFinishResult>
+    /** raw mode only: one RGBA frame */
+    writeRaw(exportId: string, data: ArrayBuffer): Promise<void>
+    finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }): Promise<ExportFinishResult>
     cancel(exportId: string): Promise<void>
     onProgress(cb: (p: ExportProgress) => void): Unsubscribe
   }

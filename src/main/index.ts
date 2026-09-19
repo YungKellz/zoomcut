@@ -22,7 +22,8 @@ protocol.registerSchemesAsPrivileged([
 
 let recorder: RecordingController | null = null
 
-const gotLock = app.requestSingleInstanceLock()
+// Tests launch their own instance next to a running dev app, so they skip the lock.
+const gotLock = process.env['ZOOMCUT_E2E'] ? true : app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {

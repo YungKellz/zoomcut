@@ -23,8 +23,14 @@ interface ActiveSession {
   id: string
   recorder: MediaRecorder
   stream: MediaStream
+  probe: HTMLVideoElement
   chain: Promise<void>
   cancelled: boolean
+}
+
+interface FrameMeta {
+  captureTime?: DOMHighResTimeStamp
+  receiveTime?: DOMHighResTimeStamp
 }
 
 /**
@@ -32,6 +38,11 @@ interface ActiveSession {
  * (cursor tracker, floating bar, display source), captures the display with
  * getDisplayMedia, streams MediaRecorder chunks to disk over IPC and finally
  * hands the finished project back.
+ *
+ * Cursor sync: MediaRecorder puts its first frame at t=0, so the cursor timeline is
+ * anchored on the wall-clock capture time of the first frame delivered after
+ * `recorder.start()`, observed through requestVideoFrameCallback on a probe <video>
+ * attached to the same stream.
  */
 export function useRecorder(onDone: (project: Project) => void): {
   phase: RecorderPhase
@@ -62,6 +73,7 @@ export function useRecorder(onDone: (project: Project) => void): {
       s.recorder.stop()
     } else {
       s.stream.getTracks().forEach((t) => t.stop())
+      s.probe.srcObject = null
       void window.zc.recording.cancel(s.id)
       session.current = null
       setPhase('idle')
@@ -110,18 +122,50 @@ export function useRecorder(onDone: (project: Project) => void): {
         mimeType: mimeType || undefined,
         videoBitsPerSecond: 25_000_000
       })
-      const s: ActiveSession = { id: recordingId, recorder, stream, chain: Promise.resolve(), cancelled: false }
+
+      // probe video: lets us observe when frames actually arrive
+      const probe = document.createElement('video')
+      probe.muted = true
+      probe.playsInline = true
+      probe.srcObject = stream
+      await probe.play().catch(() => undefined)
+
+      const s: ActiveSession = { id: recordingId, recorder, stream, probe, chain: Promise.resolve(), cancelled: false }
       session.current = s
 
-      recorder.onstart = () => {
-        const meta = {
-          startedAt: Date.now(),
+      let startedResolve: (startedAt: number) => void = () => undefined
+      const startedAt = new Promise<number>((resolve) => {
+        startedResolve = resolve
+      })
+      s.chain = startedAt.then((at) =>
+        window.zc.recording.started(recordingId, {
+          startedAt: at,
           mimeType: recorder.mimeType || mimeType,
           width: settings.width ?? 0,
           height: settings.height ?? 0,
           fps: settings.frameRate ?? 30
+        })
+      )
+
+      recorder.onstart = () => {
+        const startWall = Date.now()
+        let resolved = false
+        const resolveAt = (wall: number): void => {
+          if (resolved) return
+          resolved = true
+          startedResolve(wall)
         }
-        s.chain = s.chain.then(() => window.zc.recording.started(recordingId, meta))
+        if (typeof probe.requestVideoFrameCallback === 'function') {
+          probe.requestVideoFrameCallback((now, metadata) => {
+            const m = metadata as FrameMeta
+            const captured = m.captureTime ?? m.receiveTime ?? now
+            resolveAt(Date.now() - (performance.now() - captured))
+          })
+          // safety net if no frame callback arrives (e.g. static screen)
+          window.setTimeout(() => resolveAt(startWall + 60), 700)
+        } else {
+          resolveAt(startWall)
+        }
         setPhase('recording')
       }
       recorder.ondataavailable = (e) => {
@@ -139,6 +183,7 @@ export function useRecorder(onDone: (project: Project) => void): {
       }
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
+        probe.srcObject = null
         try {
           await s.chain
           if (s.cancelled) {

@@ -77,7 +77,8 @@ export function registerIpc({ recorder, exporter }: Deps): void {
   ipcMain.handle('export:begin', (e, req: ExportBeginRequest) => exporter.begin(req, e.sender))
   ipcMain.handle('export:write', (_e, exportId: string, position: number, data: ArrayBuffer) =>
     exporter.write(exportId, position, data))
-  ipcMain.handle('export:finish', (_e, exportId: string, settings: ExportSettings, meta: { durationMs: number }) =>
+  ipcMain.handle('export:write-raw', (_e, exportId: string, data: ArrayBuffer) => exporter.writeRaw(exportId, data))
+  ipcMain.handle('export:finish', (_e, exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }) =>
     exporter.finish(exportId, settings, meta))
   ipcMain.handle('export:cancel', (_e, exportId: string) => exporter.cancel(exportId))
 }

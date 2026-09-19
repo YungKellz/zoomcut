@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { keepSegments, normalizeCuts, outToSrc, outputDuration, resolvePlayableTime, srcToOut } from './timeline'
+import { clipRegionsToCuts, keepSegments, normalizeCuts, outToSrc, outputDuration, resolvePlayableTime, srcToOut } from './timeline'
 
 describe('timeline cuts', () => {
   it('merges overlapping cuts and clamps them to the duration', () => {
@@ -37,6 +37,24 @@ describe('timeline cuts', () => {
     expect(outToSrc(1000, segments)).toBe(1000)
     expect(outToSrc(3000, segments)).toBe(6000)
     expect(outToSrc(99999, segments)).toBe(10000)
+  })
+
+  it('clips regions to cuts', () => {
+    const cuts = [{ id: 'a', start: 2000, end: 4000 }]
+    const regions = [
+      { id: 'inside', start: 2500, end: 3500 },
+      { id: 'startOverlap', start: 3000, end: 6000 },
+      { id: 'endOverlap', start: 1000, end: 3000 },
+      { id: 'spanning', start: 1000, end: 6000 },
+      { id: 'outside', start: 5000, end: 7000 }
+    ]
+    const clipped = clipRegionsToCuts(regions, cuts, 10000)
+    expect(clipped.map((r) => [r.id, r.start, r.end])).toEqual([
+      ['startOverlap', 4000, 6000],
+      ['endOverlap', 1000, 2000],
+      ['spanning', 1000, 6000],
+      ['outside', 5000, 7000]
+    ])
   })
 
   it('resolves playable time across cuts', () => {

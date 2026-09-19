@@ -49,6 +49,7 @@ const api: ZcApi = {
   export: {
     begin: (req) => ipcRenderer.invoke('export:begin', req),
     write: (exportId, position, data) => ipcRenderer.invoke('export:write', exportId, position, data),
+    writeRaw: (exportId, data) => ipcRenderer.invoke('export:write-raw', exportId, data),
     finish: (exportId, settings, meta) => ipcRenderer.invoke('export:finish', exportId, settings, meta),
     cancel: (exportId) => ipcRenderer.invoke('export:cancel', exportId),
     onProgress: (cb) => subscribe('export:progress', cb)

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { app } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
@@ -12,7 +12,7 @@ export function ffmpegPath(): string | null {
   return existsSync(p) ? p : null
 }
 
-export interface RunOptions {
+export interface SpawnOptions {
   args: string[]
   /** used to turn ffmpeg's `time=` output into a percentage */
   durationMs?: number
@@ -20,6 +20,8 @@ export interface RunOptions {
   signal?: AbortSignal
   /** exit codes to treat as success (ffmpeg -i without output exits with 1) */
   okCodes?: number[]
+  /** keep stdin open so the caller can pipe raw frames into ffmpeg */
+  stdin?: boolean
 }
 
 export interface RunResult {
@@ -27,18 +29,24 @@ export interface RunResult {
   stderr: string
 }
 
+export interface FfmpegProcess {
+  proc: ChildProcess
+  done: Promise<RunResult>
+}
+
 const TIME_RE = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/g
 
-export function runFfmpeg({ args, durationMs, onProgress, signal, okCodes = [0] }: RunOptions): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const bin = ffmpegPath()
-    if (!bin) {
-      reject(new Error('ffmpeg binary not found (ffmpeg-static)'))
-      return
-    }
-    const proc = spawn(bin, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true })
+export function spawnFfmpeg({ args, durationMs, onProgress, signal, okCodes = [0], stdin = false }: SpawnOptions): FfmpegProcess {
+  const bin = ffmpegPath()
+  if (!bin) throw new Error('ffmpeg binary not found (ffmpeg-static)')
+  const proc = spawn(bin, ['-hide_banner', '-y', ...(stdin ? [] : ['-nostdin']), ...args], {
+    windowsHide: true,
+    stdio: [stdin ? 'pipe' : 'ignore', 'ignore', 'pipe']
+  })
+  proc.stdin?.on('error', () => undefined)
+  const done = new Promise<RunResult>((resolve, reject) => {
     let stderr = ''
-    proc.stderr.on('data', (chunk: Buffer) => {
+    proc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString()
       stderr += text
       if (stderr.length > 60_000) stderr = stderr.slice(-30_000)
@@ -63,6 +71,15 @@ export function runFfmpeg({ args, durationMs, onProgress, signal, okCodes = [0] 
       proc.kill('SIGKILL')
     })
   })
+  return { proc, done }
+}
+
+export function runFfmpeg(options: SpawnOptions): Promise<RunResult> {
+  try {
+    return spawnFfmpeg(options).done
+  } catch (err) {
+    return Promise.reject(err)
+  }
 }
 
 export interface ProbeResult {
@@ -90,6 +107,8 @@ export async function probeVideo(path: string): Promise<ProbeResult> {
 /**
  * Turns a MediaRecorder file (WebM/VP9 or fragmented MP4, variable frame rate, no cues)
  * into a constant-frame-rate, seekable H.264 MP4 that the editor can scrub quickly.
+ * Timestamps are rebased so that the first recorded frame sits at t=0 – the cursor
+ * data is anchored on the same frame.
  */
 export async function transcodeRecording(
   input: string,
@@ -104,6 +123,7 @@ export async function transcodeRecording(
     args: [
       '-i', input,
       '-an',
+      '-vf', 'setpts=PTS-STARTPTS',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '17',
@@ -115,6 +135,25 @@ export async function transcodeRecording(
     ],
     durationMs,
     onProgress,
+    signal
+  })
+}
+
+/** ffmpeg process that turns raw RGBA frames on stdin into a lossless intermediate with alpha. */
+export function startRawIntermediate(output: string, width: number, height: number, fps: number, signal?: AbortSignal): FfmpegProcess {
+  return spawnFfmpeg({
+    args: [
+      '-f', 'rawvideo',
+      '-pix_fmt', 'rgba',
+      '-s', `${width}x${height}`,
+      '-r', String(fps),
+      '-i', '-',
+      '-c:v', 'ffv1',
+      '-level', '3',
+      '-pix_fmt', 'bgra',
+      output
+    ],
+    stdin: true,
     signal
   })
 }
@@ -158,17 +197,19 @@ function ditherExpression(gif: GifSettings): string {
 }
 
 /**
- * Two-pass GIF encode: palettegen → paletteuse. The intermediate MP4 already has the
+ * Two-pass GIF encode: palettegen → paletteuse. The intermediate already has the
  * final size and frame rate, so ffmpeg only has to quantize. `perframe` builds a
  * palette per frame (best for colour-changing content, biggest files); `diff` weighs
  * pixels that change between frames (best for UI recordings); `global` is a single
- * palette computed over every pixel of every frame.
+ * palette computed over every pixel of every frame. With `alpha` one palette entry is
+ * reserved for transparency (transparent frame background).
  */
 export async function encodeGif(
   input: string,
   palettePath: string,
   output: string,
   gif: GifSettings,
+  alpha: boolean,
   durationMs: number,
   onProgress: (phase: 'palette' | 'quantize', percent: number) => void,
   signal?: AbortSignal
@@ -179,7 +220,7 @@ export async function encodeGif(
   await runFfmpeg({
     args: [
       '-i', input,
-      '-vf', `palettegen=max_colors=${gif.colors}:stats_mode=${statsMode}:reserve_transparent=0`,
+      '-vf', `palettegen=max_colors=${gif.colors}:stats_mode=${statsMode}:reserve_transparent=${alpha ? 1 : 0}`,
       ...(perFrame ? ['-c:v', 'rawvideo', '-f', 'nut'] : ['-frames:v', '1']),
       palettePath
     ],
@@ -188,7 +229,10 @@ export async function encodeGif(
     signal
   })
 
-  const paletteuse = `paletteuse=dither=${ditherExpression(gif)}:diff_mode=rectangle${perFrame ? ':new=1' : ''}`
+  const paletteuse =
+    `paletteuse=dither=${ditherExpression(gif)}:diff_mode=rectangle` +
+    (perFrame ? ':new=1' : '') +
+    (alpha ? ':alpha_threshold=128' : '')
   await runFfmpeg({
     args: [
       '-i', input,

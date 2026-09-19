@@ -75,7 +75,10 @@ function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.closePath()
 }
 
+export const TRANSPARENT_BACKGROUND = 'transparent'
+
 function fillBackground(ctx: CanvasRenderingContext2D, background: string, w: number, h: number): void {
+  if (background === TRANSPARENT_BACKGROUND) return // canvas was cleared: keep the alpha
   const preset = GRADIENT_PRESETS[background]
   if (preset) {
     const g = ctx.createLinearGradient(0, 0, w, h)
