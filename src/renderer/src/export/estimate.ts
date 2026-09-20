@@ -3,6 +3,7 @@ import type { FollowPath } from '../engine/cursor'
 import { composeFrame, outputSize } from '../engine/compose'
 import { keepSegments, outToSrc, outputDuration, segmentAt } from '../engine/timeline'
 import { seekVideo as seek } from '../util/video'
+import { buildAudioPlan } from './audioPlan'
 
 export interface SizeEstimate {
   bytes: number
@@ -104,6 +105,8 @@ export async function estimateExportSize(
     const bpp = q * (0.6 + 1.2 * detail)
     const motionFactor = 0.15 + 0.85 * Math.min(1, motion * 2)
     bytes = (px * fps * bpp * motionFactor * (outDur / 1000)) / 8 + 25_000
+    // AAC 192k mixdown, roughly – only when the project actually has audible clips
+    if (buildAudioPlan(project, segments)) bytes += 24_000 * (outDur / 1000)
   } else {
     const colorFactor = { 256: 1, 128: 0.85, 64: 0.7, 32: 0.55 }[settings.gif.colors]
     const ditherFactor = { none: 1, bayer: 1.6, floyd_steinberg: 2.2, sierra2_4a: 2.1 }[settings.gif.dither]

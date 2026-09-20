@@ -3,6 +3,7 @@ import { Home } from './screens/Home'
 import { RecorderBar } from './screens/RecorderBar'
 import { Editor } from './screens/Editor'
 import { UpdateToast } from './components/UpdateToast'
+import { NoticeBar } from './components/NoticeBar'
 import { useStore } from './store'
 
 export function App(): JSX.Element {
@@ -12,6 +13,7 @@ export function App(): JSX.Element {
   return (
     <>
       {screen === 'editor' ? <Editor /> : <Home />}
+      <NoticeBar />
       <UpdateToast />
     </>
   )

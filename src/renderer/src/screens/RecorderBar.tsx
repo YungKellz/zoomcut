@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
-import { Square, X } from 'lucide-react'
+import { Mic, Square, Volume2, X } from 'lucide-react'
 import type { RecorderBarState } from '@shared/types'
 import { useT } from '../i18n'
 
@@ -52,6 +52,16 @@ export function RecorderBar(): JSX.Element {
       <div className="bar-drag">
         <span className={dotClass} />
         <span className="bar-label">{label}</span>
+        {state.audio?.mic && (
+          <span className="bar-audio-icon" title={t('bar.micOn')}>
+            <Mic size={13} />
+          </span>
+        )}
+        {state.audio?.system && (
+          <span className="bar-audio-icon" title={t('bar.systemOn')}>
+            <Volume2 size={13} />
+          </span>
+        )}
       </div>
       <button className="bar-btn bar-stop" title={t('bar.stopTitle')} onClick={() => void window.zc.bar.stop()} disabled={state.phase === 'processing'}>
         <Square size={14} fill="currentColor" />

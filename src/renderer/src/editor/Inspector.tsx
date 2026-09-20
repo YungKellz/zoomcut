@@ -1,18 +1,37 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
-import { AppWindow, Crosshair, Crop, MousePointer2, Scissors, Sparkles, Trash2, Type, Undo2, ZoomIn } from 'lucide-react'
-import type { TextOverlay, ZoomSegment } from '@shared/types'
+import {
+  AppWindow,
+  AudioLines,
+  Crosshair,
+  Crop,
+  FileAudio,
+  Mic,
+  MousePointer2,
+  Music,
+  Scissors,
+  Sparkles,
+  Trash2,
+  Type,
+  Undo2,
+  Volume2,
+  VolumeX,
+  ZoomIn
+} from 'lucide-react'
+import type { AudioClip, TextOverlay, ZoomSegment } from '@shared/types'
 import { GRADIENT_PRESETS } from '@shared/defaults'
+import { isRecordedClip } from '@shared/audio'
 import { useProject, useStore } from '../store'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
 import { findZoom } from '../engine/camera'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
+import { keepSegments, outputDuration } from '../engine/timeline'
 import { formatTimecode } from '../util/format'
 import { useT, type Translate } from '../i18n'
 
-type Tab = 'clip' | 'zoom' | 'text' | 'cursor' | 'style'
+type Tab = 'clip' | 'zoom' | 'text' | 'audio' | 'cursor' | 'style'
 
 export function Inspector(): JSX.Element {
   const t = useT()
@@ -22,6 +41,7 @@ export function Inspector(): JSX.Element {
   useEffect(() => {
     if (selection?.kind === 'zoom') setTab('zoom')
     else if (selection?.kind === 'text') setTab('text')
+    else if (selection?.kind === 'audio') setTab('audio')
     else if (selection?.kind === 'cut') setTab('clip')
   }, [selection])
 
@@ -29,6 +49,7 @@ export function Inspector(): JSX.Element {
     { id: 'clip', label: t('tab.clip'), icon: <Scissors size={14} /> },
     { id: 'zoom', label: t('tab.zoom'), icon: <ZoomIn size={14} /> },
     { id: 'text', label: t('tab.text'), icon: <Type size={14} /> },
+    { id: 'audio', label: t('tab.audio'), icon: <AudioLines size={14} /> },
     { id: 'cursor', label: t('tab.cursor'), icon: <MousePointer2 size={14} /> },
     { id: 'style', label: t('tab.style'), icon: <Sparkles size={14} /> }
   ]
@@ -46,6 +67,7 @@ export function Inspector(): JSX.Element {
         {tab === 'clip' && <ClipPanel t={t} />}
         {tab === 'zoom' && <ZoomPanel t={t} />}
         {tab === 'text' && <TextPanel t={t} />}
+        {tab === 'audio' && <AudioPanel t={t} />}
         {tab === 'cursor' && <CursorPanel t={t} />}
         {tab === 'style' && <StylePanel t={t} />}
       </div>
@@ -406,6 +428,104 @@ function TextPanel({ t }: PanelProps): JSX.Element {
           </ul>
         </>
       )}
+    </>
+  )
+}
+
+// ---- audio panel ----
+
+function audioClipIcon(kind: AudioClip['kind']): JSX.Element {
+  switch (kind) {
+    case 'system':
+      return <Volume2 size={14} />
+    case 'mic':
+    case 'voiceover':
+      return <Mic size={14} />
+    case 'music':
+      return <Music size={14} />
+    case 'file':
+      return <FileAudio size={14} />
+  }
+}
+
+// main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio);
+// the UI always shows the translated kind name for those two, and the clip's own name otherwise
+function audioClipLabel(t: Translate, clip: AudioClip): string {
+  if (clip.kind === 'system') return t('audio.kind.system')
+  if (clip.kind === 'mic') return t('audio.kind.mic')
+  return clip.name
+}
+
+function AudioPanel({ t }: PanelProps): JSX.Element {
+  const project = useProject()
+  const selection = useStore((s) => s.selection)
+  const select = useStore((s) => s.select)
+  const updateAudioClip = useStore((s) => s.updateAudioClip)
+  const removeAudioClip = useStore((s) => s.removeAudioClip)
+  const checkpoint = useStore((s) => s.checkpoint)
+  const clip: AudioClip | undefined = selection?.kind === 'audio' ? project.audio.find((c) => c.id === selection.id) : undefined
+  const outDurationMs = outputDuration(keepSegments(project.recording.durationMs, project.cuts))
+
+  return (
+    <>
+      {project.audio.length === 0 ? (
+        <p className="muted small">{t('audio.empty')}</p>
+      ) : (
+        <ul className="list">
+          {project.audio.map((c) => (
+            <li key={c.id} className={'list-item' + (clip?.id === c.id ? ' active' : '')}>
+              <button className="list-main audio-list-item" onClick={() => select({ kind: 'audio', id: c.id })}>
+                {audioClipIcon(c.kind)}
+                <span className={c.muted ? 'muted' : ''}>{audioClipLabel(t, c)}</span>
+              </button>
+              <button className="btn btn-ghost" onClick={() => updateAudioClip(c.id, { muted: !c.muted })} title={c.muted ? t('audio.unmute') : t('audio.mute')}>
+                {c.muted || c.volume <= 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+              <button className="btn btn-ghost danger" onClick={() => removeAudioClip(c.id)} title={t('audio.delete')}>
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {clip && (
+        <>
+          <h3>{t('audio.selected')}</h3>
+          <Slider
+            label={t('audio.volume')}
+            value={clip.volume}
+            min={0}
+            max={2}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onBegin={checkpoint}
+            onChange={(v) => updateAudioClip(clip.id, { volume: v }, false)}
+          />
+          <Toggle label={t('audio.muted')} value={clip.muted} onChange={(v) => updateAudioClip(clip.id, { muted: v })} />
+          {isRecordedClip(clip) ? (
+            <Slider
+              label={t('audio.syncOffset')}
+              value={clip.start}
+              // ±500ms is the normal range, but a clip whose start already sits further out
+              // (e.g. loaded from an older project) must not have its slider silently clamp
+              // or snap that value when the panel opens
+              min={Math.min(-500, clip.start)}
+              max={Math.max(500, clip.start)}
+              step={5}
+              format={(v) => `${v} ms`}
+              onBegin={checkpoint}
+              onChange={(v) => updateAudioClip(clip.id, { start: v }, false)}
+            />
+          ) : (
+            <TimeInput label={t('audio.startTime')} value={clip.start} max={outDurationMs} onChange={(v) => updateAudioClip(clip.id, { start: v })} />
+          )}
+          <button className="btn btn-small danger" onClick={() => removeAudioClip(clip.id)}>
+            <Trash2 size={14} /> {t('audio.delete')}
+          </button>
+        </>
+      )}
+      <p className="muted small">{t('audio.help')}</p>
     </>
   )
 }

@@ -1,7 +1,10 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, screen, session } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { createWriteStream, promises as fsp, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 import type {
+  AudioClip,
+  AudioTrackKind,
   DisplayInfo,
   Project,
   RecorderBarState,
@@ -9,14 +12,23 @@ import type {
   RecordingStartMeta
 } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from '@shared/defaults'
+import { newAudioClipDefaults } from '@shared/audio'
 import { createBarWindow, getMainWindow } from '../windows'
 import { getSettings, newRecordingId, projectDir, saveProject, updateSettings } from '../storage'
-import { probeVideo, transcodeRecording } from '../media/ffmpeg'
+import { convertAudio, probeAudio, probeVideo, transcodeRecording } from '../media/ffmpeg'
 import { CursorTracker } from './cursorTracker'
 import { snapshotWindows } from './windowsSnapshot'
 import type { WindowRect } from '@shared/types'
 
 export const STOP_SHORTCUT = 'CommandOrControl+Alt+R'
+
+/** One raw audio track being captured alongside the video (mic or system loopback). */
+interface AudioTrackState {
+  /** raw opus/webm file, converted to .m4a and deleted in finish() */
+  rawPath: string
+  stream: WriteStream
+  startWall: number
+}
 
 interface ActiveRecording {
   id: string
@@ -30,6 +42,28 @@ interface ActiveRecording {
   bytes: number
   windowsAtStart: Promise<WindowRect[]>
   stopRequestedAt: number | null
+  audio: { mic: AudioTrackState | null; system: AudioTrackState | null }
+}
+
+/**
+ * Ends the mic/system raw write streams if they are still open. Idempotent (checks
+ * writableEnded/destroyed first) so it is safe to call from every exit path – finish's
+ * success path (via finishAudio), finish's error path, and cancel – without double-ending.
+ */
+function closeAudioStreams(a: ActiveRecording): Promise<void> {
+  const tracks = [a.audio.mic, a.audio.system].filter((t): t is AudioTrackState => Boolean(t))
+  return Promise.all(
+    tracks.map(
+      (track) =>
+        new Promise<void>((resolve) => {
+          if (track.stream.writableEnded || track.stream.destroyed) {
+            resolve()
+            return
+          }
+          track.stream.end(() => resolve())
+        })
+    )
+  ).then(() => undefined)
 }
 
 export class RecordingController {
@@ -42,9 +76,14 @@ export class RecordingController {
 
   installDisplayMediaHandler(): void {
     session.defaultSession.setDisplayMediaRequestHandler(
-      (_request, callback) => {
-        if (this.selectedSource) callback({ video: this.selectedSource })
-        else callback({})
+      (request, callback) => {
+        if (this.selectedSource) {
+          // 'loopback' captures the system's audio output; only supported on Windows,
+          // which is this app's only target platform
+          callback({ video: this.selectedSource, audio: request.audioRequested ? 'loopback' : undefined })
+        } else {
+          callback({})
+        }
       },
       { useSystemPicker: false }
     )
@@ -106,7 +145,8 @@ export class RecordingController {
       bytes: 0,
       // window layout is captured in the background; used later for "crop to window"
       windowsAtStart: snapshotWindows(display),
-      stopRequestedAt: null
+      stopRequestedAt: null,
+      audio: { mic: null, system: null }
     }
     await updateSettings({ lastDisplayId: displayId })
     await this.tracker.start(display)
@@ -130,7 +170,20 @@ export class RecordingController {
     a.meta = meta
     a.rawPath = join(a.dir, meta.mimeType.includes('mp4') ? 'raw.mp4' : 'raw.webm')
     a.stream = createWriteStream(a.rawPath)
-    this.setBarState({ phase: 'recording', startedAt: meta.startedAt, countdownEndsAt: null })
+    if (meta.audio?.mic) {
+      const rawPath = join(a.dir, 'mic.webm')
+      a.audio.mic = { rawPath, stream: createWriteStream(rawPath), startWall: meta.audio.mic.startWall }
+    }
+    if (meta.audio?.system) {
+      const rawPath = join(a.dir, 'system.webm')
+      a.audio.system = { rawPath, stream: createWriteStream(rawPath), startWall: meta.audio.system.startWall }
+    }
+    this.setBarState({
+      phase: 'recording',
+      startedAt: meta.startedAt,
+      countdownEndsAt: null,
+      audio: meta.audio ? { mic: Boolean(meta.audio.mic), system: Boolean(meta.audio.system) } : undefined
+    })
   }
 
   chunk(id: string, data: ArrayBuffer): Promise<void> {
@@ -141,6 +194,16 @@ export class RecordingController {
     const stream = a.stream
     return new Promise((resolve, reject) => {
       stream.write(buf, (err) => (err ? reject(err) : resolve()))
+    })
+  }
+
+  audioChunk(id: string, kind: AudioTrackKind, data: ArrayBuffer): Promise<void> {
+    const a = this.requireActive(id)
+    const track = a.audio[kind]
+    if (!track) throw new Error(`Audio track '${kind}' was not started`)
+    const buf = Buffer.from(data)
+    return new Promise((resolve, reject) => {
+      track.stream.write(buf, (err) => (err ? reject(err) : resolve()))
     })
   }
 
@@ -210,6 +273,7 @@ export class RecordingController {
         cuts: [],
         texts: [],
         zooms: [],
+        audio: [],
         // last used cursor / frame settings become the defaults of a new project
         cursor: { ...DEFAULT_CURSOR_SETTINGS, ...(settings.cursorDefaults ?? {}), offsetMs: 0 },
         crop: { x: 0, y: 0, w: 1, h: 1 },
@@ -222,6 +286,7 @@ export class RecordingController {
         },
         updatedAt: Date.now()
       }
+      project.audio = await this.finishAudio(a, createdAt, estimatedDuration, progress)
       await saveProject(project)
       progress({ phase: 'done', percent: 100 })
       return project
@@ -230,9 +295,60 @@ export class RecordingController {
       this.teardownRecordingUi()
       throw err
     } finally {
+      // the success path already closes these via finishAudio; on an error thrown before
+      // that point (transcode, probe, snapshot, ...) they would otherwise stay open forever
+      await closeAudioStreams(a)
       this.active = null
       this.selectedSource = null
     }
+  }
+
+  /**
+   * Converts every raw audio track captured alongside the video into an AAC .m4a, probes
+   * its duration and turns it into an AudioClip. A track that fails to convert is logged
+   * and skipped (never fails the whole recording) – its raw file is still removed.
+   */
+  private async finishAudio(
+    a: ActiveRecording,
+    startedAt: number,
+    estimatedDuration: number,
+    progress: (p: Omit<RecordingProgress, 'id'>) => void
+  ): Promise<AudioClip[]> {
+    await closeAudioStreams(a)
+    const clips: AudioClip[] = []
+    const kinds: Array<{ kind: AudioTrackKind; name: string }> = [
+      { kind: 'system', name: 'System audio' },
+      { kind: 'mic', name: 'Microphone' }
+    ]
+    for (const { kind, name } of kinds) {
+      const track = a.audio[kind]
+      if (!track) continue
+      const file = `${kind}.m4a`
+      const outPath = join(a.dir, file)
+      let converted = false
+      try {
+        progress({ phase: 'audio', percent: 0 })
+        await convertAudio(track.rawPath, outPath, estimatedDuration, (percent) => progress({ phase: 'audio', percent }))
+        converted = true
+        const probe = await probeAudio(outPath)
+        clips.push({
+          id: randomUUID(),
+          kind,
+          file,
+          name,
+          start: track.startWall - startedAt,
+          durationMs: probe.durationMs,
+          ...newAudioClipDefaults(kind)
+        })
+      } catch (err) {
+        console.warn(`[recorder] audio conversion failed for '${kind}':`, err)
+        // convertAudio succeeded but probing its output failed: do not leave an orphan .m4a
+        if (converted) await fsp.rm(outPath, { force: true }).catch(() => undefined)
+      } finally {
+        await fsp.rm(track.rawPath, { force: true }).catch(() => undefined)
+      }
+    }
+    return clips
   }
 
   async cancel(id: string): Promise<void> {
@@ -242,6 +358,7 @@ export class RecordingController {
     if (a.stream) {
       await new Promise<void>((resolve) => a.stream!.end(() => resolve()))
     }
+    await closeAudioStreams(a)
     this.teardownRecordingUi()
     this.active = null
     this.selectedSource = null

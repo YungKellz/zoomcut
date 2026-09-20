@@ -1,4 +1,5 @@
 import type {
+  AudioCaptureOptions,
   CursorSettings,
   ExportSettings,
   FrameStyle,
@@ -93,3 +94,11 @@ export const SCALE_OPTIONS = [1, 0.75, 0.5]
 
 /** Releases page shown to portable users, who cannot auto-update. */
 export const RELEASES_URL = 'https://github.com/YungKellz/zoomcut/releases'
+
+// ---- audio ----
+
+export const DEFAULT_AUDIO_CAPTURE: AudioCaptureOptions = {
+  mic: false,
+  micDeviceId: null,
+  system: false
+}

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AudioClip,
   CropRect,
   CursorSettings,
   CutRange,
@@ -16,7 +17,7 @@ import { findZoom, resolveZoomOverlaps } from './engine/camera'
 import { clamp } from './util/format'
 import { t } from './i18n'
 
-export type Selection = { kind: 'cut' | 'zoom' | 'text'; id: string } | null
+export type Selection = { kind: 'cut' | 'zoom' | 'text' | 'audio'; id: string } | null
 export type EditorMode = 'normal' | 'pickTarget' | 'crop'
 export interface RangeSelection {
   start: number
@@ -40,6 +41,8 @@ let pendingCheckpoint: Project | null = null
 
 export interface EditorState {
   screen: 'home' | 'editor'
+  /** transient dismissible notice shown by NoticeBar (App.tsx); outlives Home unmounting */
+  notice: string | null
   project: Project | null
   playheadMs: number
   playing: boolean
@@ -53,6 +56,8 @@ export interface EditorState {
   history: Project[]
   future: Project[]
   exportOpen: boolean
+  /** editor UI state (not saved): silences every audio clip, e.g. while recording a voiceover */
+  audioMuted: boolean
 
   openProject(project: Project): void
   closeProject(): void
@@ -89,10 +94,17 @@ export interface EditorState {
   updateExport(patch: Partial<ExportSettings>): void
   setName(name: string): void
   deleteSelected(): void
+  setNotice(notice: string | null): void
+
+  addAudioClip(clip: AudioClip): void
+  updateAudioClip(id: string, patch: Partial<AudioClip>, record?: boolean): void
+  removeAudioClip(id: string): void
+  setAudioMuted(muted: boolean): void
 }
 
 export const useStore = create<EditorState>((set, get) => ({
   screen: 'home',
+  notice: null,
   project: null,
   playheadMs: 0,
   playing: false,
@@ -105,6 +117,7 @@ export const useStore = create<EditorState>((set, get) => ({
   history: [],
   future: [],
   exportOpen: false,
+  audioMuted: false,
 
   openProject: (project) =>
     set({
@@ -328,8 +341,26 @@ export const useStore = create<EditorState>((set, get) => ({
     if (selection?.kind === 'cut') get().removeCut(selection.id)
     else if (selection?.kind === 'zoom') get().removeZoom(selection.id)
     else if (selection?.kind === 'text') get().removeText(selection.id)
+    else if (selection?.kind === 'audio') get().removeAudioClip(selection.id)
     else if (range && range.end - range.start > 10) get().addCut(range.start, range.end)
-  }
+  },
+
+  addAudioClip: (clip) => {
+    get().mutate((p) => ({ ...p, audio: [...p.audio, clip] }))
+    set({ selection: { kind: 'audio', id: clip.id } })
+  },
+
+  updateAudioClip: (id, patch, record = true) =>
+    get().mutate((p) => ({ ...p, audio: p.audio.map((c) => (c.id === id ? { ...c, ...patch } : c)) }), record),
+
+  removeAudioClip: (id) => {
+    get().mutate((p) => ({ ...p, audio: p.audio.filter((c) => c.id !== id) }))
+    set({ selection: null })
+  },
+
+  setAudioMuted: (audioMuted) => set({ audioMuted }),
+
+  setNotice: (notice) => set({ notice })
 }))
 
 export function useProject(): Project {

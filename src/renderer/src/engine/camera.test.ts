@@ -26,6 +26,7 @@ function project(zooms: ZoomSegment[], samples = [{ t: 0, x: 0.9, y: 0.9 }]): Pr
     cuts: [],
     texts: [],
     zooms,
+    audio: [],
     cursor: { ...DEFAULT_CURSOR_SETTINGS },
     crop: { x: 0, y: 0, w: 1, h: 1 },
     frame: { ...DEFAULT_FRAME_STYLE },

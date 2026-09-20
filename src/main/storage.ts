@@ -10,7 +10,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   lastDisplayId: null,
   language: 'system',
   cursorDefaults: null,
-  frameDefaults: null
+  frameDefaults: null,
+  audioDefaults: null
 }
 
 export function recordingsRoot(): string {
@@ -125,6 +126,7 @@ export async function loadProject(id: string): Promise<Project> {
     cuts: raw.cuts ?? [],
     texts: raw.texts ?? [],
     zooms: raw.zooms ?? [],
+    audio: raw.audio ?? [],
     cursor: { ...DEFAULT_CURSOR_SETTINGS, ...(raw.cursor ?? {}) },
     crop: raw.crop ?? { x: 0, y: 0, w: 1, h: 1 },
     frame: { ...DEFAULT_FRAME_STYLE, ...(raw.frame ?? {}) },

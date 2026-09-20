@@ -1,7 +1,8 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Circle, FolderOpen, Monitor, RefreshCw, Trash2 } from 'lucide-react'
-import type { AppInfo, DisplayInfo, Language, ProjectSummary } from '@shared/types'
+import { Circle, FolderOpen, Mic, Monitor, RefreshCw, Trash2, Volume2 } from 'lucide-react'
+import type { AppInfo, AudioCaptureOptions, DisplayInfo, Language, ProjectSummary } from '@shared/types'
+import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
 import { formatDuration } from '../util/format'
@@ -18,10 +19,53 @@ export function Home(): JSX.Element {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [audio, setAudio] = useState<AudioCaptureOptions>(DEFAULT_AUDIO_CAPTURE)
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([])
 
   const recorder = useRecorder((project) => {
     openProject(project)
   })
+
+  // last used mic / system audio choice becomes the default, like cursor/frame settings
+  useEffect(() => {
+    void window.zc.app.getSettings().then((s) => {
+      if (s.audioDefaults) setAudio(s.audioDefaults)
+    })
+  }, [])
+
+  const updateAudio = useCallback(
+    (patch: Partial<AudioCaptureOptions>): void => {
+      // compute the next value and persist it outside the state updater: StrictMode
+      // double-invokes updater functions, which would fire setSettings twice
+      const next = { ...audio, ...patch }
+      setAudio(next)
+      void window.zc.app.setSettings({ audioDefaults: next })
+    },
+    [audio]
+  )
+
+  const refreshMicDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      // an empty deviceId (no permission granted yet) is indistinguishable between devices
+      // and makes a bad React key / <option> value, so it is not worth listing
+      setMicDevices(devices.filter((d) => d.kind === 'audioinput' && d.deviceId !== ''))
+    } catch {
+      setMicDevices([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshMicDevices()
+    navigator.mediaDevices.addEventListener('devicechange', refreshMicDevices)
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshMicDevices)
+  }, [refreshMicDevices])
+
+  // device labels (and a stable deviceId) only become available once permission was granted
+  // at least once; re-enumerate once a recording actually reaches the mic-open attempt
+  useEffect(() => {
+    if (recorder.phase === 'recording') void refreshMicDevices()
+  }, [recorder.phase, refreshMicDevices])
 
   const refreshDisplays = useCallback(async () => {
     const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
@@ -137,11 +181,39 @@ export function Home(): JSX.Element {
             {displays.length === 0 && <p className="muted">{t('home.noDisplays')}</p>}
           </div>
 
+          <div className="audio-row">
+            <label className="field-row audio-check">
+              <input type="checkbox" checked={audio.mic} disabled={recording} onChange={(e) => updateAudio({ mic: e.target.checked })} />
+              <Mic size={14} />
+              <span>{t('home.audioMic')}</span>
+            </label>
+            {audio.mic && (
+              <select
+                className="mic-select"
+                value={audio.micDeviceId ?? ''}
+                disabled={recording}
+                onChange={(e) => updateAudio({ micDeviceId: e.target.value || null })}
+              >
+                <option value="">{t('home.audioMicDefault')}</option>
+                {micDevices.map((d, i) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || t('home.audioMicUnnamed', { n: i + 1 })}
+                  </option>
+                ))}
+              </select>
+            )}
+            <label className="field-row audio-check">
+              <input type="checkbox" checked={audio.system} disabled={recording} onChange={(e) => updateAudio({ system: e.target.checked })} />
+              <Volume2 size={14} />
+              <span>{t('home.audioSystem')}</span>
+            </label>
+          </div>
+
           <div className="record-actions">
             <button
               className="btn btn-record"
               disabled={recording || selectedDisplay === null}
-              onClick={() => selectedDisplay !== null && void recorder.start(selectedDisplay)}
+              onClick={() => selectedDisplay !== null && void recorder.start(selectedDisplay, { audio })}
             >
               <Circle size={16} fill="currentColor" />
               {t('home.start')}

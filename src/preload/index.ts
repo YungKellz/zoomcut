@@ -24,6 +24,7 @@ const api: ZcApi = {
     prepare: (displayId) => ipcRenderer.invoke('recording:prepare', displayId),
     started: (id, meta) => ipcRenderer.invoke('recording:started', id, meta),
     chunk: (id, data) => ipcRenderer.invoke('recording:chunk', id, data),
+    audioChunk: (id, kind, data) => ipcRenderer.invoke('recording:audio-chunk', id, kind, data),
     finish: (id) => ipcRenderer.invoke('recording:finish', id),
     cancel: (id) => ipcRenderer.invoke('recording:cancel', id),
     onStopRequested: (cb) => subscribe('recorder:stop', cb),

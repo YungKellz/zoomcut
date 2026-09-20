@@ -192,6 +192,7 @@ export interface Project {
   cuts: CutRange[]
   texts: TextOverlay[]
   zooms: ZoomSegment[]
+  audio: AudioClip[]
   cursor: CursorSettings
   crop: CropRect
   frame: FrameStyle
@@ -216,6 +217,8 @@ export interface RecordingStartMeta {
   width: number
   height: number
   fps: number
+  /** track A: wall-clock time each audio MediaRecorder started, for turning it into a clip offset */
+  audio?: { mic?: { startWall: number }; system?: { startWall: number } }
 }
 
 export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing'
@@ -224,11 +227,13 @@ export interface RecorderBarState {
   phase: RecordingPhase
   startedAt: number | null
   countdownEndsAt: number | null
+  /** track A: audio being captured, for a small indicator on the bar */
+  audio?: { mic: boolean; system: boolean }
 }
 
 export interface RecordingProgress {
   id: string
-  phase: 'transcode' | 'analyze' | 'done' | 'error'
+  phase: 'transcode' | 'analyze' | 'audio' | 'done' | 'error'
   percent: number
   message?: string
 }
@@ -270,6 +275,8 @@ export interface AppSettings {
   /** last used cursor / frame settings, applied to new projects */
   cursorDefaults: CursorSettings | null
   frameDefaults: FrameStyle | null
+  /** last used microphone / system audio choice, applied to new recordings */
+  audioDefaults: AudioCaptureOptions | null
 }
 
 export interface AppInfo {
@@ -294,4 +301,64 @@ export interface UpdateState {
   /** what went wrong, for a manual check */
   message: string | null
   checkedAt: number | null
+}
+
+// ---- audio ----
+
+export type AudioClipKind = 'system' | 'mic' | 'voiceover' | 'music' | 'file'
+
+/** Which raw audio channel a captured chunk belongs to (recording:audio-chunk). */
+export type AudioTrackKind = 'mic' | 'system'
+
+export interface AudioClip {
+  id: string
+  kind: AudioClipKind
+  /** file name inside the project folder (always .m4a, AAC 48 kHz stereo) */
+  file: string
+  name: string
+  /**
+   * 'system' | 'mic' (recorded with the video): SOURCE time (ms) at which the file's t=0 sits – usually ≤ 0,
+   * the audio recorder starts a moment before the first video frame. The clip follows the video through cuts.
+   * Other kinds (overlays): OUTPUT time (ms) at which the clip starts; cuts do not move it.
+   */
+  start: number
+  durationMs: number
+  /** 0..2, 1 = as recorded */
+  volume: number
+  muted: boolean
+  /** repeat the file until the output ends (music beds) */
+  loop: boolean
+  fadeInMs: number
+  fadeOutMs: number
+  /** id of the generated music preset, when kind === 'music' */
+  preset?: string
+}
+
+export interface AudioCaptureOptions {
+  mic: boolean
+  micDeviceId: string | null
+  system: boolean
+}
+
+/** What the renderer computes for the export (all times ms, output timeline). */
+export interface AudioExportPiece {
+  /** span of the audio file to use */
+  fileStart: number
+  fileEnd: number
+  /** output time where the piece starts */
+  outAt: number
+}
+export interface AudioExportTrack {
+  /** absolute path */
+  path: string
+  /** the clip's own file duration (ms); a piece with fileEnd beyond this needs aloop */
+  durationMs: number
+  pieces: AudioExportPiece[]
+  volume: number
+  fadeInMs: number
+  fadeOutMs: number
+}
+export interface AudioExportPlan {
+  tracks: AudioExportTrack[]
+  outDurationMs: number
 }

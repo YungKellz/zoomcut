@@ -1432,3 +1432,65 @@ input.name-input:focus {
   gap: 6px;
   flex: none;
 }
+
+/* ---- audio ---- */
+
+.audio-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.audio-check {
+  margin: 0;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mic-select {
+  width: auto;
+  max-width: 220px;
+}
+
+.bar-audio-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  flex: none;
+}
+
+/* hidden host for the <audio> elements: taken out of .editor-main's grid flow entirely */
+.audio-player {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.audio-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.notice-bar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 560px;
+  padding: 10px 12px;
+  background: rgba(255, 176, 32, 0.16);
+  border: 1px solid rgba(255, 176, 32, 0.45);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  user-select: text;
+}

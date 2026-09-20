@@ -249,7 +249,31 @@ export const en = {
   'export.palettePhase': 'Building palette',
   'export.writingGif': 'Writing GIF',
   'export.done': 'Done',
-  'export.run': 'Export {format}'
+  'export.run': 'Export {format}',
+
+  // ---- audio ----
+  'home.audioMic': 'Microphone',
+  'home.audioMicDefault': 'Default microphone',
+  'home.audioMicUnnamed': 'Microphone {n}',
+  'home.audioSystem': 'System audio',
+  'home.micWarningTitle': 'Microphone unavailable.',
+  'home.micWarning': 'Recording will continue without it: {error}',
+  'audio.systemAudioFailed': 'System audio could not be captured on this device. The screen was recorded without it.',
+  'bar.micOn': 'Recording the microphone',
+  'bar.systemOn': 'Recording system audio',
+  'tab.audio': 'Audio',
+  'audio.empty': 'No audio yet. Record with the microphone or system audio enabled, add a voiceover, or add music – see the checkboxes on the home screen.',
+  'audio.selected': 'Selected clip',
+  'audio.volume': 'Volume',
+  'audio.muted': 'Muted',
+  'audio.mute': 'Mute',
+  'audio.unmute': 'Unmute',
+  'audio.syncOffset': 'Sync offset',
+  'audio.startTime': 'Start (s)',
+  'audio.delete': 'Delete clip',
+  'audio.kind.system': 'System audio',
+  'audio.kind.mic': 'Microphone',
+  'audio.help': 'Recorded clips follow the video through cuts; the sync offset shifts them a little if they sound early or late.'
 }
 
 export type TKey = keyof typeof en

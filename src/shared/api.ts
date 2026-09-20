@@ -1,6 +1,8 @@
 import type {
   AppInfo,
   AppSettings,
+  AudioExportPlan,
+  AudioTrackKind,
   DisplayInfo,
   ExportBeginRequest,
   ExportBeginResult,
@@ -35,6 +37,8 @@ export interface ZcApi {
     prepare(displayId: number): Promise<{ id: string; countdownEndsAt: number }>
     started(id: string, meta: RecordingStartMeta): Promise<void>
     chunk(id: string, data: ArrayBuffer): Promise<void>
+    /** track A: one opus chunk from the mic or system-audio MediaRecorder */
+    audioChunk(id: string, kind: AudioTrackKind, data: ArrayBuffer): Promise<void>
     finish(id: string): Promise<Project>
     cancel(id: string): Promise<void>
     /** Stop / cancel requests coming from the floating bar or the global shortcut. */
@@ -64,7 +68,7 @@ export interface ZcApi {
     write(exportId: string, position: number, data: ArrayBuffer): Promise<void>
     /** raw mode only: one RGBA frame */
     writeRaw(exportId: string, data: ArrayBuffer): Promise<void>
-    finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }): Promise<ExportFinishResult>
+    finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean; audio?: AudioExportPlan }): Promise<ExportFinishResult>
     cancel(exportId: string): Promise<void>
     onProgress(cb: (p: ExportProgress) => void): Unsubscribe
   }

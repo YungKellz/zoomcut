@@ -55,7 +55,8 @@ export async function restoreUserSettings(win: Page): Promise<void> {
       (window as unknown as { zc: { app: { setSettings: (p: unknown) => Promise<unknown> } } }).zc.app.setSettings({
         language: 'system',
         cursorDefaults: null,
-        frameDefaults: null
+        frameDefaults: null,
+        audioDefaults: null
       })
     )
     .catch(() => undefined)

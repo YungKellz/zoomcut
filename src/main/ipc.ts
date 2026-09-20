@@ -2,6 +2,8 @@ import { app, dialog, ipcMain, shell } from 'electron'
 import type {
   AppInfo,
   AppSettings,
+  AudioExportPlan,
+  AudioTrackKind,
   ExportBeginRequest,
   ExportSettings,
   Project,
@@ -80,7 +82,7 @@ export function registerIpc({ recorder, exporter, updater }: Deps): void {
   ipcMain.handle('export:write', (_e, exportId: string, position: number, data: ArrayBuffer) =>
     exporter.write(exportId, position, data))
   ipcMain.handle('export:write-raw', (_e, exportId: string, data: ArrayBuffer) => exporter.writeRaw(exportId, data))
-  ipcMain.handle('export:finish', (_e, exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }) =>
+  ipcMain.handle('export:finish', (_e, exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean; audio?: AudioExportPlan }) =>
     exporter.finish(exportId, settings, meta))
   ipcMain.handle('export:cancel', (_e, exportId: string) => exporter.cancel(exportId))
 
@@ -88,4 +90,7 @@ export function registerIpc({ recorder, exporter, updater }: Deps): void {
   ipcMain.handle('update:state', () => updater.getState())
   ipcMain.handle('update:check', () => updater.check(true))
   ipcMain.handle('update:install', () => updater.install())
+
+  // ---- audio ----
+  ipcMain.handle('recording:audio-chunk', (_e, id: string, kind: AudioTrackKind, data: ArrayBuffer) => recorder.audioChunk(id, kind, data))
 }

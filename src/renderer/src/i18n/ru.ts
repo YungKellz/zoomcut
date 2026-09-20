@@ -237,5 +237,29 @@ export const ru: Record<TKey, string> = {
   'export.palettePhase': 'Строим палитру',
   'export.writingGif': 'Записываем GIF',
   'export.done': 'Готово',
-  'export.run': 'Экспорт {format}'
+  'export.run': 'Экспорт {format}',
+
+  // ---- audio ----
+  'home.audioMic': 'Микрофон',
+  'home.audioMicDefault': 'Микрофон по умолчанию',
+  'home.audioMicUnnamed': 'Микрофон {n}',
+  'home.audioSystem': 'Звук системы',
+  'home.micWarningTitle': 'Микрофон недоступен.',
+  'home.micWarning': 'Запись продолжится без него: {error}',
+  'audio.systemAudioFailed': 'Не удалось захватить звук системы на этом устройстве. Экран записан без него.',
+  'bar.micOn': 'Записывается микрофон',
+  'bar.systemOn': 'Записывается звук системы',
+  'tab.audio': 'Звук',
+  'audio.empty': 'Пока нет звука. Запишите с микрофоном или звуком системы, добавьте озвучку или музыку – см. флажки на главном экране.',
+  'audio.selected': 'Выбранная дорожка',
+  'audio.volume': 'Громкость',
+  'audio.muted': 'Без звука',
+  'audio.mute': 'Выключить звук',
+  'audio.unmute': 'Включить звук',
+  'audio.syncOffset': 'Смещение синхронизации',
+  'audio.startTime': 'Начало (с)',
+  'audio.delete': 'Удалить дорожку',
+  'audio.kind.system': 'Звук системы',
+  'audio.kind.mic': 'Микрофон',
+  'audio.help': 'Записанные дорожки следуют за видео через вырезки; смещение синхронизации немного сдвигает их, если звук отстаёт или опережает.'
 }
