@@ -90,3 +90,6 @@ export const MP4_CRF: Record<ExportSettings['mp4Quality'], number> = {
 export const GIF_FPS_OPTIONS = [10, 12, 15, 20, 25]
 export const MP4_FPS_OPTIONS = [24, 30, 60]
 export const SCALE_OPTIONS = [1, 0.75, 0.5]
+
+/** Releases page shown to portable users, who cannot auto-update. */
+export const RELEASES_URL = 'https://github.com/YungKellz/zoomcut/releases'

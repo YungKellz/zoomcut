@@ -438,6 +438,7 @@ details.adv[open] summary {
 .overlay {
   position: fixed;
   inset: 0;
+  z-index: 50;
   background: rgba(8, 9, 12, 0.85);
   display: flex;
   align-items: center;
@@ -1386,4 +1387,48 @@ input.name-input:focus {
   margin-top: 8px;
   user-select: text;
   word-break: break-all;
+}
+
+/* ---------- updates ---------- */
+
+.update-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.update-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 560px;
+  padding: 12px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+
+.update-toast-icon {
+  color: var(--accent-2);
+  flex: none;
+}
+
+.update-toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-toast-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
 }

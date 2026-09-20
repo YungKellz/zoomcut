@@ -38,6 +38,22 @@ export const en = {
   'home.transcoding': 'Preparing video for editing… {percent}%',
   'home.finishing': 'Finishing…',
 
+  // ---- updates ----
+  'update.check': 'Check for updates',
+  'update.checking': 'Checking for updates…',
+  'update.upToDate': 'You have the latest version.',
+  'update.checkAgain': 'Check again',
+  'update.downloading': 'Downloading update {version}… {percent}%',
+  'update.ready': 'Update {version} is downloaded.',
+  'update.readyTitle': 'ZoomCut {version} is ready to install',
+  'update.readyHint': 'Restart now, or it will be installed when you quit.',
+  'update.restart': 'Restart and update',
+  'update.later': 'Later',
+  'update.failed': 'Could not check for updates.',
+  'update.retry': 'Try again',
+  'update.portable': 'The portable build does not update itself:',
+  'update.releases': 'get new versions on GitHub',
+
   // ---- floating bar ----
   'bar.startingIn': 'Starting in {n}…',
   'bar.starting': 'Starting…',

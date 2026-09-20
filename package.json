@@ -1,6 +1,6 @@
 {
   "name": "zoomcut",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Free, open-source screen recorder and demo editor: cuts, timed text, smooth follow-cursor zoom, cursor highlight, MP4/GIF export with full palette control.",
   "main": "./out/main/index.js",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "e2e": "playwright test",
-    "dist": "electron-vite build && electron-builder --win --config electron-builder.yml"
+    "dist": "electron-vite build && electron-builder --win --config electron-builder.yml --publish never"
   },
   "dependencies": {
     "ffmpeg-static": "^5.3.0",

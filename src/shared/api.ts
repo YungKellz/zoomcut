@@ -11,7 +11,8 @@ import type {
   ProjectSummary,
   RecorderBarState,
   RecordingProgress,
-  RecordingStartMeta
+  RecordingStartMeta,
+  UpdateState
 } from './types'
 
 export type Unsubscribe = () => void
@@ -66,5 +67,14 @@ export interface ZcApi {
     finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }): Promise<ExportFinishResult>
     cancel(exportId: string): Promise<void>
     onProgress(cb: (p: ExportProgress) => void): Unsubscribe
+  }
+  update: {
+    /** current auto-update state; `reason` tells why it is disabled */
+    getState(): Promise<UpdateState>
+    /** manual check; resolves once the feed has answered */
+    check(): Promise<UpdateState>
+    /** quit, install the downloaded update silently and relaunch */
+    install(): Promise<void>
+    onState(cb: (s: UpdateState) => void): Unsubscribe
   }
 }

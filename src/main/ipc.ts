@@ -9,6 +9,7 @@ import type {
 } from '@shared/types'
 import type { RecordingController } from './recorder/controller'
 import type { ExportManager } from './exportManager'
+import type { Updater } from './updater'
 import { ffmpegPath } from './media/ffmpeg'
 import {
   deleteProject,
@@ -25,9 +26,10 @@ import { getMainWindow } from './windows'
 interface Deps {
   recorder: RecordingController
   exporter: ExportManager
+  updater: Updater
 }
 
-export function registerIpc({ recorder, exporter }: Deps): void {
+export function registerIpc({ recorder, exporter, updater }: Deps): void {
   // ---- app ----
   ipcMain.handle('app:info', (): AppInfo => ({
     version: app.getVersion(),
@@ -81,4 +83,9 @@ export function registerIpc({ recorder, exporter }: Deps): void {
   ipcMain.handle('export:finish', (_e, exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }) =>
     exporter.finish(exportId, settings, meta))
   ipcMain.handle('export:cancel', (_e, exportId: string) => exporter.cancel(exportId))
+
+  // ---- updates ----
+  ipcMain.handle('update:state', () => updater.getState())
+  ipcMain.handle('update:check', () => updater.check(true))
+  ipcMain.handle('update:install', () => updater.install())
 }

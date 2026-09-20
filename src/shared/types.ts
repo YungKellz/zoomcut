@@ -278,3 +278,20 @@ export interface AppInfo {
   ffmpegPath: string | null
   platform: string
 }
+
+export type UpdateStatus = 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'upToDate' | 'error'
+
+/** Auto-update state pushed from the main process (src/main/updater.ts). */
+export interface UpdateState {
+  status: UpdateStatus
+  /** why updates are off: an unpackaged dev run, the portable exe, or a test run */
+  reason: 'dev' | 'portable' | 'test' | null
+  currentVersion: string
+  /** version offered by the feed while available / downloading / downloaded */
+  version: string | null
+  /** download progress, 0–100 */
+  percent: number
+  /** what went wrong, for a manual check */
+  message: string | null
+  checkedAt: number | null
+}

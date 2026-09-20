@@ -7,6 +7,7 @@ import { useRecorder } from '../recording/useRecorder'
 import { formatDuration } from '../util/format'
 import { changeLanguage, useI18n, useT } from '../i18n'
 import { Logo } from '../components/Logo'
+import { UpdateStatus } from '../components/UpdateStatus'
 
 export function Home(): JSX.Element {
   const t = useT()
@@ -93,6 +94,7 @@ export function Home(): JSX.Element {
           {info && (
             <>
               <span>v{info.version}</span>
+              <UpdateStatus />
               <button className="link folder-link" title={t('home.openRecordingsDir')} onClick={() => void window.zc.app.openPath(info.recordingsDir)}>
                 {t('home.recordingsDir', { dir: info.recordingsDir })}
               </button>

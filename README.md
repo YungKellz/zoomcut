@@ -22,8 +22,8 @@ pick the file name and folder.
 - **Text overlays**: any number of texts with start/end, position (drag on the preview), size, colours,
   background, alignment, fade/pop animation. Overlapping texts get their own lanes.
 - **Zoom**: segments from 1.2× to 5× with eased transitions. *Follow cursor* pans smoothly after the recorded
-  mouse with a dead zone and smoothing; *Fixed* zooms into a point you click or an area you draw on the frame
-  ("Pick on the frame"). "Auto from clicks" builds zooms around click clusters.
+  mouse with a dead zone and smoothing; *Fixed* zooms into an area you place on the frame ("Pick area": drag and resize the
+  rectangle, then Apply). "Auto-zoom from clicks" builds zooms around click clusters.
 - **Cursor**: persistent highlight circle (colour, radius, opacity, outline) and click ripples (left/right colours),
   plus a sync offset slider for fine tuning.
 - **Crop & style**: crop to a region, optional padding with a colour/gradient background, rounded corners,
@@ -33,6 +33,8 @@ pick the file name and folder.
   at 100/75/50 % size, with a rough size estimate before you start. The "Crisp UI" preset keeps thin grey UI
   elements sharp. Choose the file name and the folder; the last folder is remembered.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
+- **Updates**: the installed app checks GitHub Releases on start and every six hours, downloads a new version in the
+  background and offers "Restart and update"; the portable exe is updated by hand.
 
 ## Run from source
 
@@ -91,9 +93,18 @@ src/main       Electron main process: windows, recording controller, cursor trac
 src/preload    contextBridge API (window.zc)
 src/renderer   React app: Home (record), Editor (preview, timeline, inspector, export dialog), engine/, i18n/
 src/shared     data model, defaults and the API contract
-tests/e2e      Playwright end-to-end smoke test
-scripts        render-icon.cjs renders build/logo.svg into the app icon
+tests/e2e      Playwright end-to-end tests (smoke, adversarial scenarios, update feed)
+scripts        render-icon.cjs renders build/logo.svg into the app icon; release-notes.cjs prints a CHANGELOG section
 ```
+
+## Releases and auto-update
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds the installer and the portable exe and publishes
+a GitHub release with them, `latest.yml` and the `.blockmap`. Installed copies (the Setup exe) check that feed on
+start and every six hours through [electron-updater](https://www.electron.build/auto-update), download a new installer
+in the background and offer "Restart and update"; an update that was put off is installed silently when the app quits.
+The portable exe does not update itself. `ZOOMCUT_UPDATE_URL=http://host/folder/` points the updater at a local feed
+for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Быстрый старт (RU)
 
@@ -102,9 +113,11 @@ scripts        render-icon.cjs renders build/logo.svg into the app icon
    она не попадает в запись. Остановить: кнопка **Стоп** или `Ctrl+Alt+R`.
 3. Запись откроется в редакторе: выделите диапазон на дорожке видео и нажмите **Вырезать выделение** (или `C`) –
    кусок исчезнет с таймлайна (вернуть его можно из списка во вкладке «Клип» или через Ctrl+Z).
-   `Z` добавляет зум, `T` – текст (перетаскивается прямо на превью). Во вкладке **Зум** кнопка «Указать на кадре»
-   позволяет кликнуть точку или нарисовать область, к которой приблизить кадр. Вкладка **Курсор** отвечает за
+   `Z` добавляет зум, `T` – текст (перетаскивается прямо на превью). Во вкладке **Зум** кнопка «Указать область»
+   позволяет выделить на кадре область, к которой приблизить картинку. Вкладка **Курсор** отвечает за
    подсветку курсора и кликов.
 4. **Экспорт** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Чёткий UI**;
    для градиентов – **Плавные градиенты**. Диалог показывает ориентировочный вес файла. Имя файла и папка
    задаются там же. Прозрачный фон (вкладка **Стиль**) экспортируется в GIF.
+5. Установленная версия (Setup) сама проверяет обновления на GitHub при запуске, скачивает новую версию в фоне и
+   предлагает перезапуститься; отложенное обновление ставится при выходе. Portable-версию нужно скачивать заново.

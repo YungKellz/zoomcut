@@ -4,6 +4,7 @@ import { createMainWindow, getMainWindow } from './windows'
 import { registerIpc } from './ipc'
 import { RecordingController } from './recorder/controller'
 import { ExportManager } from './exportManager'
+import { Updater } from './updater'
 import { ensureDirs } from './storage'
 
 protocol.registerSchemesAsPrivileged([
@@ -21,6 +22,7 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let recorder: RecordingController | null = null
+let updater: Updater | null = null
 
 // Tests launch their own instance next to a running dev app, so they skip the lock.
 const gotLock = process.env['ZOOMCUT_E2E'] ? true : app.requestSingleInstanceLock()
@@ -43,9 +45,11 @@ if (!gotLock) {
     recorder = new RecordingController()
     recorder.installDisplayMediaHandler()
     const exporter = new ExportManager()
-    registerIpc({ recorder, exporter })
+    updater = new Updater()
+    registerIpc({ recorder, exporter, updater })
 
     createMainWindow()
+    updater.start()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
@@ -59,5 +63,6 @@ if (!gotLock) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     recorder?.dispose()
+    updater?.dispose()
   })
 }

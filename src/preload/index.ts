@@ -53,6 +53,12 @@ const api: ZcApi = {
     finish: (exportId, settings, meta) => ipcRenderer.invoke('export:finish', exportId, settings, meta),
     cancel: (exportId) => ipcRenderer.invoke('export:cancel', exportId),
     onProgress: (cb) => subscribe('export:progress', cb)
+  },
+  update: {
+    getState: () => ipcRenderer.invoke('update:state'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onState: (cb) => subscribe('update:changed', cb)
   }
 }
 

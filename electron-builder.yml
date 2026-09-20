@@ -21,3 +21,8 @@ nsis:
   perMachine: false
 portable:
   artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+# electron-updater reads owner/repo from resources/app-update.yml, which this generates
+publish:
+  provider: github
+  owner: YungKellz
+  repo: zoomcut
