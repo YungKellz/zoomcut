@@ -93,3 +93,7 @@ export const SCALE_OPTIONS = [1, 0.75, 0.5]
 
 /** Releases page shown to portable users, who cannot auto-update. */
 export const RELEASES_URL = 'https://github.com/YungKellz/zoomcut/releases'
+
+// ---- scenario ----
+/** longest a captured scenario (and therefore a replayed recording) may run. */
+export const SCENARIO_MAX_MS = 600_000

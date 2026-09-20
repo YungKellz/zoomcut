@@ -1,5 +1,6 @@
 import { screen, type Display } from 'electron'
 import type { CursorData, MouseButton } from '@shared/types'
+import { acquireHook, releaseHook, type UioHook } from '../scenario/hook'
 
 interface RawSample {
   t: number
@@ -11,16 +12,14 @@ interface RawClick extends RawSample {
   button: MouseButton
 }
 
-type UioModule = typeof import('uiohook-napi')
-type UioHook = UioModule['uIOhook']
-
 const POLL_HZ = 60
 
 /**
  * Records the mouse while a recording is running.
  *
  * Positions come from polling `screen.getCursorScreenPoint()` at 60 Hz (device-independent
- * pixels, no DPI calibration needed). Clicks come from a global mouse hook (uiohook-napi);
+ * pixels, no DPI calibration needed). Clicks come from the shared global mouse hook
+ * (scenario/hook.ts, ref-counted since the scenario capture/replay may also want it live);
  * when the hook cannot be loaded the recording simply has no click ripples.
  */
 export class CursorTracker {
@@ -28,7 +27,6 @@ export class CursorTracker {
   private clicks: RawClick[] = []
   private timer: NodeJS.Timeout | null = null
   private hook: UioHook | null = null
-  private hookStarted = false
   private onMouseDown: ((e: { button: unknown }) => void) | null = null
   private display: Display | null = null
   private source: CursorData['source'] = 'none'
@@ -51,21 +49,16 @@ export class CursorTracker {
     poll()
     this.timer = setInterval(poll, Math.round(1000 / POLL_HZ))
 
-    try {
-      const mod = (await import('uiohook-napi')) as UioModule
-      this.hook = mod.uIOhook
+    const hook = await acquireHook()
+    if (hook) {
+      this.hook = hook
       this.onMouseDown = (e) => {
         const p = screen.getCursorScreenPoint()
         const button: MouseButton = e.button === 2 ? 'right' : e.button === 3 ? 'middle' : 'left'
         this.clicks.push({ t: Date.now(), x: p.x, y: p.y, button })
       }
       this.hook.on('mousedown', this.onMouseDown)
-      this.hook.start()
-      this.hookStarted = true
       this.source = 'uiohook'
-    } catch (err) {
-      console.warn('[cursor] global mouse hook unavailable, clicks will not be recorded:', err)
-      this.hook = null
     }
   }
 
@@ -111,13 +104,12 @@ export class CursorTracker {
     if (this.hook) {
       try {
         if (this.onMouseDown) this.hook.removeListener('mousedown', this.onMouseDown)
-        if (this.hookStarted) this.hook.stop()
       } catch (err) {
-        console.warn('[cursor] failed to stop mouse hook', err)
+        console.warn('[cursor] failed to remove mouse hook listener', err)
       }
-      this.hookStarted = false
       this.onMouseDown = null
       this.hook = null
+      releaseHook()
     }
   }
 }

@@ -249,7 +249,15 @@ export const en = {
   'export.palettePhase': 'Building palette',
   'export.writingGif': 'Writing GIF',
   'export.done': 'Done',
-  'export.run': 'Export {format}'
+  'export.run': 'Export {format}',
+
+  // ---- scenario ----
+  'bar.scenarioStartingIn': 'Recording actions in {n}…',
+  'bar.scenarioStarting': 'Recording actions…',
+  'bar.scenarioLabel': 'Actions: {n} · {time}',
+  'bar.replayLabel': 'Replay {index}/{total} · REC {time}',
+  'bar.replayStopTitle': 'Stop and keep the recording',
+  'bar.replayCancelTitle': 'Abort replay and discard'
 }
 
 export type TKey = keyof typeof en

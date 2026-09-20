@@ -218,12 +218,18 @@ export interface RecordingStartMeta {
   fps: number
 }
 
-export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing'
+export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing' | 'scenario'
 
 export interface RecorderBarState {
   phase: RecordingPhase
   startedAt: number | null
   countdownEndsAt: number | null
+  /** what the countdown leads to; 'scenario' = capturing input, not video */
+  mode?: 'record' | 'scenario'
+  /** number of actions captured so far (phase 'scenario') */
+  actions?: number
+  /** replay progress while recording; null/undefined = plain recording */
+  replay?: { index: number; total: number } | null
 }
 
 export interface RecordingProgress {
@@ -294,4 +300,73 @@ export interface UpdateState {
   /** what went wrong, for a manual check */
   message: string | null
   checkedAt: number | null
+}
+
+// ---- scenario ----
+export type ScenarioActionKind = 'click' | 'doubleClick' | 'rightClick' | 'middleClick' | 'drag' | 'scroll' | 'type' | 'key'
+export interface ScenarioPoint { x: number; y: number }
+/** dt = ms since the previous point in the path (or the previous action's end, for the first point); positions in DIP screen coordinates (virtual screen) */
+export interface ScenarioPathPoint extends ScenarioPoint { dt: number }
+export interface ScenarioModifiers { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean }
+/** crop of the screen around the action, file relative to the scenario dir, rect in DIP screen coordinates */
+export interface ScenarioShot { file: string; x: number; y: number; w: number; h: number }
+
+export interface ScenarioActionBase {
+  id: string
+  kind: ScenarioActionKind
+  /** ms from the scenario start when the action happens (mouse down / first key) */
+  at: number
+  /** mouse position when the action happens, DIP */
+  x: number
+  y: number
+  /** recorded mouse movement from the previous action to (x, y); [] = synthesize a curve at replay */
+  path: ScenarioPathPoint[]
+  modifiers: ScenarioModifiers
+  shot: ScenarioShot | null
+}
+export interface ScenarioClickAction extends ScenarioActionBase { kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick' }
+export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[]; durationMs: number }
+/** deltaY/deltaX in wheel notches (positive = down / right); replayed as `steps` wheel events over durationMs */
+export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number; durationMs: number }
+export interface ScenarioTypeAction extends ScenarioActionBase { kind: 'type'; text: string; durationMs: number }
+/** a non-text key or a chord: `key` is a display label ("Enter", "Ctrl+S"), vk = Windows virtual-key code, scan = set-1 scancode */
+export interface ScenarioKeyAction extends ScenarioActionBase { kind: 'key'; key: string; vk: number; scan: number; extended: boolean }
+export type ScenarioAction = ScenarioClickAction | ScenarioDragAction | ScenarioScrollAction | ScenarioTypeAction | ScenarioKeyAction
+
+export interface Scenario {
+  version: 1
+  id: string
+  name: string
+  createdAt: number
+  displayId: number
+  /** DIP bounds and scale of the display it was recorded on */
+  displayBounds: Rect
+  scaleFactor: number
+  actions: ScenarioAction[]
+  /** ms; when the capture was stopped (≥ last action end) */
+  durationMs: number
+  /** absolute folder (userData/scenarios/<id>) holding scenario.json and shots/ */
+  dir: string
+}
+export interface ScenarioSummary { id: string; name: string; createdAt: number; actions: number; durationMs: number }
+
+export interface ScenarioCaptureState {
+  phase: 'idle' | 'countdown' | 'capturing' | 'saving'
+  actions: number
+  startedAt: number | null
+}
+export interface ReplayState {
+  phase: 'idle' | 'preparing' | 'ready' | 'running' | 'done' | 'aborted' | 'error'
+  index: number
+  total: number
+  message?: string
+}
+/** what the overlay window draws; x/y are DIP relative to the display's top-left */
+export interface OverlayEffect {
+  kind: ScenarioActionKind
+  x: number
+  y: number
+  label?: string
+  index: number
+  total: number
 }

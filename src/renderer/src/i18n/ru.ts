@@ -237,5 +237,13 @@ export const ru: Record<TKey, string> = {
   'export.palettePhase': 'Строим палитру',
   'export.writingGif': 'Записываем GIF',
   'export.done': 'Готово',
-  'export.run': 'Экспорт {format}'
+  'export.run': 'Экспорт {format}',
+
+  // ---- scenario ----
+  'bar.scenarioStartingIn': 'Запись действий через {n}…',
+  'bar.scenarioStarting': 'Запись действий…',
+  'bar.scenarioLabel': 'Действий: {n} · {time}',
+  'bar.replayLabel': 'Воспроизведение {index}/{total} · REC {time}',
+  'bar.replayStopTitle': 'Остановить и сохранить запись',
+  'bar.replayCancelTitle': 'Прервать воспроизведение и отменить запись'
 }

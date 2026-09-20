@@ -7,13 +7,20 @@ import type {
   ExportFinishResult,
   ExportProgress,
   ExportSettings,
+  OverlayEffect,
   Project,
   ProjectSummary,
+  Rect,
   RecorderBarState,
   RecordingProgress,
   RecordingStartMeta,
+  ReplayState,
+  Scenario,
+  ScenarioCaptureState,
+  ScenarioSummary,
   UpdateState
 } from './types'
+import type { ReplayStep } from './scenario'
 
 export type Unsubscribe = () => void
 
@@ -32,7 +39,7 @@ export interface ZcApi {
     list(): Promise<DisplayInfo[]>
   }
   recording: {
-    prepare(displayId: number): Promise<{ id: string; countdownEndsAt: number }>
+    prepare(displayId: number, options?: { scenario?: Scenario }): Promise<{ id: string; countdownEndsAt: number }>
     started(id: string, meta: RecordingStartMeta): Promise<void>
     chunk(id: string, data: ArrayBuffer): Promise<void>
     finish(id: string): Promise<Project>
@@ -41,6 +48,8 @@ export interface ZcApi {
     onStopRequested(cb: () => void): Unsubscribe
     onCancelRequested(cb: () => void): Unsubscribe
     onProgress(cb: (p: RecordingProgress) => void): Unsubscribe
+    /** progress of a scenario replay driving this recording; unused for a plain recording */
+    onReplayState(cb: (s: ReplayState) => void): Unsubscribe
   }
   bar: {
     onState(cb: (s: RecorderBarState) => void): Unsubscribe
@@ -76,5 +85,28 @@ export interface ZcApi {
     /** quit, install the downloaded update silently and relaunch */
     install(): Promise<void>
     onState(cb: (s: UpdateState) => void): Unsubscribe
+  }
+
+  // ---- scenario ----
+  scenario: {
+    start(displayId: number): Promise<void>
+    stop(): Promise<void>
+    cancel(): Promise<void>
+    getState(): Promise<ScenarioCaptureState>
+    onState(cb: (s: ScenarioCaptureState) => void): Unsubscribe
+    onDone(cb: (s: Scenario | null) => void): Unsubscribe
+    list(): Promise<ScenarioSummary[]>
+    load(id: string): Promise<Scenario>
+    save(scenario: Scenario): Promise<void>
+    remove(id: string): Promise<void>
+  }
+  overlay: {
+    onEffect(cb: (e: OverlayEffect) => void): Unsubscribe
+    onReplayState(cb: (s: ReplayState) => void): Unsubscribe
+  }
+  /** Only functional under ZOOMCUT_E2E=1; rejects otherwise (no handler registered). */
+  e2e: {
+    openTarget(bounds: Rect): Promise<void>
+    injectSteps(steps: ReplayStep[]): Promise<void>
   }
 }

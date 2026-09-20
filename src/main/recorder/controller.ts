@@ -6,7 +6,8 @@ import type {
   Project,
   RecorderBarState,
   RecordingProgress,
-  RecordingStartMeta
+  RecordingStartMeta,
+  Scenario
 } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from '@shared/defaults'
 import { createBarWindow, getMainWindow } from '../windows'
@@ -14,6 +15,7 @@ import { getSettings, newRecordingId, projectDir, saveProject, updateSettings } 
 import { probeVideo, transcodeRecording } from '../media/ffmpeg'
 import { CursorTracker } from './cursorTracker'
 import { snapshotWindows } from './windowsSnapshot'
+import { ReplaySession } from '../scenario/replay'
 import type { WindowRect } from '@shared/types'
 
 export const STOP_SHORTCUT = 'CommandOrControl+Alt+R'
@@ -39,6 +41,19 @@ export class RecordingController {
   private bar: BrowserWindow | null = null
   private tracker = new CursorTracker()
   private barState: RecorderBarState = { phase: 'idle', startedAt: null, countdownEndsAt: null }
+  private replaySession: ReplaySession | null = null
+  private otherBusyCheck: (() => boolean) | null = null
+  /** true while requestCancel() is re-entering itself from a replay's onAbort callback */
+  private cancelingViaAbort = false
+
+  /** Lets main/index.ts wire this up against the scenario capture: they refuse to run at once. */
+  setOtherBusyCheck(fn: () => boolean): void {
+    this.otherBusyCheck = fn
+  }
+
+  isActive(): boolean {
+    return this.active !== null
+  }
 
   installDisplayMediaHandler(): void {
     session.defaultSession.setDisplayMediaRequestHandler(
@@ -81,8 +96,9 @@ export class RecordingController {
     return this.barState
   }
 
-  async prepare(displayId: number): Promise<{ id: string; countdownEndsAt: number }> {
+  async prepare(displayId: number, options?: { scenario?: Scenario }): Promise<{ id: string; countdownEndsAt: number }> {
     if (this.active) throw new Error('A recording is already in progress')
+    if (this.otherBusyCheck?.()) throw new Error('A scenario capture is already in progress')
     const displays = await this.listDisplays()
     const info = displays.find((d) => d.id === displayId) ?? displays[0]
     if (!info) throw new Error('No display available for recording')
@@ -90,38 +106,64 @@ export class RecordingController {
     const display = screen.getAllDisplays().find((d) => d.id === info.id) ?? screen.getPrimaryDisplay()
     if (!source) throw new Error('Display source not found')
 
-    this.selectedSource = source
-    const id = await newRecordingId()
-    const dir = projectDir(id)
-    await fsp.mkdir(dir, { recursive: true })
-    this.active = {
-      id,
-      dir,
-      display,
-      displayName: info.name,
-      startedAt: null,
-      meta: null,
-      rawPath: null,
-      stream: null,
-      bytes: 0,
-      // window layout is captured in the background; used later for "crop to window"
-      windowsAtStart: snapshotWindows(display),
-      stopRequestedAt: null
+    try {
+      if (options?.scenario) {
+        this.replaySession = await ReplaySession.create(display, options.scenario, {
+          onProgress: (index, total) => {
+            this.setBarState({ ...this.barState, replay: { index: index + 1, total } })
+          },
+          onDone: () => this.requestStop(),
+          onAbort: () => this.cancelFromReplay(),
+          onError: () => this.cancelFromReplay()
+        })
+      }
+
+      this.selectedSource = source
+      const id = await newRecordingId()
+      const dir = projectDir(id)
+      await fsp.mkdir(dir, { recursive: true })
+      this.active = {
+        id,
+        dir,
+        display,
+        displayName: info.name,
+        startedAt: null,
+        meta: null,
+        rawPath: null,
+        stream: null,
+        bytes: 0,
+        // window layout is captured in the background; used later for "crop to window"
+        windowsAtStart: snapshotWindows(display),
+        stopRequestedAt: null
+      }
+      await updateSettings({ lastDisplayId: displayId })
+      await this.tracker.start(display)
+
+      getMainWindow()?.hide()
+      this.bar = createBarWindow(display.bounds)
+      this.bar.on('closed', () => {
+        this.bar = null
+      })
+      const countdownEndsAt = Date.now() + 3200
+      this.setBarState({ phase: 'countdown', startedAt: null, countdownEndsAt })
+
+      globalShortcut.unregister(STOP_SHORTCUT)
+      globalShortcut.register(STOP_SHORTCUT, () => this.requestStop())
+      return { id, countdownEndsAt }
+    } catch (err) {
+      this.replaySession?.dispose()
+      this.replaySession = null
+      this.active = null
+      this.selectedSource = null
+      throw err
     }
-    await updateSettings({ lastDisplayId: displayId })
-    await this.tracker.start(display)
+  }
 
-    getMainWindow()?.hide()
-    this.bar = createBarWindow(display.bounds)
-    this.bar.on('closed', () => {
-      this.bar = null
-    })
-    const countdownEndsAt = Date.now() + 3200
-    this.setBarState({ phase: 'countdown', startedAt: null, countdownEndsAt })
-
-    globalShortcut.unregister(STOP_SHORTCUT)
-    globalShortcut.register(STOP_SHORTCUT, () => this.requestStop())
-    return { id, countdownEndsAt }
+  /** Re-enters requestCancel() past its replay-abort branch, once the replay is already released. */
+  private cancelFromReplay(): void {
+    this.cancelingViaAbort = true
+    this.requestCancel()
+    this.cancelingViaAbort = false
   }
 
   started(id: string, meta: RecordingStartMeta): void {
@@ -130,7 +172,15 @@ export class RecordingController {
     a.meta = meta
     a.rawPath = join(a.dir, meta.mimeType.includes('mp4') ? 'raw.mp4' : 'raw.webm')
     a.stream = createWriteStream(a.rawPath)
-    this.setBarState({ phase: 'recording', startedAt: meta.startedAt, countdownEndsAt: null })
+    this.setBarState({
+      phase: 'recording',
+      startedAt: meta.startedAt,
+      countdownEndsAt: null,
+      replay: this.replaySession ? { index: 0, total: this.replaySession.total } : undefined
+    })
+    // the helper's Stopwatch is anchored on this epoch; 800ms gives it (and the pre-positioned
+    // cursor) a moment of lead before the first captured action fires
+    this.replaySession?.go(meta.startedAt + 800)
   }
 
   chunk(id: string, data: ArrayBuffer): Promise<void> {
@@ -146,6 +196,8 @@ export class RecordingController {
 
   requestStop(): void {
     if (!this.active) return
+    // stop injecting input immediately; the recording itself keeps running to a normal finish
+    if (this.replaySession) void this.replaySession.stopReplay()
     this.active.stopRequestedAt = Date.now()
     this.setBarState({ ...this.barState, phase: 'processing' })
     getMainWindow()?.webContents.send('recorder:stop')
@@ -153,6 +205,12 @@ export class RecordingController {
 
   requestCancel(): void {
     if (!this.active) return
+    if (this.replaySession && !this.cancelingViaAbort) {
+      // release input first (this re-enters requestCancel() via onAbort, past this branch,
+      // once the helper has actually stopped pressing keys/buttons)
+      void this.replaySession.abort('bar')
+      return
+    }
     getMainWindow()?.webContents.send('recorder:cancel')
   }
 
@@ -250,11 +308,16 @@ export class RecordingController {
 
   dispose(): void {
     this.tracker.dispose()
+    this.replaySession?.dispose()
+    this.replaySession = null
     if (this.bar && !this.bar.isDestroyed()) this.bar.close()
   }
 
   private teardownRecordingUi(): void {
     globalShortcut.unregister(STOP_SHORTCUT)
+    // a replay never outlives its recording
+    this.replaySession?.dispose()
+    this.replaySession = null
     this.setBarState({ phase: 'idle', startedAt: null, countdownEndsAt: null })
     if (this.bar && !this.bar.isDestroyed()) this.bar.close()
     this.bar = null
