@@ -47,7 +47,9 @@ export function RecorderBar(): JSX.Element {
     dotClass += ' bar-dot-warm'
   } else if (state.phase === 'scenario') {
     label = t('bar.scenarioLabel', { n: state.actions ?? 0, time: formatElapsed(now - (state.startedAt ?? now)) })
-    dotClass += ' bar-dot-live'
+    dotClass += ' bar-dot-scenario'
+    stopTitle = t('bar.scenarioStopTitle')
+    cancelTitle = t('bar.scenarioCancelTitle')
   } else if (state.phase === 'recording') {
     if (state.replay) {
       label = t('bar.replayLabel', {

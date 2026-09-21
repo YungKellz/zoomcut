@@ -315,6 +315,13 @@ export class ReplaySession {
       index,
       total: this.total
     }
+    if (action.kind === 'drag') {
+      effect.toX = action.toX - this.display.bounds.x
+      effect.toY = action.toY - this.display.bounds.y
+    } else if (action.kind === 'scroll') {
+      effect.deltaY = action.deltaY
+      effect.deltaX = action.deltaX
+    }
     if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send('overlay:effect', effect)
   }
 

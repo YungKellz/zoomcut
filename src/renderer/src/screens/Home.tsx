@@ -1,9 +1,10 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Circle, FolderOpen, Monitor, RefreshCw, Trash2 } from 'lucide-react'
-import type { AppInfo, DisplayInfo, Language, ProjectSummary } from '@shared/types'
+import { Circle, FolderOpen, Monitor, MousePointerClick, RefreshCw, Trash2 } from 'lucide-react'
+import type { AppInfo, DisplayInfo, Language, ProjectSummary, ScenarioSummary } from '@shared/types'
 import { useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
+import { useScenarioCapture } from '../recording/useScenarioCapture'
 import { formatDuration } from '../util/format'
 import { changeLanguage, useI18n, useT } from '../i18n'
 import { Logo } from '../components/Logo'
@@ -13,15 +14,19 @@ export function Home(): JSX.Element {
   const t = useT()
   const lang = useI18n((s) => s.lang)
   const openProject = useStore((s) => s.openProject)
+  const openScenario = useStore((s) => s.openScenario)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
+  const [scenarioBusy, setScenarioBusy] = useState<string | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const recorder = useRecorder((project) => {
     openProject(project)
   })
+  const scenario = useScenarioCapture((s) => openScenario(s))
 
   const refreshDisplays = useCallback(async () => {
     const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
@@ -37,11 +42,16 @@ export function Home(): JSX.Element {
     setProjects(await window.zc.projects.list())
   }, [])
 
+  const refreshScenarios = useCallback(async () => {
+    setScenarios(await window.zc.scenario.list())
+  }, [])
+
   useEffect(() => {
     void refreshDisplays()
     void refreshProjects()
+    void refreshScenarios()
     void window.zc.app.info().then(setInfo)
-  }, [refreshDisplays, refreshProjects])
+  }, [refreshDisplays, refreshProjects, refreshScenarios])
 
   useEffect(() => {
     if (recorder.phase === 'idle') void refreshProjects()
@@ -71,7 +81,29 @@ export function Home(): JSX.Element {
     await refreshProjects()
   }
 
+  const openSavedScenario = async (id: string): Promise<void> => {
+    setScenarioBusy(id)
+    try {
+      openScenario(await window.zc.scenario.load(id))
+    } catch (err) {
+      alert(t('scenario.openFailed', { error: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setScenarioBusy(null)
+    }
+  }
+
+  const removeScenario = async (s: ScenarioSummary): Promise<void> => {
+    if (!confirm(t('scenario.deleteConfirm', { name: s.name }))) return
+    try {
+      await window.zc.scenario.remove(s.id)
+    } catch (err) {
+      console.error('failed to delete scenario', err)
+    }
+    await refreshScenarios()
+  }
+
   const recording = recorder.phase !== 'idle' && recorder.phase !== 'error'
+  const capturing = scenario.phase !== 'idle' && scenario.phase !== 'error'
 
   return (
     <div className="home">
@@ -121,7 +153,7 @@ export function Home(): JSX.Element {
                 key={d.id}
                 className={'display-card' + (d.id === selectedDisplay ? ' selected' : '')}
                 onClick={() => setSelectedDisplay(d.id)}
-                disabled={recording}
+                disabled={recording || capturing}
               >
                 {d.thumbnail ? <img src={d.thumbnail} alt="" /> : <div className="display-placeholder" />}
                 <div className="display-name">
@@ -140,14 +172,23 @@ export function Home(): JSX.Element {
           <div className="record-actions">
             <button
               className="btn btn-record"
-              disabled={recording || selectedDisplay === null}
+              disabled={recording || capturing || selectedDisplay === null}
               onClick={() => selectedDisplay !== null && void recorder.start(selectedDisplay)}
             >
               <Circle size={16} fill="currentColor" />
               {t('home.start')}
             </button>
+            <button
+              className="btn btn-scenario"
+              disabled={recording || capturing || selectedDisplay === null}
+              onClick={() => selectedDisplay !== null && void scenario.start(selectedDisplay)}
+            >
+              <MousePointerClick size={16} />
+              {t('scenario.record')}
+            </button>
             <p className="muted">{t('home.hint', { shortcut: 'Ctrl+Alt+R' })}</p>
           </div>
+          <p className="muted scenario-hint">{t('scenario.hint')}</p>
 
           {recorder.phase === 'error' && (
             <div className="error-box">
@@ -157,7 +198,43 @@ export function Home(): JSX.Element {
               </button>
             </div>
           )}
+          {scenario.phase === 'error' && (
+            <div className="error-box">
+              <strong>{t('scenario.failed')}</strong> {scenario.error}
+              <button className="btn btn-ghost" onClick={scenario.reset}>
+                {t('home.dismiss')}
+              </button>
+            </div>
+          )}
         </section>
+
+        {scenarios.length > 0 && (
+          <section className="card">
+            <div className="card-head">
+              <h2>
+                <MousePointerClick size={18} /> {t('scenario.saved')}
+              </h2>
+            </div>
+            <ul className="scenario-list">
+              {scenarios.map((s) => (
+                <li key={s.id} className="scenario-row">
+                  <button className="scenario-open" onClick={() => void openSavedScenario(s.id)} disabled={scenarioBusy !== null || recording || capturing}>
+                    <span className="project-name">{s.name}</span>
+                    <span className="muted">{t('scenario.summary', { n: s.actions, duration: formatDuration(s.durationMs) })}</span>
+                  </button>
+                  <button
+                    className="btn btn-ghost danger scenario-delete"
+                    title={t('common.delete')}
+                    disabled={scenarioBusy !== null || recording || capturing}
+                    onClick={() => void removeScenario(s)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="card">
           <div className="card-head">
@@ -212,6 +289,17 @@ export function Home(): JSX.Element {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {capturing && (
+        <div className="overlay">
+          <div className="overlay-card">
+            {scenario.phase === 'starting' && <p>{t('scenario.capturePreparing')}</p>}
+            {scenario.phase === 'countdown' && <p>{t('scenario.captureCountdown')}</p>}
+            {scenario.phase === 'capturing' && <p>{t('scenario.capturingHint')}</p>}
+            {scenario.phase === 'saving' && <p>{t('scenario.captureSaving')}</p>}
           </div>
         </div>
       )}

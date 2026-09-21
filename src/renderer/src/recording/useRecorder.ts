@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Project, RecordingProgress } from '@shared/types'
+import type { Project, RecordingProgress, Scenario } from '@shared/types'
 
 export type RecorderPhase = 'idle' | 'starting' | 'countdown' | 'recording' | 'processing' | 'error'
+
+export interface RecordOptions {
+  /** replay this scenario while recording (scenario recorder) */
+  scenario?: Scenario
+}
 
 const MIME_CANDIDATES = [
   'video/mp4;codecs=avc1.640028',
@@ -52,12 +57,21 @@ function sleep(ms: number): Promise<void> {
  * anchored on the wall-clock capture time of the first frame delivered after
  * `recorder.start()`, observed through requestVideoFrameCallback on a probe <video>
  * attached to the same stream.
+ *
+ * Scenario replay (track B): when `start()` is given a scenario, the main process drives a
+ * helper that replays its actions while this same recording runs. `onAborted` fires once a
+ * real Escape (or the bar X) aborted that replay - but only after the existing cancel path
+ * below has actually finished discarding the attempt, not the instant the replay-state event
+ * arrives, so the caller never sees the notice while a stale session is still tearing down.
  */
-export function useRecorder(onDone: (project: Project) => void): {
+export function useRecorder(
+  onDone: (project: Project) => void,
+  onAborted?: (reason: string) => void
+): {
   phase: RecorderPhase
   progress: RecordingProgress | null
   error: string | null
-  start: (displayId: number) => Promise<void>
+  start: (displayId: number, options?: RecordOptions) => Promise<void>
   stop: () => void
   cancel: () => void
   reset: () => void
@@ -68,15 +82,30 @@ export function useRecorder(onDone: (project: Project) => void): {
   const session = useRef<ActiveSession | null>(null)
   const onDoneRef = useRef(onDone)
   onDoneRef.current = onDone
+  const onAbortedRef = useRef(onAborted)
+  onAbortedRef.current = onAborted
+  /** set by the 'aborted' replay-state event, consumed once the cancel path reaches idle */
+  const pendingAbortRef = useRef<string | null>(null)
+
+  const resolvePendingAbort = useCallback(() => {
+    if (!pendingAbortRef.current) return
+    const message = pendingAbortRef.current
+    pendingAbortRef.current = null
+    onAbortedRef.current?.(message)
+  }, [])
 
   /** Releases the capture and tells the main process to drop the attempt. */
-  const discard = useCallback(async (s: ActiveSession) => {
-    s.stream?.getTracks().forEach((t) => t.stop())
-    if (s.probe) s.probe.srcObject = null
-    if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
-    if (session.current === s) session.current = null
-    setPhase('idle')
-  }, [])
+  const discard = useCallback(
+    async (s: ActiveSession) => {
+      s.stream?.getTracks().forEach((t) => t.stop())
+      if (s.probe) s.probe.srcObject = null
+      if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
+      if (session.current === s) session.current = null
+      setPhase('idle')
+      resolvePendingAbort()
+    },
+    [resolvePendingAbort]
+  )
 
   const stop = useCallback(() => {
     const s = session.current
@@ -100,25 +129,40 @@ export function useRecorder(onDone: (project: Project) => void): {
     const offStop = window.zc.recording.onStopRequested(stop)
     const offCancel = window.zc.recording.onCancelRequested(cancel)
     const offProgress = window.zc.recording.onProgress(setProgress)
+    // A replay driving this recording (track B) reports its own state on this channel. An
+    // abort is only remembered here - resolvePendingAbort() fires the callback once the
+    // ordinary cancel path above (triggered by the 'recorder:cancel' this same abort causes
+    // in main) has actually reached 'idle', not at the moment this event arrives.
+    const offReplay = window.zc.recording.onReplayState((s) => {
+      if (s.phase === 'aborted') {
+        pendingAbortRef.current = s.message ?? 'aborted'
+      } else if (s.phase === 'error') {
+        setError(s.message ?? 'Replay failed')
+      }
+    })
     return () => {
       offStop()
       offCancel()
       offProgress()
+      offReplay()
     }
   }, [stop, cancel])
 
   const start = useCallback(
-    async (displayId: number) => {
+    async (displayId: number, options?: RecordOptions) => {
       if (session.current) return
       setError(null)
       setProgress(null)
       setPhase('starting')
+      // a leftover abort from a previous scenario replay must never pop the notice on this
+      // (possibly plain, non-scenario) attempt's later Discard
+      pendingAbortRef.current = null
       const s: ActiveSession = { id: null, recorder: null, stream: null, probe: null, chain: Promise.resolve(), cancelled: false }
       session.current = s
 
       let countdownEndsAt = Date.now() + 3000
       try {
-        const prepared = await window.zc.recording.prepare(displayId)
+        const prepared = await window.zc.recording.prepare(displayId, options)
         s.id = prepared.id
         countdownEndsAt = prepared.countdownEndsAt
         if (s.cancelled) {
@@ -217,6 +261,7 @@ export function useRecorder(onDone: (project: Project) => void): {
           if (s.cancelled) {
             await window.zc.recording.cancel(recordingId)
             setPhase('idle')
+            resolvePendingAbort()
             return
           }
           setPhase('processing')
@@ -246,8 +291,20 @@ export function useRecorder(onDone: (project: Project) => void): {
       }
       recorder.start(1000)
     },
-    [stop, discard]
+    [stop, discard, resolvePendingAbort]
   )
 
-  return { phase, progress, error, start, stop, cancel, reset: () => setPhase('idle') }
+  return {
+    phase,
+    progress,
+    error,
+    start,
+    stop,
+    cancel,
+    reset: () => {
+      setPhase('idle')
+      setError(null)
+      pendingAbortRef.current = null
+    }
+  }
 }

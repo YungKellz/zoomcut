@@ -343,11 +343,17 @@ export interface Scenario {
   displayBounds: Rect
   scaleFactor: number
   actions: ScenarioAction[]
-  /** ms; when the capture was stopped (≥ last action end) */
+  /**
+   * ms; the RECORDED capture length (when Stop was pressed, ≥ last action end at that time) -
+   * frozen at capture time, never updated by review-screen edits (retiming/deleting actions).
+   * UI code showing "how long is this scenario" should use scenarioEnd(actions) instead
+   * (src/shared/scenario.ts), which reflects the current, possibly-edited end.
+   */
   durationMs: number
   /** absolute folder (userData/scenarios/<id>) holding scenario.json and shots/ */
   dir: string
 }
+/** durationMs here is scenarioEnd(actions) (see Scenario.durationMs), not the frozen recorded length. */
 export interface ScenarioSummary { id: string; name: string; createdAt: number; actions: number; durationMs: number }
 
 export interface ScenarioCaptureState {
@@ -361,7 +367,7 @@ export interface ReplayState {
   total: number
   message?: string
 }
-/** what the overlay window draws; x/y are DIP relative to the display's top-left */
+/** what the overlay window draws; x/y (and toX/toY) are DIP relative to the display's top-left */
 export interface OverlayEffect {
   kind: ScenarioActionKind
   x: number
@@ -369,4 +375,10 @@ export interface OverlayEffect {
   label?: string
   index: number
   total: number
+  /** drag only: end point, for the fading line from the start (x/y) to here */
+  toX?: number
+  toY?: number
+  /** scroll only: wheel notches, same sign convention as ScenarioScrollAction (positive = down/right) */
+  deltaY?: number
+  deltaX?: number
 }

@@ -105,7 +105,7 @@ function dist(a: ScenarioPoint, b: ScenarioPoint): number {
 }
 
 /** Splits text into user-perceived characters (so backspace and per-character replay are unicode-correct). */
-function graphemes(text: string): string[] {
+export function graphemes(text: string): string[] {
   try {
     const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
     return Array.from(segmenter.segment(text), (s) => s.segment)

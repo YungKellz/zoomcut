@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { promises as fsp, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { Scenario, ScenarioSummary } from '@shared/types'
+import { scenarioEnd } from '@shared/scenario'
 
 /** userData/scenarios is already covered by the media protocol's allowed roots (the whole
  * userData tree is registered in src/main/storage.ts's ensureDirs()), so scenario shot PNGs
@@ -62,6 +63,9 @@ async function saveScenarioNow(scenario: Scenario): Promise<void> {
   // Never trust `dir` as sent by the renderer - always recompute it from the (already
   // ID-validated, at the IPC boundary) id, and never mkdir whatever path the caller supplied.
   const dir = scenarioDir(scenario.id)
+  // a scenario whose folder is gone was deleted: a late autosave must not resurrect it
+  // (same rule as saveProjectNow in ../storage.ts)
+  if (!(await exists(dir))) return
   const toSave: Scenario = { ...scenario, dir }
   const json = JSON.stringify(toSave)
   if (Buffer.byteLength(json, 'utf8') > MAX_SCENARIO_JSON_BYTES) {
@@ -92,8 +96,10 @@ export async function listScenarios(): Promise<ScenarioSummary[]> {
     try {
       const raw = JSON.parse(await fsp.readFile(join(scenariosRoot(), entry.name, 'scenario.json'), 'utf8')) as Scenario
       // the folder name is the source of truth for the id, not whatever the JSON says inside -
-      // a renamed folder must still load by its new name
-      out.push({ id: entry.name, name: raw.name, createdAt: raw.createdAt, actions: raw.actions.length, durationMs: raw.durationMs })
+      // a renamed folder must still load by its new name. durationMs here is the CURRENT end
+      // of the (possibly edited) actions, not the frozen recorded capture length - matches what
+      // the review screen itself shows for "length" (see Scenario.durationMs's own doc comment).
+      out.push({ id: entry.name, name: raw.name, createdAt: raw.createdAt, actions: raw.actions.length, durationMs: scenarioEnd(raw.actions) })
     } catch {
       // not a scenario folder, or one that never finished saving - skip
     }

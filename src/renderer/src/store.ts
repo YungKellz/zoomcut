@@ -6,6 +6,7 @@ import type {
   ExportSettings,
   FrameStyle,
   Project,
+  Scenario,
   TextOverlay,
   ZoomSegment
 } from '@shared/types'
@@ -39,8 +40,9 @@ const HISTORY_LIMIT = 60
 let pendingCheckpoint: Project | null = null
 
 export interface EditorState {
-  screen: 'home' | 'editor'
+  screen: 'home' | 'editor' | 'scenario'
   project: Project | null
+  scenario: Scenario | null
   playheadMs: number
   playing: boolean
   /** bumped whenever the user explicitly seeks, so the player applies it */
@@ -56,6 +58,9 @@ export interface EditorState {
 
   openProject(project: Project): void
   closeProject(): void
+  openScenario(scenario: Scenario): void
+  closeScenario(): void
+  setScenario(scenario: Scenario): void
   setPlayhead(ms: number, seek?: boolean): void
   setPlaying(playing: boolean): void
   togglePlay(): void
@@ -94,6 +99,7 @@ export interface EditorState {
 export const useStore = create<EditorState>((set, get) => ({
   screen: 'home',
   project: null,
+  scenario: null,
   playheadMs: 0,
   playing: false,
   seekSeq: 0,
@@ -110,6 +116,9 @@ export const useStore = create<EditorState>((set, get) => ({
     set({
       screen: 'editor',
       project,
+      // a scenario replay's own onDone already calls closeScenario() first, but openProject is
+      // also reachable from Home directly - either way a stale scenario must never linger
+      scenario: null,
       playheadMs: 0,
       playing: false,
       seekSeq: get().seekSeq + 1,
@@ -122,6 +131,10 @@ export const useStore = create<EditorState>((set, get) => ({
     }),
 
   closeProject: () => set({ screen: 'home', project: null, playing: false, history: [], future: [] }),
+
+  openScenario: (scenario) => set({ screen: 'scenario', scenario }),
+  closeScenario: () => set({ screen: 'home', scenario: null }),
+  setScenario: (scenario) => set({ scenario }),
 
   setPlayhead: (ms, seek = false) => {
     const p = get().project
@@ -336,6 +349,12 @@ export function useProject(): Project {
   const project = useStore((s) => s.project)
   if (!project) throw new Error('No project open')
   return project
+}
+
+export function useScenario(): Scenario {
+  const scenario = useStore((s) => s.scenario)
+  if (!scenario) throw new Error('No scenario open')
+  return scenario
 }
 
 export function useKeepSegments(): { start: number; end: number }[] {
