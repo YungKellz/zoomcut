@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Project, RecordingProgress } from '@shared/types'
+import type { AudioCaptureOptions, Project, RecordingProgress, RecordingStartMeta, RecordOptions } from '@shared/types'
+import { useStore } from '../store'
+import { t } from '../i18n'
 
 export type RecorderPhase = 'idle' | 'starting' | 'countdown' | 'recording' | 'processing' | 'error'
 
@@ -11,6 +13,8 @@ const MIME_CANDIDATES = [
   'video/webm;codecs=vp8',
   'video/webm'
 ]
+
+const AUDIO_MIME = 'audio/webm;codecs=opus'
 
 export function pickMimeType(): string {
   for (const type of MIME_CANDIDATES) {
@@ -31,6 +35,12 @@ interface ActiveSession {
   chain: Promise<void>
   /** discard everything (bar X, or Stop before anything was captured) */
   cancelled: boolean
+  micStream: MediaStream | null
+  micRecorder: MediaRecorder | null
+  systemRecorder: MediaRecorder | null
+  /** resolve once each recorder's own `stop` event has fired, whoever triggered it */
+  micStopped: Promise<void>
+  systemStopped: Promise<void>
 }
 
 interface FrameMeta {
@@ -40,6 +50,59 @@ interface FrameMeta {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Resolves once the recorder's `stop` event fires; an already-inactive recorder resolves immediately. */
+function waitStopped(rec: MediaRecorder | null): Promise<void> {
+  if (!rec || rec.state === 'inactive') return Promise.resolve()
+  return new Promise((resolve) => rec.addEventListener('stop', () => resolve(), { once: true }))
+}
+
+/**
+ * Awaits the whole chunk-send chain, including any link appended *while* we were awaiting
+ * an earlier one (ondataavailable can still fire between reading `s.chain` and settling it).
+ * A plain `await s.chain` would miss those late extensions; re-read and loop until the
+ * reference stops changing.
+ */
+async function drainChain(s: ActiveSession): Promise<void> {
+  let pending: Promise<void>
+  do {
+    pending = s.chain
+    await pending
+  } while (pending !== s.chain)
+}
+
+/** Appends one chunk-send to the shared chain. Failures are logged, not fatal: losing one
+ * chunk should not abort an otherwise fine recording, and this keeps `s.chain` from ever
+ * sitting rejected-and-unobserved between two ondataavailable events. */
+function appendChunk(s: ActiveSession, send: () => Promise<void>): void {
+  s.chain = s.chain.then(send).catch((err) => console.error('[useRecorder] failed to send a chunk', err))
+}
+
+/** A mic failure must not kill the recording, so this reports the error instead of throwing. */
+async function tryOpenMic(options: AudioCaptureOptions): Promise<{ stream: MediaStream } | { error: string }> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: options.micDeviceId ? { exact: options.micDeviceId } : undefined,
+        echoCancellation: false,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    })
+    return { stream }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+function makeAudioRecorder(track: MediaStreamTrack): MediaRecorder | null {
+  try {
+    return new MediaRecorder(new MediaStream([track]), { mimeType: AUDIO_MIME, audioBitsPerSecond: 128_000 })
+  } catch (err) {
+    console.error('Could not create an audio recorder', err)
+    return null
+  }
 }
 
 /**
@@ -52,12 +115,30 @@ function sleep(ms: number): Promise<void> {
  * anchored on the wall-clock capture time of the first frame delivered after
  * `recorder.start()`, observed through requestVideoFrameCallback on a probe <video>
  * attached to the same stream.
+ *
+ * Audio: system loopback (when requested) rides along on the same getDisplayMedia stream
+ * as an extra track, but the video MediaRecorder only ever sees the video track – the raw
+ * recording stays audio-free, so transcodeRecording can keep using -an. Microphone audio is
+ * a second, independent getUserMedia stream. Each source gets its own opus MediaRecorder,
+ * started in the same tick as the video one so their `startWall` timestamps line up; the
+ * main process turns that into an AudioClip offset in recording:finish. Either source can
+ * fail (no hardware, OS/driver refuses loopback, permission denied) without losing the
+ * recording: failures are reported through the store's dismissible notice (App.tsx), which
+ * survives the Home -> Editor screen switch that a successful recording causes.
+ * Scenario replay: when `start()` is given a scenario, the main process drives a
+ * helper that replays its actions while this same recording runs. `onAborted` fires once a
+ * real Escape (or the bar X) aborted that replay - but only after the existing cancel path
+ * below has actually finished discarding the attempt, not the instant the replay-state event
+ * arrives, so the caller never sees the notice while a stale session is still tearing down.
  */
-export function useRecorder(onDone: (project: Project) => void): {
+export function useRecorder(
+  onDone: (project: Project) => void,
+  onAborted?: (reason: string) => void
+): {
   phase: RecorderPhase
   progress: RecordingProgress | null
   error: string | null
-  start: (displayId: number) => Promise<void>
+  start: (displayId: number, options?: RecordOptions) => Promise<void>
   stop: () => void
   cancel: () => void
   reset: () => void
@@ -68,21 +149,39 @@ export function useRecorder(onDone: (project: Project) => void): {
   const session = useRef<ActiveSession | null>(null)
   const onDoneRef = useRef(onDone)
   onDoneRef.current = onDone
+  const onAbortedRef = useRef(onAborted)
+  onAbortedRef.current = onAborted
+  /** set by the 'aborted' replay-state event, consumed once the cancel path reaches idle */
+  const pendingAbortRef = useRef<string | null>(null)
+
+  const resolvePendingAbort = useCallback(() => {
+    if (!pendingAbortRef.current) return
+    const message = pendingAbortRef.current
+    pendingAbortRef.current = null
+    onAbortedRef.current?.(message)
+  }, [])
 
   /** Releases the capture and tells the main process to drop the attempt. */
-  const discard = useCallback(async (s: ActiveSession) => {
-    s.stream?.getTracks().forEach((t) => t.stop())
-    if (s.probe) s.probe.srcObject = null
-    if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
-    if (session.current === s) session.current = null
-    setPhase('idle')
-  }, [])
+  const discard = useCallback(
+    async (s: ActiveSession) => {
+      s.stream?.getTracks().forEach((tr) => tr.stop())
+      s.micStream?.getTracks().forEach((tr) => tr.stop())
+      if (s.probe) s.probe.srcObject = null
+      if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
+      if (session.current === s) session.current = null
+      setPhase('idle')
+      resolvePendingAbort()
+    },
+    [resolvePendingAbort]
+  )
 
   const stop = useCallback(() => {
     const s = session.current
     if (!s) return
     if (s.recorder && s.recorder.state !== 'inactive') {
       s.recorder.stop()
+      if (s.micRecorder && s.micRecorder.state !== 'inactive') s.micRecorder.stop()
+      if (s.systemRecorder && s.systemRecorder.state !== 'inactive') s.systemRecorder.stop()
     } else {
       // nothing captured yet (countdown): stopping means dropping the attempt
       s.cancelled = true
@@ -94,41 +193,103 @@ export function useRecorder(onDone: (project: Project) => void): {
     if (!s) return
     s.cancelled = true
     if (s.recorder && s.recorder.state !== 'inactive') s.recorder.stop()
+    if (s.micRecorder && s.micRecorder.state !== 'inactive') s.micRecorder.stop()
+    if (s.systemRecorder && s.systemRecorder.state !== 'inactive') s.systemRecorder.stop()
   }, [])
 
   useEffect(() => {
     const offStop = window.zc.recording.onStopRequested(stop)
     const offCancel = window.zc.recording.onCancelRequested(cancel)
     const offProgress = window.zc.recording.onProgress(setProgress)
+    // A replay driving this recording reports its own state on this channel. An
+    // abort is only remembered here - resolvePendingAbort() fires the callback once the
+    // ordinary cancel path above (triggered by the 'recorder:cancel' this same abort causes
+    // in main) has actually reached 'idle', not at the moment this event arrives.
+    const offReplay = window.zc.recording.onReplayState((s) => {
+      if (s.phase === 'aborted') {
+        pendingAbortRef.current = s.message ?? 'aborted'
+      } else if (s.phase === 'error') {
+        setError(s.message ?? 'Replay failed')
+      }
+    })
     return () => {
       offStop()
       offCancel()
       offProgress()
+      offReplay()
     }
   }, [stop, cancel])
 
   const start = useCallback(
-    async (displayId: number) => {
+    async (displayId: number, options?: RecordOptions) => {
       if (session.current) return
       setError(null)
       setProgress(null)
       setPhase('starting')
-      const s: ActiveSession = { id: null, recorder: null, stream: null, probe: null, chain: Promise.resolve(), cancelled: false }
+      // a leftover abort from a previous scenario replay must never pop the notice on this
+      // (possibly plain, non-scenario) attempt's later Discard
+      pendingAbortRef.current = null
+      const s: ActiveSession = {
+        id: null,
+        recorder: null,
+        stream: null,
+        probe: null,
+        chain: Promise.resolve(),
+        cancelled: false,
+        micStream: null,
+        micRecorder: null,
+        systemRecorder: null,
+        micStopped: Promise.resolve(),
+        systemStopped: Promise.resolve()
+      }
       session.current = s
 
       let countdownEndsAt = Date.now() + 3000
       try {
-        const prepared = await window.zc.recording.prepare(displayId)
+        // main only ever reads `scenario` (RecordingController.prepare ignores audio entirely -
+        // the renderer captures audio itself, below), so it never receives the audio object too
+        const prepared = await window.zc.recording.prepare(displayId, { scenario: options?.scenario })
         s.id = prepared.id
         countdownEndsAt = prepared.countdownEndsAt
         if (s.cancelled) {
           await discard(s)
           return
         }
-        s.stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: { ideal: 60, max: 60 } },
-          audio: false
-        })
+
+        const wantsSystemAudio = options?.audio?.system === true
+        let systemAudioFailed = false
+        try {
+          s.stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 60, max: 60 } },
+            audio: wantsSystemAudio
+          })
+        } catch (err) {
+          // system-loopback audio can fail at the OS/driver level even though plain video
+          // capture works fine (seen on real hardware, not just missing devices); retry
+          // video-only rather than losing the whole recording over it
+          if (!wantsSystemAudio) throw err
+          console.warn('System audio capture failed, retrying without it:', err)
+          systemAudioFailed = true
+          s.stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 60, max: 60 } },
+            audio: false
+          })
+        }
+
+        const notices: string[] = []
+        if (wantsSystemAudio && (systemAudioFailed || s.stream.getAudioTracks().length === 0)) {
+          notices.push(t('audio.systemAudioFailed'))
+        }
+        if (options?.audio?.mic) {
+          const mic = await tryOpenMic(options.audio)
+          if ('stream' in mic) {
+            s.micStream = mic.stream
+          } else {
+            console.warn('Microphone unavailable, recording without it:', mic.error)
+            notices.push(`${t('home.micWarningTitle')} ${t('home.micWarning', { error: mic.error })}`)
+          }
+        }
+        if (notices.length > 0) useStore.getState().setNotice(notices.join(' '))
       } catch (err) {
         await discard(s)
         if (!s.cancelled) {
@@ -147,17 +308,48 @@ export function useRecorder(onDone: (project: Project) => void): {
       const track = stream.getVideoTracks()[0]
       const settings = track.getSettings()
       const mimeType = pickMimeType()
-      const recorder = new MediaRecorder(stream, {
+      // the raw recording stays video-only even when system audio was captured alongside it
+      const videoOnlyStream = new MediaStream([track])
+      const recorder = new MediaRecorder(videoOnlyStream, {
         mimeType: mimeType || undefined,
         videoBitsPerSecond: 25_000_000
       })
       s.recorder = recorder
 
+      const systemTrack = stream.getAudioTracks()[0]
+      if (systemTrack) {
+        s.systemRecorder = makeAudioRecorder(systemTrack)
+        if (s.systemRecorder) {
+          s.systemRecorder.ondataavailable = (e) => {
+            if (e.data.size === 0 || s.cancelled) return
+            const blob = e.data
+            appendChunk(s, async () => {
+              const buf = await blob.arrayBuffer()
+              await window.zc.recording.audioChunk(recordingId, 'system', buf)
+            })
+          }
+        }
+      }
+      const micTrack = s.micStream?.getAudioTracks()[0]
+      if (micTrack) {
+        s.micRecorder = makeAudioRecorder(micTrack)
+        if (s.micRecorder) {
+          s.micRecorder.ondataavailable = (e) => {
+            if (e.data.size === 0 || s.cancelled) return
+            const blob = e.data
+            appendChunk(s, async () => {
+              const buf = await blob.arrayBuffer()
+              await window.zc.recording.audioChunk(recordingId, 'mic', buf)
+            })
+          }
+        }
+      }
+
       // probe video: lets us observe when frames actually arrive
       const probe = document.createElement('video')
       probe.muted = true
       probe.playsInline = true
-      probe.srcObject = stream
+      probe.srcObject = videoOnlyStream
       s.probe = probe
       await probe.play().catch(() => undefined)
 
@@ -165,13 +357,18 @@ export function useRecorder(onDone: (project: Project) => void): {
       const startedAt = new Promise<number>((resolve) => {
         startedResolve = resolve
       })
+      // filled in right before the audio recorders start, a few lines below; `.then` only
+      // reads it once `startedAt` resolves (after the video recorder's onstart), so this
+      // plain variable capture is safe despite being assigned after the chain is built
+      let audioStartMeta: RecordingStartMeta['audio']
       s.chain = startedAt.then((at) =>
         window.zc.recording.started(recordingId, {
           startedAt: at,
           mimeType: recorder.mimeType || mimeType,
           width: settings.width ?? 0,
           height: settings.height ?? 0,
-          fps: settings.frameRate ?? 30
+          fps: settings.frameRate ?? 30,
+          audio: audioStartMeta
         })
       )
 
@@ -199,7 +396,7 @@ export function useRecorder(onDone: (project: Project) => void): {
       recorder.ondataavailable = (e) => {
         if (e.data.size === 0 || s.cancelled) return
         const blob = e.data
-        s.chain = s.chain.then(async () => {
+        appendChunk(s, async () => {
           const buf = await blob.arrayBuffer()
           await window.zc.recording.chunk(recordingId, buf)
         })
@@ -210,13 +407,18 @@ export function useRecorder(onDone: (project: Project) => void): {
         setError('Recording failed: ' + (detail ?? 'unknown error'))
       }
       recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop())
+        stream.getTracks().forEach((tr) => tr.stop())
+        s.micStream?.getTracks().forEach((tr) => tr.stop())
         probe.srcObject = null
         try {
-          await s.chain
+          // the video track ending above can itself finalize the audio recorders; either
+          // way, wait for their own `stop` event so the last chunk is queued before finish
+          await Promise.all([s.micStopped, s.systemStopped])
+          await drainChain(s)
           if (s.cancelled) {
             await window.zc.recording.cancel(recordingId)
             setPhase('idle')
+            resolvePendingAbort()
             return
           }
           setPhase('processing')
@@ -245,9 +447,36 @@ export function useRecorder(onDone: (project: Project) => void): {
         return
       }
       recorder.start(1000)
+      const audioWall = Date.now()
+      const meta: NonNullable<RecordingStartMeta['audio']> = {}
+      if (s.micRecorder) {
+        s.micRecorder.start(1000)
+        // only meaningful once the recorder is actually running: an 'inactive' recorder
+        // resolves waitStopped() immediately, which would race recording:finish
+        s.micStopped = waitStopped(s.micRecorder)
+        meta.mic = { startWall: audioWall }
+      }
+      if (s.systemRecorder) {
+        s.systemRecorder.start(1000)
+        s.systemStopped = waitStopped(s.systemRecorder)
+        meta.system = { startWall: audioWall }
+      }
+      if (meta.mic || meta.system) audioStartMeta = meta
     },
-    [stop, discard]
+    [stop, discard, resolvePendingAbort]
   )
 
-  return { phase, progress, error, start, stop, cancel, reset: () => setPhase('idle') }
+  return {
+    phase,
+    progress,
+    error,
+    start,
+    stop,
+    cancel,
+    reset: () => {
+      setPhase('idle')
+      setError(null)
+      pendingAbortRef.current = null
+    }
+  }
 }

@@ -1,15 +1,9 @@
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
-import { Square, X } from 'lucide-react'
+import { Mic, Square, Volume2, X } from 'lucide-react'
 import type { RecorderBarState } from '@shared/types'
 import { useT } from '../i18n'
-
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
+import { formatElapsed } from '../util/format'
 
 /** UI of the small floating window shown while recording. */
 export function RecorderBar(): JSX.Element {
@@ -34,12 +28,34 @@ export function RecorderBar(): JSX.Element {
 
   let label: string
   let dotClass = 'bar-dot'
+  let stopTitle = t('bar.stopTitle')
+  let cancelTitle = t('bar.discard')
+
   if (state.phase === 'countdown') {
     const left = Math.max(0, Math.ceil(((state.countdownEndsAt ?? now) - now) / 1000))
-    label = left > 0 ? t('bar.startingIn', { n: left }) : t('bar.starting')
+    if (state.mode === 'scenario') {
+      label = left > 0 ? t('bar.scenarioStartingIn', { n: left }) : t('bar.scenarioStarting')
+    } else {
+      label = left > 0 ? t('bar.startingIn', { n: left }) : t('bar.starting')
+    }
     dotClass += ' bar-dot-warm'
+  } else if (state.phase === 'scenario') {
+    label = t('bar.scenarioLabel', { n: state.actions ?? 0, time: formatElapsed(now - (state.startedAt ?? now)) })
+    dotClass += ' bar-dot-scenario'
+    stopTitle = t('bar.scenarioStopTitle')
+    cancelTitle = t('bar.scenarioCancelTitle')
   } else if (state.phase === 'recording') {
-    label = `REC ${formatElapsed(now - (state.startedAt ?? now))}`
+    if (state.replay) {
+      label = t('bar.replayLabel', {
+        index: state.replay.index,
+        total: state.replay.total,
+        time: formatElapsed(now - (state.startedAt ?? now))
+      })
+      stopTitle = t('bar.replayStopTitle')
+      cancelTitle = t('bar.replayCancelTitle')
+    } else {
+      label = `REC ${formatElapsed(now - (state.startedAt ?? now))}`
+    }
     dotClass += ' bar-dot-live'
   } else if (state.phase === 'processing') {
     label = t('bar.stopping')
@@ -52,12 +68,22 @@ export function RecorderBar(): JSX.Element {
       <div className="bar-drag">
         <span className={dotClass} />
         <span className="bar-label">{label}</span>
+        {state.audio?.mic && (
+          <span className="bar-audio-icon" title={t('bar.micOn')}>
+            <Mic size={13} />
+          </span>
+        )}
+        {state.audio?.system && (
+          <span className="bar-audio-icon" title={t('bar.systemOn')}>
+            <Volume2 size={13} />
+          </span>
+        )}
       </div>
-      <button className="bar-btn bar-stop" title={t('bar.stopTitle')} onClick={() => void window.zc.bar.stop()} disabled={state.phase === 'processing'}>
+      <button className="bar-btn bar-stop" title={stopTitle} onClick={() => void window.zc.bar.stop()} disabled={state.phase === 'processing'}>
         <Square size={14} fill="currentColor" />
         <span>{t('bar.stop')}</span>
       </button>
-      <button className="bar-btn bar-cancel" title={t('bar.discard')} onClick={() => void window.zc.bar.cancel()}>
+      <button className="bar-btn bar-cancel" title={cancelTitle} onClick={() => void window.zc.bar.cancel()}>
         <X size={16} />
       </button>
     </div>

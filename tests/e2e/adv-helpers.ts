@@ -15,6 +15,7 @@ export interface Harness {
   recordingsDir: string
   exportDir: string
   shotsDir: string
+  scenariosDir: string
   /** every renderer console error seen since launch */
   errors: string[]
 }
@@ -24,14 +25,16 @@ export async function launch(name: string): Promise<Harness> {
   const recordingsDir = join(base, 'recordings')
   const exportDir = join(base, 'exports')
   const shotsDir = join(base, 'shots')
+  const scenariosDir = join(base, 'scenarios')
   rmSync(base, { recursive: true, force: true })
   mkdirSync(recordingsDir, { recursive: true })
   mkdirSync(exportDir, { recursive: true })
   mkdirSync(shotsDir, { recursive: true })
+  mkdirSync(scenariosDir, { recursive: true })
 
   const app = await electron.launch({
     args: ['.'],
-    env: { ...process.env, ZOOMCUT_RECORDINGS_DIR: recordingsDir, ZOOMCUT_E2E: '1' }
+    env: { ...process.env, ZOOMCUT_RECORDINGS_DIR: recordingsDir, ZOOMCUT_SCENARIOS_DIR: scenariosDir, ZOOMCUT_E2E: '1' }
   })
   const win = await app.firstWindow()
   const errors: string[] = []
@@ -45,7 +48,7 @@ export async function launch(name: string): Promise<Harness> {
     errors.push('pageerror: ' + err.message)
     console.log('[pageerror]', err.message)
   })
-  return { app, win, recordingsDir, exportDir, shotsDir, errors }
+  return { app, win, recordingsDir, exportDir, shotsDir, scenariosDir, errors }
 }
 
 /** Restores the app settings this machine's user had before the test touched them. */
@@ -55,7 +58,8 @@ export async function restoreUserSettings(win: Page): Promise<void> {
       (window as unknown as { zc: { app: { setSettings: (p: unknown) => Promise<unknown> } } }).zc.app.setSettings({
         language: 'system',
         cursorDefaults: null,
-        frameDefaults: null
+        frameDefaults: null,
+        audioDefaults: null
       })
     )
     .catch(() => undefined)

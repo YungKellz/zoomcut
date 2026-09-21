@@ -1,11 +1,13 @@
 import { create } from 'zustand'
 import type {
+  AudioClip,
   CropRect,
   CursorSettings,
   CutRange,
   ExportSettings,
   FrameStyle,
   Project,
+  Scenario,
   TextOverlay,
   ZoomSegment
 } from '@shared/types'
@@ -16,7 +18,7 @@ import { findZoom, resolveZoomOverlaps } from './engine/camera'
 import { clamp } from './util/format'
 import { t } from './i18n'
 
-export type Selection = { kind: 'cut' | 'zoom' | 'text'; id: string } | null
+export type Selection = { kind: 'cut' | 'zoom' | 'text' | 'audio'; id: string } | null
 export type EditorMode = 'normal' | 'pickTarget' | 'crop'
 export interface RangeSelection {
   start: number
@@ -39,8 +41,11 @@ const HISTORY_LIMIT = 60
 let pendingCheckpoint: Project | null = null
 
 export interface EditorState {
-  screen: 'home' | 'editor'
+  screen: 'home' | 'editor' | 'scenario'
+  /** transient dismissible notice shown by NoticeBar (App.tsx); outlives Home unmounting */
+  notice: string | null
   project: Project | null
+  scenario: Scenario | null
   playheadMs: number
   playing: boolean
   /** bumped whenever the user explicitly seeks, so the player applies it */
@@ -53,9 +58,17 @@ export interface EditorState {
   history: Project[]
   future: Project[]
   exportOpen: boolean
+  /** editor UI state (not saved): silences every audio clip, e.g. while recording a voiceover */
+  audioMuted: boolean
+  /** clip ids whose <audio> element reported a load/decode error (e.g. a missing file);
+   * AudioPlayer sets this instead of retrying play() forever, the Audio panel shows a warning */
+  audioErrors: Record<string, boolean>
 
   openProject(project: Project): void
   closeProject(): void
+  openScenario(scenario: Scenario): void
+  closeScenario(): void
+  setScenario(scenario: Scenario): void
   setPlayhead(ms: number, seek?: boolean): void
   setPlaying(playing: boolean): void
   togglePlay(): void
@@ -89,11 +102,20 @@ export interface EditorState {
   updateExport(patch: Partial<ExportSettings>): void
   setName(name: string): void
   deleteSelected(): void
+  setNotice(notice: string | null): void
+
+  addAudioClip(clip: AudioClip): void
+  updateAudioClip(id: string, patch: Partial<AudioClip>, record?: boolean): void
+  removeAudioClip(id: string): void
+  setAudioMuted(muted: boolean): void
+  setAudioError(id: string, hasError: boolean): void
 }
 
 export const useStore = create<EditorState>((set, get) => ({
   screen: 'home',
+  notice: null,
   project: null,
+  scenario: null,
   playheadMs: 0,
   playing: false,
   seekSeq: 0,
@@ -105,11 +127,16 @@ export const useStore = create<EditorState>((set, get) => ({
   history: [],
   future: [],
   exportOpen: false,
+  audioMuted: false,
+  audioErrors: {},
 
   openProject: (project) =>
     set({
       screen: 'editor',
       project,
+      // a scenario replay's own onDone already calls closeScenario() first, but openProject is
+      // also reachable from Home directly - either way a stale scenario must never linger
+      scenario: null,
       playheadMs: 0,
       playing: false,
       seekSeq: get().seekSeq + 1,
@@ -118,10 +145,19 @@ export const useStore = create<EditorState>((set, get) => ({
       mode: 'normal',
       history: [],
       future: [],
-      exportOpen: false
+      exportOpen: false,
+      // a previous project's mute (e.g. mid-voiceover-recording) or file-missing warnings must
+      // never bleed into the next project opened
+      audioMuted: false,
+      audioErrors: {}
     }),
 
-  closeProject: () => set({ screen: 'home', project: null, playing: false, history: [], future: [] }),
+  closeProject: () =>
+    set({ screen: 'home', project: null, playing: false, history: [], future: [], audioMuted: false, audioErrors: {} }),
+
+  openScenario: (scenario) => set({ screen: 'scenario', scenario }),
+  closeScenario: () => set({ screen: 'home', scenario: null }),
+  setScenario: (scenario) => set({ scenario }),
 
   setPlayhead: (ms, seek = false) => {
     const p = get().project
@@ -328,14 +364,50 @@ export const useStore = create<EditorState>((set, get) => ({
     if (selection?.kind === 'cut') get().removeCut(selection.id)
     else if (selection?.kind === 'zoom') get().removeZoom(selection.id)
     else if (selection?.kind === 'text') get().removeText(selection.id)
+    else if (selection?.kind === 'audio') get().removeAudioClip(selection.id)
     else if (range && range.end - range.start > 10) get().addCut(range.start, range.end)
-  }
+  },
+
+  addAudioClip: (clip) => {
+    get().mutate((p) => ({ ...p, audio: [...p.audio, clip] }))
+    set({ selection: { kind: 'audio', id: clip.id } })
+  },
+
+  updateAudioClip: (id, patch, record = true) =>
+    get().mutate((p) => ({ ...p, audio: p.audio.map((c) => (c.id === id ? { ...c, ...patch } : c)) }), record),
+
+  removeAudioClip: (id) => {
+    // the underlying file is NOT deleted here: this change is undoable (Ctrl+Z), and deleting
+    // eagerly would leave a restored clip pointing at a file that no longer exists. Orphaned
+    // files are swept once, when the editor closes and undo history is discarded (main.tsx).
+    get().mutate((p) => ({ ...p, audio: p.audio.filter((c) => c.id !== id) }))
+    set({ selection: null })
+  },
+
+  setAudioMuted: (audioMuted) => set({ audioMuted }),
+
+  setAudioError: (id, hasError) =>
+    set((s) => {
+      if (Boolean(s.audioErrors[id]) === hasError) return s
+      const next = { ...s.audioErrors }
+      if (hasError) next[id] = true
+      else delete next[id]
+      return { audioErrors: next }
+    }),
+
+  setNotice: (notice) => set({ notice })
 }))
 
 export function useProject(): Project {
   const project = useStore((s) => s.project)
   if (!project) throw new Error('No project open')
   return project
+}
+
+export function useScenario(): Scenario {
+  const scenario = useStore((s) => s.scenario)
+  if (!scenario) throw new Error('No scenario open')
+  return scenario
 }
 
 export function useKeepSegments(): { start: number; end: number }[] {

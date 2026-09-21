@@ -192,6 +192,7 @@ export interface Project {
   cuts: CutRange[]
   texts: TextOverlay[]
   zooms: ZoomSegment[]
+  audio: AudioClip[]
   cursor: CursorSettings
   crop: CropRect
   frame: FrameStyle
@@ -216,19 +217,29 @@ export interface RecordingStartMeta {
   width: number
   height: number
   fps: number
+  /** wall-clock time each audio MediaRecorder started, for turning it into a clip offset */
+  audio?: { mic?: { startWall: number }; system?: { startWall: number } }
 }
 
-export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing'
+export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing' | 'scenario'
 
 export interface RecorderBarState {
   phase: RecordingPhase
   startedAt: number | null
   countdownEndsAt: number | null
+  /** audio being captured, for a small indicator on the bar */
+  audio?: { mic: boolean; system: boolean }
+  /** what the countdown leads to; 'scenario' = capturing input, not video */
+  mode?: 'record' | 'scenario'
+  /** number of actions captured so far (phase 'scenario') */
+  actions?: number
+  /** replay progress while recording; null/undefined = plain recording */
+  replay?: { index: number; total: number } | null
 }
 
 export interface RecordingProgress {
   id: string
-  phase: 'transcode' | 'analyze' | 'done' | 'error'
+  phase: 'transcode' | 'analyze' | 'audio' | 'done' | 'error'
   percent: number
   message?: string
 }
@@ -270,6 +281,8 @@ export interface AppSettings {
   /** last used cursor / frame settings, applied to new projects */
   cursorDefaults: CursorSettings | null
   frameDefaults: FrameStyle | null
+  /** last used microphone / system audio choice, applied to new recordings */
+  audioDefaults: AudioCaptureOptions | null
 }
 
 export interface AppInfo {
@@ -294,4 +307,154 @@ export interface UpdateState {
   /** what went wrong, for a manual check */
   message: string | null
   checkedAt: number | null
+}
+
+// ---- audio ----
+
+export type AudioClipKind = 'system' | 'mic' | 'voiceover' | 'music' | 'file'
+
+/** Which raw audio channel a captured chunk belongs to (recording:audio-chunk). */
+export type AudioTrackKind = 'mic' | 'system'
+
+export interface AudioClip {
+  id: string
+  kind: AudioClipKind
+  /** file name inside the project folder (always .m4a, AAC 48 kHz stereo) */
+  file: string
+  name: string
+  /**
+   * 'system' | 'mic' (recorded with the video): SOURCE time (ms) at which the file's t=0 sits – usually ≤ 0,
+   * the audio recorder starts a moment before the first video frame. The clip follows the video through cuts.
+   * Other kinds (overlays): OUTPUT time (ms) at which the clip starts; cuts do not move it.
+   */
+  start: number
+  durationMs: number
+  /** 0..2, 1 = as recorded */
+  volume: number
+  muted: boolean
+  /** repeat the file until the output ends (music beds) */
+  loop: boolean
+  fadeInMs: number
+  fadeOutMs: number
+  /** id of the generated music preset, when kind === 'music' */
+  preset?: string
+}
+
+export interface AudioCaptureOptions {
+  mic: boolean
+  micDeviceId: string | null
+  system: boolean
+}
+
+/** What the renderer computes for the export (all times ms, output timeline). */
+export interface AudioExportPiece {
+  /** span of the audio file to use */
+  fileStart: number
+  fileEnd: number
+  /** output time where the piece starts */
+  outAt: number
+}
+export interface AudioExportTrack {
+  /** absolute path */
+  path: string
+  /** the clip's own file duration (ms); a piece with fileEnd beyond this needs aloop */
+  durationMs: number
+  pieces: AudioExportPiece[]
+  volume: number
+  fadeInMs: number
+  fadeOutMs: number
+}
+export interface AudioExportPlan {
+  tracks: AudioExportTrack[]
+  outDurationMs: number
+}
+
+// ---- scenario ----
+export type ScenarioActionKind = 'click' | 'doubleClick' | 'rightClick' | 'middleClick' | 'drag' | 'scroll' | 'type' | 'key'
+export interface ScenarioPoint { x: number; y: number }
+/** dt = ms since the previous point in the path (or the previous action's end, for the first point); positions in DIP screen coordinates (virtual screen) */
+export interface ScenarioPathPoint extends ScenarioPoint { dt: number }
+export interface ScenarioModifiers { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean }
+/** crop of the screen around the action, file relative to the scenario dir, rect in DIP screen coordinates */
+export interface ScenarioShot { file: string; x: number; y: number; w: number; h: number }
+
+export interface ScenarioActionBase {
+  id: string
+  kind: ScenarioActionKind
+  /** ms from the scenario start when the action happens (mouse down / first key) */
+  at: number
+  /** mouse position when the action happens, DIP */
+  x: number
+  y: number
+  /** recorded mouse movement from the previous action to (x, y); [] = synthesize a curve at replay */
+  path: ScenarioPathPoint[]
+  modifiers: ScenarioModifiers
+  shot: ScenarioShot | null
+}
+export interface ScenarioClickAction extends ScenarioActionBase { kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick' }
+export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[]; durationMs: number }
+/** deltaY/deltaX in wheel notches (positive = down / right); replayed as `steps` wheel events over durationMs */
+export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number; durationMs: number }
+export interface ScenarioTypeAction extends ScenarioActionBase { kind: 'type'; text: string; durationMs: number }
+/** a non-text key or a chord: `key` is a display label ("Enter", "Ctrl+S"), vk = Windows virtual-key code, scan = set-1 scancode */
+export interface ScenarioKeyAction extends ScenarioActionBase { kind: 'key'; key: string; vk: number; scan: number; extended: boolean }
+export type ScenarioAction = ScenarioClickAction | ScenarioDragAction | ScenarioScrollAction | ScenarioTypeAction | ScenarioKeyAction
+
+export interface Scenario {
+  version: 1
+  id: string
+  name: string
+  createdAt: number
+  displayId: number
+  /** DIP bounds and scale of the display it was recorded on */
+  displayBounds: Rect
+  scaleFactor: number
+  actions: ScenarioAction[]
+  /**
+   * ms; the RECORDED capture length (when Stop was pressed, ≥ last action end at that time) -
+   * frozen at capture time, never updated by review-screen edits (retiming/deleting actions).
+   * UI code showing "how long is this scenario" should use scenarioEnd(actions) instead
+   * (src/shared/scenario.ts), which reflects the current, possibly-edited end.
+   */
+  durationMs: number
+  /** absolute folder (userData/scenarios/<id>) holding scenario.json and shots/ */
+  dir: string
+}
+/** durationMs here is scenarioEnd(actions) (see Scenario.durationMs), not the frozen recorded length. */
+export interface ScenarioSummary { id: string; name: string; createdAt: number; actions: number; durationMs: number }
+
+export interface ScenarioCaptureState {
+  phase: 'idle' | 'countdown' | 'capturing' | 'saving'
+  actions: number
+  startedAt: number | null
+}
+export interface ReplayState {
+  phase: 'idle' | 'preparing' | 'ready' | 'running' | 'done' | 'aborted' | 'error'
+  index: number
+  total: number
+  message?: string
+}
+/** what the overlay window draws; x/y (and toX/toY) are DIP relative to the display's top-left */
+export interface OverlayEffect {
+  kind: ScenarioActionKind
+  x: number
+  y: number
+  label?: string
+  index: number
+  total: number
+  /** drag only: end point, for the fading line from the start (x/y) to here */
+  toX?: number
+  toY?: number
+  /** scroll only: wheel notches, same sign convention as ScenarioScrollAction (positive = down/right) */
+  deltaY?: number
+  deltaX?: number
+}
+
+/** Options for recording.prepare() / useRecorder's start(): what to capture besides the screen
+ * (microphone / system audio) and, for the scenario recorder, which scenario to replay while
+ * recording. Main only ever reads `scenario` - see RecordingController.prepare(), which ignores
+ * `audio` entirely (the renderer captures audio itself, see useRecorder.ts). */
+export interface RecordOptions {
+  audio?: AudioCaptureOptions
+  scenario?: Scenario
 }

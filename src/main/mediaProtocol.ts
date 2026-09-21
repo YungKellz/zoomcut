@@ -12,7 +12,12 @@ const MIME: Record<string, string> = {
   '.webm': 'video/webm',
   '.gif': 'image/gif',
   '.png': 'image/png',
-  '.json': 'application/json'
+  '.json': 'application/json',
+  // ---- audio ----
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg'
 }
 
 export function allowMediaRoot(dir: string): void {

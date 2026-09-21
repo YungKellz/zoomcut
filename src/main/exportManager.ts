@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { WebContents } from 'electron'
 import type {
+  AudioExportPlan,
   ExportBeginRequest,
   ExportBeginResult,
   ExportFinishResult,
@@ -100,7 +101,7 @@ export class ExportManager {
     }
   }
 
-  async finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean }): Promise<ExportFinishResult> {
+  async finish(exportId: string, settings: ExportSettings, meta: { durationMs: number; alpha?: boolean; audio?: AudioExportPlan }): Promise<ExportFinishResult> {
     const s = this.require(exportId)
     const progress = (p: Omit<ExportProgress, 'exportId'>): void => {
       if (!s.sender.isDestroyed()) s.sender.send('export:progress', { exportId, ...p })
@@ -119,8 +120,9 @@ export class ExportManager {
       s.outputPath = outputPath
       if (s.format === 'mp4') {
         await finalizeMp4(s.tempPath, outputPath, settings.mp4Quality, meta.durationMs,
-          (percent) => progress({ phase: 'encode', percent }), s.abort.signal)
+          (percent) => progress({ phase: 'encode', percent }), s.abort.signal, meta.audio)
       } else {
+        // GIF ignores audio entirely
         const perFrame = settings.gif.paletteMode === 'perframe'
         const palettePath = join(exportTempDir(), `${exportId}-palette.${perFrame ? 'nut' : 'png'}`)
         try {

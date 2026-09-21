@@ -15,6 +15,7 @@ import type { ExportFinishResult, ExportSettings, Project } from '@shared/types'
 import type { FollowPath } from '../engine/cursor'
 import { composeFrame, outputSize, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut, type Segment } from '../engine/timeline'
+import { buildAudioPlan } from './audioPlan'
 
 export interface RenderProgress {
   phase: 'render' | 'finalize'
@@ -193,7 +194,9 @@ export async function runExport({ project, settings, followPath, onProgress, sig
     input.dispose()
 
     onProgress({ phase: 'finalize', percent: 0 })
-    return await window.zc.export.finish(exportId, settings, { durationMs: outDurationMs, alpha })
+    // GIF ignores this (finalizeMp4 is the only consumer); harmless to always compute
+    const audio = buildAudioPlan(project, segments) ?? undefined
+    return await window.zc.export.finish(exportId, settings, { durationMs: outDurationMs, alpha, audio })
   } catch (err) {
     if (output) await output.cancel().catch(() => undefined)
     input.dispose()

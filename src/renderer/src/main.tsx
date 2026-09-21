@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import { useStore } from './store'
 import { useI18n } from './i18n'
-import type { Project } from '@shared/types'
+import type { Project, Scenario } from '@shared/types'
 import './styles.css'
 
 // Language: system by default, overridden by the saved setting.
@@ -18,24 +18,75 @@ void window.zc.app
 let saveTimer: number | null = null
 let lastSaved: unknown = null
 let pending: Project | null = null
-function flushSave(): void {
+let lastSave: Promise<void> = Promise.resolve()
+function flushSave(): Promise<void> {
   if (saveTimer) window.clearTimeout(saveTimer)
   saveTimer = null
   const project = pending
   pending = null
-  if (!project || project === lastSaved) return
+  if (!project || project === lastSaved) return lastSave
   lastSaved = project
-  void window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
+  lastSave = window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
+  return lastSave
 }
 useStore.subscribe((state, prev) => {
   if (state.project === prev.project) return
   if (!state.project) {
-    flushSave()
+    const saved = flushSave()
+    // undo history for this project is discarded the moment it closes (openProject/
+    // closeProject reset history/future), so it is now safe to permanently delete any
+    // .m4a in its folder that no clip references any more (see audioImport.ts sweepAudioFiles).
+    // It waits for the flushed save: scanning the folder while project.json is being renamed
+    // into place can make that rename fail on Windows.
+    if (prev.project) {
+      const { id, audio } = prev.project
+      const keepFiles = audio.map((c) => c.file)
+      void saved.then(() => window.zc.audio.sweep(id, keepFiles)).catch((err) => console.error('audio sweep failed', err))
+    }
     return
   }
   pending = state.project
   if (saveTimer) window.clearTimeout(saveTimer)
   saveTimer = window.setTimeout(flushSave, 700)
+})
+
+// Scenario autosave: persist review-screen edits (retiming, deleting, renaming) ~500ms after
+// the last change, same reasoning as the project autosave above. closeScenario() sets
+// state.scenario back to null, which flushes the pending save immediately.
+let scenarioSaveTimer: number | null = null
+let lastSavedScenario: unknown = null
+let pendingScenario: Scenario | null = null
+function flushScenarioSave(): void {
+  if (scenarioSaveTimer) window.clearTimeout(scenarioSaveTimer)
+  scenarioSaveTimer = null
+  const scenario = pendingScenario
+  pendingScenario = null
+  if (!scenario || scenario === lastSavedScenario) return
+  lastSavedScenario = scenario
+  void window.zc.scenario.save(scenario).catch((err) => console.error('scenario autosave failed', err))
+}
+useStore.subscribe((state, prev) => {
+  if (state.scenario === prev.scenario) return
+  if (!state.scenario) {
+    flushScenarioSave()
+    return
+  }
+  // Opening a scenario (fresh from disk/IPC, a different id than whatever was open before)
+  // is not an edit: seed the "already saved" reference so it is not rewritten to disk until
+  // something in it actually changes. openScenario always follows a closeScenario (scenario:
+  // null) first when switching between two open scenarios, so prev.scenario here is either
+  // null or the SAME scenario being edited - never a different one whose pending save this
+  // would otherwise clobber.
+  if (!prev.scenario || prev.scenario.id !== state.scenario.id) {
+    lastSavedScenario = state.scenario
+    pendingScenario = null
+    if (scenarioSaveTimer) window.clearTimeout(scenarioSaveTimer)
+    scenarioSaveTimer = null
+    return
+  }
+  pendingScenario = state.scenario
+  if (scenarioSaveTimer) window.clearTimeout(scenarioSaveTimer)
+  scenarioSaveTimer = window.setTimeout(flushScenarioSave, 500)
 })
 
 // The last used cursor / frame settings become the defaults for new projects.

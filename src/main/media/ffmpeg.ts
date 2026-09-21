@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { app } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
-import type { GifSettings, Mp4Quality } from '@shared/types'
+import type { AudioExportPlan, GifSettings, Mp4Quality } from '@shared/types'
 import { MP4_CRF } from '@shared/defaults'
+import { buildAudioFilterComplex } from './audioGraph'
 
 export function ffmpegPath(): string | null {
   let p = ffmpegStatic as unknown as string | null
@@ -104,6 +105,18 @@ export async function probeVideo(path: string): Promise<ProbeResult> {
   }
 }
 
+export interface AudioProbeResult {
+  durationMs: number
+}
+
+/** Reads the duration from `ffmpeg -i` metadata output (no video stream expected). */
+export async function probeAudio(path: string): Promise<AudioProbeResult> {
+  const { stderr } = await runFfmpeg({ args: ['-i', path], okCodes: [0, 1] })
+  const dur = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr)
+  if (!dur) throw new Error('Could not read audio metadata:\n' + stderr.slice(-1500))
+  return { durationMs: Math.round((Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3])) * 1000) }
+}
+
 /**
  * Turns a MediaRecorder file (WebM/VP9 or fragmented MP4, variable frame rate, no cues)
  * into a constant-frame-rate, seekable H.264 MP4 that the editor can scrub quickly.
@@ -142,6 +155,26 @@ export async function transcodeRecording(
   })
 }
 
+/**
+ * Converts a raw opus/webm recording (mic or system loopback) into the AAC 48 kHz stereo
+ * .m4a that AudioClip.file always points at. `durationMs` is an estimate (the recording's
+ * own wall-clock length) used only to turn ffmpeg's `time=` output into a percentage.
+ */
+export async function convertAudio(
+  input: string,
+  output: string,
+  durationMs?: number,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  await runFfmpeg({
+    args: ['-i', input, '-vn', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2', output],
+    durationMs,
+    onProgress,
+    signal
+  })
+}
+
 /** ffmpeg process that turns raw RGBA frames on stdin into a lossless intermediate with alpha. */
 export function startRawIntermediate(output: string, width: number, height: number, fps: number, signal?: AbortSignal): FfmpegProcess {
   return spawnFfmpeg({
@@ -167,23 +200,44 @@ export async function finalizeMp4(
   quality: Mp4Quality,
   durationMs: number,
   onProgress?: (percent: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  audio?: AudioExportPlan
 ): Promise<void> {
-  await runFfmpeg({
-    args: [
-      '-i', input,
-      '-an',
-      '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-crf', String(MP4_CRF[quality]),
-      '-pix_fmt', 'yuv420p',
-      '-movflags', '+faststart',
-      output
-    ],
-    durationMs,
-    onProgress,
-    signal
+  const videoArgs = ['-c:v', 'libx264', '-preset', 'medium', '-crf', String(MP4_CRF[quality]), '-pix_fmt', 'yuv420p']
+  // a clip can be deleted from disk between the renderer building the plan and this running;
+  // drop it rather than failing the whole export (see also RecordingController.finishAudio,
+  // which is the only place these files are ever written)
+  const tracks = (audio?.tracks ?? []).filter((t) => {
+    if (t.pieces.length === 0) return false
+    if (!existsSync(t.path)) {
+      console.warn(`[export] audio track file is missing, dropping it: ${t.path}`)
+      return false
+    }
+    return true
   })
+  if (tracks.length === 0) {
+    await runFfmpeg({
+      args: ['-i', input, '-an', ...videoArgs, '-movflags', '+faststart', output],
+      durationMs,
+      onProgress,
+      signal
+    })
+    return
+  }
+  const graph = buildAudioFilterComplex({ tracks, outDurationMs: audio!.outDurationMs })
+  const args: string[] = ['-i', input]
+  for (const path of graph.inputs) args.push('-i', path)
+  args.push(
+    '-filter_complex', graph.filterComplex,
+    '-map', '0:v',
+    '-map', graph.outLabel,
+    ...videoArgs,
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart',
+    output
+  )
+  await runFfmpeg({ args, durationMs, onProgress, signal })
 }
 
 function ditherExpression(gif: GifSettings): string {

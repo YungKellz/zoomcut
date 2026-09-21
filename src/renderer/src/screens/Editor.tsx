@@ -4,6 +4,7 @@ import { ArrowLeft, Download, Redo2, Undo2 } from 'lucide-react'
 import { useProject, useStore } from '../store'
 import { useFollowPath } from '../hooks/useFollowPath'
 import { Preview } from '../editor/Preview'
+import { AudioPlayer } from '../editor/AudioPlayer'
 import { Timeline } from '../editor/Timeline'
 import { Inspector } from '../editor/Inspector'
 import { ExportDialog } from '../editor/ExportDialog'
@@ -122,6 +123,7 @@ export function Editor(): JSX.Element {
 
       <div className="editor-main">
         <Preview followPath={followPath} />
+        <AudioPlayer />
         <Inspector />
       </div>
 
