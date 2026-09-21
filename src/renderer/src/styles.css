@@ -1261,6 +1261,21 @@ input.name-input:focus {
   left: 7px;
 }
 
+/* the kind icon (audio regions only - Timeline.tsx passes `icon`) sits inline before the text */
+.region-label svg {
+  vertical-align: -2px;
+  margin-right: 3px;
+  flex: none;
+}
+
+/* a waveform is painted behind the label (Timeline.tsx sets this class exactly when its
+ * `overlay` prop - the AudioWaveform canvas - is present): a dark, semi-transparent chip keeps
+ * the name readable over the bars without hiding them elsewhere in the region. */
+.region-label.chip {
+  background: rgba(17, 18, 20, 0.55);
+  border-radius: 4px;
+}
+
 .region-handle {
   width: 7px;
   align-self: stretch;
@@ -1593,6 +1608,38 @@ input.name-input:focus {
 
 .region.audio.muted {
   opacity: 0.45;
+}
+
+/* volume-scale waveform for the selected clip (editor/AudioWaveform.tsx); sits behind the
+ * (sticky) .region-label so the name stays readable on top - opacity dims together with the
+ * rest of the region when it is muted, via .region.audio.muted above. */
+.audio-waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.audio-waveform.loading {
+  opacity: 0.35;
+}
+
+/* peaks failed to decode (a corrupt/missing file) - a subtle diagonal stripe instead of a blank
+ * canvas, so "no waveform" reads as an error rather than silence; the canvas itself paints
+ * nothing in this state (AudioWaveform.tsx), so the background below is what actually shows. */
+.audio-waveform.error {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.14) 4px,
+    transparent 4px,
+    transparent 9px
+  );
+}
+
+.music-license-note {
+  margin: 2px 0 4px;
 }
 
 .notice-bar {
@@ -2015,11 +2062,36 @@ input.scenario-action-gap {
 .scenario-marker.selected {
   border-color: #fff;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+  /* spans can sit close enough to overlap their neighbour - the selected one must win */
+  z-index: 2;
 }
 
 .scenario-marker.over {
   border-color: var(--record);
   color: var(--record);
+}
+
+/* type/drag/scroll actions long enough to matter (see scenario/format.ts's isSpanAction) are
+   drawn as a span from `at` to `actionEnd` instead of a centered point marker. */
+.scenario-marker-span {
+  margin-left: 0;
+  border-radius: 5px;
+  justify-content: flex-start;
+  gap: 3px;
+  padding: 0 4px;
+  overflow: hidden;
+}
+
+.scenario-marker-span svg {
+  flex: none;
+}
+
+.scenario-marker-label {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- replay overlay ---------- */

@@ -65,6 +65,8 @@ const api: ZcApi = {
   audio: {
     importClip: (projectId, clip) => ipcRenderer.invoke('audio:import-clip', projectId, clip),
     importFile: (projectId) => ipcRenderer.invoke('audio:import-file', projectId),
+    listMusic: () => ipcRenderer.invoke('audio:music-list'),
+    importMusic: (projectId, id) => ipcRenderer.invoke('audio:import-music', projectId, id),
     sweep: (projectId, keepFiles) => ipcRenderer.invoke('audio:sweep', projectId, keepFiles)
   },
   scenario: {

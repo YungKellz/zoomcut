@@ -37,10 +37,8 @@ interface ActiveSession {
   cancelled: boolean
   micStream: MediaStream | null
   micRecorder: MediaRecorder | null
-  systemRecorder: MediaRecorder | null
-  /** resolve once each recorder's own `stop` event has fired, whoever triggered it */
+  /** resolves once the mic recorder's own `stop` event has fired, whoever triggered it */
   micStopped: Promise<void>
-  systemStopped: Promise<void>
 }
 
 interface FrameMeta {
@@ -116,15 +114,17 @@ function makeAudioRecorder(track: MediaStreamTrack): MediaRecorder | null {
  * `recorder.start()`, observed through requestVideoFrameCallback on a probe <video>
  * attached to the same stream.
  *
- * Audio: system loopback (when requested) rides along on the same getDisplayMedia stream
- * as an extra track, but the video MediaRecorder only ever sees the video track – the raw
- * recording stays audio-free, so transcodeRecording can keep using -an. Microphone audio is
- * a second, independent getUserMedia stream. Each source gets its own opus MediaRecorder,
- * started in the same tick as the video one so their `startWall` timestamps line up; the
- * main process turns that into an AudioClip offset in recording:finish. Either source can
- * fail (no hardware, OS/driver refuses loopback, permission denied) without losing the
- * recording: failures are reported through the store's dismissible notice (App.tsx), which
- * survives the Home -> Editor screen switch that a successful recording causes.
+ * Audio: system audio (when requested) is captured entirely on the main side, through our own
+ * WASAPI loopback helper (src/main/audio/loopback.ts, started by recording.prepare()) – this
+ * component never touches it. The video MediaRecorder only ever sees the video track, so the
+ * raw recording stays audio-free and transcodeRecording can keep using -an. Microphone audio is
+ * still captured here, as an independent getUserMedia stream with its own opus MediaRecorder,
+ * started in the same tick as the video one so its `startWall` timestamp lines up with it; the
+ * main process turns that (and the loopback helper's own startWall) into an AudioClip offset in
+ * recording:finish. Either source can fail (no hardware, OS/driver refuses loopback, permission
+ * denied) without losing the recording: failures are reported through the store's dismissible
+ * notice (App.tsx), which survives the Home -> Editor screen switch that a successful recording
+ * causes - the mic's own notice is raised here, the system-audio one from finish()'s warnings.
  * Scenario replay: when `start()` is given a scenario, the main process drives a
  * helper that replays its actions while this same recording runs. `onAborted` fires once a
  * real Escape (or the bar X) aborted that replay - but only after the existing cancel path
@@ -181,7 +181,6 @@ export function useRecorder(
     if (s.recorder && s.recorder.state !== 'inactive') {
       s.recorder.stop()
       if (s.micRecorder && s.micRecorder.state !== 'inactive') s.micRecorder.stop()
-      if (s.systemRecorder && s.systemRecorder.state !== 'inactive') s.systemRecorder.stop()
     } else {
       // nothing captured yet (countdown): stopping means dropping the attempt
       s.cancelled = true
@@ -194,7 +193,6 @@ export function useRecorder(
     s.cancelled = true
     if (s.recorder && s.recorder.state !== 'inactive') s.recorder.stop()
     if (s.micRecorder && s.micRecorder.state !== 'inactive') s.micRecorder.stop()
-    if (s.systemRecorder && s.systemRecorder.state !== 'inactive') s.systemRecorder.stop()
   }, [])
 
   useEffect(() => {
@@ -238,17 +236,16 @@ export function useRecorder(
         cancelled: false,
         micStream: null,
         micRecorder: null,
-        systemRecorder: null,
-        micStopped: Promise.resolve(),
-        systemStopped: Promise.resolve()
+        micStopped: Promise.resolve()
       }
       session.current = s
 
       let countdownEndsAt = Date.now() + 3000
       try {
-        // main only ever reads `scenario` (RecordingController.prepare ignores audio entirely -
-        // the renderer captures audio itself, below), so it never receives the audio object too
-        const prepared = await window.zc.recording.prepare(displayId, { scenario: options?.scenario })
+        // main reads both: `scenario` drives the replay, and `audio.system` starts the
+        // system-audio loopback helper (src/main/audio/loopback.ts) during the countdown below,
+        // well before the video recorder itself starts. The renderer only ever captures the mic.
+        const prepared = await window.zc.recording.prepare(displayId, { scenario: options?.scenario, audio: options?.audio })
         s.id = prepared.id
         countdownEndsAt = prepared.countdownEndsAt
         if (s.cancelled) {
@@ -256,30 +253,11 @@ export function useRecorder(
           return
         }
 
-        const wantsSystemAudio = options?.audio?.system === true
-        let systemAudioFailed = false
-        try {
-          s.stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 60, max: 60 } },
-            audio: wantsSystemAudio
-          })
-        } catch (err) {
-          // system-loopback audio can fail at the OS/driver level even though plain video
-          // capture works fine (seen on real hardware, not just missing devices); retry
-          // video-only rather than losing the whole recording over it
-          if (!wantsSystemAudio) throw err
-          console.warn('System audio capture failed, retrying without it:', err)
-          systemAudioFailed = true
-          s.stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 60, max: 60 } },
-            audio: false
-          })
-        }
+        s.stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 60, max: 60 } }
+        })
 
         const notices: string[] = []
-        if (wantsSystemAudio && (systemAudioFailed || s.stream.getAudioTracks().length === 0)) {
-          notices.push(t('audio.systemAudioFailed'))
-        }
         if (options?.audio?.mic) {
           const mic = await tryOpenMic(options.audio)
           if ('stream' in mic) {
@@ -316,20 +294,6 @@ export function useRecorder(
       })
       s.recorder = recorder
 
-      const systemTrack = stream.getAudioTracks()[0]
-      if (systemTrack) {
-        s.systemRecorder = makeAudioRecorder(systemTrack)
-        if (s.systemRecorder) {
-          s.systemRecorder.ondataavailable = (e) => {
-            if (e.data.size === 0 || s.cancelled) return
-            const blob = e.data
-            appendChunk(s, async () => {
-              const buf = await blob.arrayBuffer()
-              await window.zc.recording.audioChunk(recordingId, 'system', buf)
-            })
-          }
-        }
-      }
       const micTrack = s.micStream?.getAudioTracks()[0]
       if (micTrack) {
         s.micRecorder = makeAudioRecorder(micTrack)
@@ -411,9 +375,9 @@ export function useRecorder(
         s.micStream?.getTracks().forEach((tr) => tr.stop())
         probe.srcObject = null
         try {
-          // the video track ending above can itself finalize the audio recorders; either
-          // way, wait for their own `stop` event so the last chunk is queued before finish
-          await Promise.all([s.micStopped, s.systemStopped])
+          // the video track ending above can itself finalize the mic recorder; either way,
+          // wait for its own `stop` event so the last chunk is queued before finish
+          await s.micStopped
           await drainChain(s)
           if (s.cancelled) {
             await window.zc.recording.cancel(recordingId)
@@ -422,8 +386,15 @@ export function useRecorder(
             return
           }
           setPhase('processing')
-          const project = await window.zc.recording.finish(recordingId)
+          const { project, warnings } = await window.zc.recording.finish(recordingId)
           setPhase('idle')
+          if (warnings.includes('systemAudio')) {
+            // An earlier mic-failure notice (set above, before recording even started) must
+            // survive this: append rather than replace, so neither warning gets silently dropped.
+            const existing = useStore.getState().notice
+            const text = t('audio.systemAudioFailed')
+            useStore.getState().setNotice(existing ? `${existing} ${text}` : text)
+          }
           onDoneRef.current(project)
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err))
@@ -456,12 +427,7 @@ export function useRecorder(
         s.micStopped = waitStopped(s.micRecorder)
         meta.mic = { startWall: audioWall }
       }
-      if (s.systemRecorder) {
-        s.systemRecorder.start(1000)
-        s.systemStopped = waitStopped(s.systemRecorder)
-        meta.system = { startWall: audioWall }
-      }
-      if (meta.mic || meta.system) audioStartMeta = meta
+      if (meta.mic) audioStartMeta = meta
     },
     [stop, discard, resolvePendingAbort]
   )

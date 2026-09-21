@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt, truncateCaption } from './format'
-import type { AudioCaptureOptions, ScenarioClickAction, ScenarioModifiers, ScenarioShot } from '@shared/types'
+import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt, isSpanAction, spanLabel, spanWidthPx, truncateCaption } from './format'
+import type {
+  AudioCaptureOptions,
+  ScenarioClickAction,
+  ScenarioDragAction,
+  ScenarioModifiers,
+  ScenarioScrollAction,
+  ScenarioShot,
+  ScenarioTypeAction
+} from '@shared/types'
 
 const NO_MODS: ScenarioModifiers = { ctrl: false, shift: false, alt: false, meta: false }
 function click(id: string, at: number): ScenarioClickAction {
   return { id, kind: 'click', at, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null }
+}
+function typeAction(text: string, durationMs: number): ScenarioTypeAction {
+  return { id: 't', kind: 'type', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, text, durationMs }
+}
+function dragAction(durationMs: number): ScenarioDragAction {
+  return { id: 'd', kind: 'drag', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, toX: 10, toY: 10, dragPath: [], durationMs }
+}
+function scrollAction(deltaY: number, durationMs: number): ScenarioScrollAction {
+  return { id: 's', kind: 'scroll', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, deltaY, deltaX: 0, durationMs }
 }
 
 describe('formatMinSec', () => {
@@ -139,5 +156,57 @@ describe('truncateCaption', () => {
     const out = truncateCaption(text, 41)
     expect(out).toBe(emoji.repeat(41) + '…')
     expect([...out].length).toBe(42) // 41 whole emoji + 1 ellipsis, iterated by code point
+  })
+})
+
+describe('isSpanAction', () => {
+  it('is true for type/drag/scroll actions with a duration over 100ms', () => {
+    expect(isSpanAction(typeAction('hi', 150))).toBe(true)
+    expect(isSpanAction(dragAction(150))).toBe(true)
+    expect(isSpanAction(scrollAction(1, 150))).toBe(true)
+  })
+
+  it('is false for a type/drag/scroll action at or under the 100ms threshold', () => {
+    expect(isSpanAction(typeAction('h', 100))).toBe(false)
+  })
+
+  it('is always false for click/doubleClick/rightClick/middleClick/key, whatever their nominal duration', () => {
+    expect(isSpanAction(click('a', 0))).toBe(false) // 70ms, under the threshold anyway
+    expect(isSpanAction({ ...click('a', 0), kind: 'doubleClick' })).toBe(false) // 250ms, but not a span kind
+  })
+
+  it('uses the effective (floor-clamped) duration for a drag/scroll, not the raw recorded one', () => {
+    // raw durationMs (10ms) is under the threshold, but effectiveDuration floors a drag to 200ms
+    expect(isSpanAction(dragAction(10))).toBe(true)
+    // 5 notches floor a scroll to (5-1)*40 = 160ms, over the threshold despite a 0ms recording
+    expect(isSpanAction(scrollAction(5, 0))).toBe(true)
+  })
+})
+
+describe('spanLabel', () => {
+  it('is the truncated typed text for a type action', () => {
+    const text = 'x'.repeat(40)
+    expect(spanLabel(typeAction(text, 1000))).toBe(truncateCaption(text, 24))
+  })
+
+  it('is null for drag/scroll and any point-marker kind', () => {
+    expect(spanLabel(dragAction(300))).toBeNull()
+    expect(spanLabel(scrollAction(3, 300))).toBeNull()
+    expect(spanLabel(click('a', 0))).toBeNull()
+  })
+})
+
+describe('spanWidthPx', () => {
+  it("scales with the action's effective duration and the timeline's scale", () => {
+    expect(spanWidthPx(typeAction('hi', 1000), 0.1)).toBe(100) // 1000ms * 0.1px/ms
+  })
+
+  it('never goes below the minimum visual width, even for a barely-qualifying span at a tiny scale', () => {
+    expect(spanWidthPx(typeAction('hi', 101), 0.01)).toBe(20) // 101*0.01=1.01px, floored to 20
+  })
+
+  it("uses effectiveDuration, so a fast drag's span is as wide as it will actually replay", () => {
+    // effectiveDuration floors this drag to 200ms, not its recorded 10ms
+    expect(spanWidthPx(dragAction(10), 1)).toBe(200)
   })
 })

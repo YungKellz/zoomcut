@@ -1,0 +1,8 @@
+[
+  { "id": "happy-whistling-ukulele", "title": "Happy Whistling Ukulele", "artist": "Rafael Krux", "mood": "upbeat", "file": "happy-whistling-ukulele.m4a", "durationMs": 123320 },
+  { "id": "inspiration", "title": "Inspiration", "artist": "Rafael Krux", "mood": "corporate", "file": "inspiration.m4a", "durationMs": 138370 },
+  { "id": "city-sunshine", "title": "City Sunshine", "artist": "Kevin MacLeod", "mood": "bright", "file": "city-sunshine.m4a", "durationMs": 185000 },
+  { "id": "study-and-relax", "title": "Study and Relax", "artist": "Kevin MacLeod", "mood": "lofi", "file": "study-and-relax.m4a", "durationMs": 223400 },
+  { "id": "lovely-piano-song", "title": "Lovely Piano Song", "artist": "Rafael Krux", "mood": "calm", "file": "lovely-piano-song.m4a", "durationMs": 95870 },
+  { "id": "ambient-bongos", "title": "Ambient Bongos", "artist": "Alexander Nakarada", "mood": "minimal", "file": "ambient-bongos.m4a", "durationMs": 87640 }
+]

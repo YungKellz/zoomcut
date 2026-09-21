@@ -7,7 +7,6 @@ import {
   AudioLines,
   Crosshair,
   Crop,
-  FileAudio,
   Loader2,
   Mic,
   MousePointer2,
@@ -25,7 +24,7 @@ import {
   X,
   ZoomIn
 } from 'lucide-react'
-import type { AudioClip, TextOverlay, ZoomSegment } from '@shared/types'
+import type { AudioClip, MusicTrack, TextOverlay, ZoomSegment } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE, GRADIENT_PRESETS } from '@shared/defaults'
 import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
@@ -35,10 +34,9 @@ import { findZoom } from '../engine/camera'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
-import { MUSIC_PRESETS, audioBufferToWav, renderMusic, type MusicPresetId } from '../audio/music'
-import { en } from '../i18n/en'
+import { clipIcon, clipLabel } from '../audio/clipLabel'
 import { formatElapsed, formatTimecode } from '../util/format'
-import { useT, type Translate } from '../i18n'
+import { useT, type Translate, type TKey } from '../i18n'
 
 type Tab = 'clip' | 'zoom' | 'text' | 'audio' | 'cursor' | 'style'
 
@@ -443,35 +441,6 @@ function TextPanel({ t }: PanelProps): JSX.Element {
 
 // ---- audio panel ----
 
-function audioClipIcon(kind: AudioClip['kind']): JSX.Element {
-  switch (kind) {
-    case 'system':
-      return <Volume2 size={14} />
-    case 'mic':
-    case 'voiceover':
-      return <Mic size={14} />
-    case 'music':
-      return <Music size={14} />
-    case 'file':
-      return <FileAudio size={14} />
-  }
-}
-
-// main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio)
-// and voiceover/music clips store an English name too (see VoiceoverRecorder/MusicAndFilePicker
-// below); the UI always shows the translated kind/preset name for those, and the clip's own
-// name otherwise (a file import, or a music clip whose preset id is no longer known)
-function audioClipLabel(t: Translate, clip: AudioClip): string {
-  if (clip.kind === 'system') return t('audio.kind.system')
-  if (clip.kind === 'mic') return t('audio.kind.mic')
-  if (clip.kind === 'voiceover') return t('audio.kind.voiceover')
-  if (clip.kind === 'music' && clip.preset) {
-    const preset = MUSIC_PRESETS.find((p) => p.id === clip.preset)
-    if (preset) return t(preset.nameKey)
-  }
-  return clip.name
-}
-
 interface VoiceoverSession {
   recorder: MediaRecorder
   stream: MediaStream
@@ -555,7 +524,7 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
         try {
           const blob = new Blob(chunks, { type: 'audio/webm' })
           const data = await blob.arrayBuffer()
-          const name = 'Voiceover' // English in data, like "System audio" / "Microphone"; UI translates via audioClipLabel
+          const name = 'Voiceover' // English in data, like "System audio" / "Microphone"; UI translates via clipLabel
           const result = await window.zc.audio.importClip(project.id, { kind: 'voiceover', name, ext: 'webm', data })
           addAudioClip({
             id: uid('audio'),
@@ -740,130 +709,133 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
   )
 }
 
-const PREVIEW_SECONDS = 8
+// translated mood tag shown next to each library track - a Record (not a template-literal key)
+// so a typo here is a compile error instead of a silently-missing translation
+const MOOD_KEYS: Record<MusicTrack['mood'], TKey> = {
+  upbeat: 'music.mood.upbeat',
+  corporate: 'music.mood.corporate',
+  bright: 'music.mood.bright',
+  lofi: 'music.mood.lofi',
+  calm: 'music.mood.calm',
+  minimal: 'music.mood.minimal'
+}
 
-/** "Add music" preset chooser + "Add audio file…" – both add an overlay AudioClip via
- * window.zc.audio.importClip / importFile. */
+// preview clips play at most this long, even for a multi-minute track (see togglePreview)
+const PREVIEW_MS = 8000
+// a music bed defaults to 35% (see useTrack's addAudioClip below) so it sits under narration
+// instead of competing with it - the preview plays at the same level, so "Preview" previews
+// what you are actually about to add, not a full-volume version of it
+const MUSIC_CLIP_VOLUME = 0.35
+
+/** "Add music" library chooser + "Add audio file…" – the former lists the bundled CC0 tracks
+ * (window.zc.audio.listMusic) and copies the picked one into the project on "Use"
+ * (window.zc.audio.importMusic); the latter adds an overlay AudioClip from a user-picked file
+ * via window.zc.audio.importFile. */
 function MusicAndFilePicker({ t }: PanelProps): JSX.Element {
   const project = useProject()
   const addAudioClip = useStore((s) => s.addAudioClip)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [rendering, setRendering] = useState<MusicPresetId | null>(null)
-  // "loading" = rendering audio for the preview specifically (spinner); "previewing" = a
-  // rendered preview is actually playing (stop icon) – two states because renderMusic() can
-  // take a moment and the button must show that it is busy, not just Play/Stop
-  const [previewLoading, setPreviewLoading] = useState<MusicPresetId | null>(null)
-  const [previewing, setPreviewing] = useState<MusicPresetId | null>(null)
+  const [tracks, setTracks] = useState<MusicTrack[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [importingId, setImportingId] = useState<string | null>(null)
+  const [previewingId, setPreviewingId] = useState<string | null>(null)
   const [fileImporting, setFileImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const previewRef = useRef<{ ctx: AudioContext; source: AudioBufferSourceNode } | null>(null)
-  // bumped by every stopPreview()/playPreview() call; playPreview checks it after the await so
-  // a stop clicked while renderMusic() is still running (previewRef isn't set yet at that point)
-  // actually cancels the preview instead of being silently swallowed
-  const previewGenRef = useRef(0)
-  // renderMusic() is deterministic per preset id, so the same render is reused between a
-  // preview and a "Use" click (and between repeated previews) instead of recomputing it
-  const bufferCacheRef = useRef(new Map<MusicPresetId, Promise<AudioBuffer>>())
+  const previewRef = useRef<HTMLAudioElement | null>(null)
+  const previewTimerRef = useRef<number | null>(null)
   // guards "Add audio file…" against a double-click opening two native dialogs at once
   const fileImportBusyRef = useRef(false)
 
-  const getRenderedBuffer = useCallback((id: MusicPresetId): Promise<AudioBuffer> => {
-    let pending = bufferCacheRef.current.get(id)
-    if (!pending) {
-      pending = renderMusic(id)
-      bufferCacheRef.current.set(id, pending)
-      // a failed render must not poison the cache forever – let a later click retry
-      pending.catch(() => bufferCacheRef.current.delete(id))
+  // fetch the library once, the first time the picker actually opens (it never changes at
+  // runtime - it is bundled with the app - so there is no reason to refetch on every open)
+  useEffect(() => {
+    if (!pickerOpen || tracks !== null) return
+    let cancelled = false
+    void window.zc.audio
+      .listMusic()
+      .then((list) => {
+        if (!cancelled) setTracks(list)
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
     }
-    return pending
-  }, [])
+  }, [pickerOpen, tracks])
 
   const stopPreview = useCallback(() => {
-    previewGenRef.current++
-    setPreviewLoading(null)
-    const p = previewRef.current
-    previewRef.current = null
-    setPreviewing(null)
-    if (!p) return
-    p.source.onended = null
-    try {
-      p.source.stop()
-    } catch {
-      // already stopped
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current)
+      previewTimerRef.current = null
     }
-    void p.ctx.close().catch(() => undefined)
+    const el = previewRef.current
+    previewRef.current = null
+    if (el) {
+      el.pause()
+      el.src = ''
+    }
+    setPreviewingId(null)
   }, [])
 
-  // stop a running preview when the panel goes away (tab switch, project close)
+  // stop a running preview when the panel goes away (tab switch, project close) or the chooser closes
   useEffect(() => stopPreview, [stopPreview])
+  useEffect(() => {
+    if (!pickerOpen) stopPreview()
+  }, [pickerOpen, stopPreview])
 
-  const playPreview = useCallback(
-    async (id: MusicPresetId) => {
+  const togglePreview = useCallback(
+    (track: MusicTrack) => {
+      if (previewingId === track.id) {
+        stopPreview()
+        return
+      }
       stopPreview()
       setError(null)
-      setPreviewLoading(id)
-      const gen = ++previewGenRef.current
-      let ctx: AudioContext | null = null
-      try {
-        const buffer = await getRenderedBuffer(id)
-        if (previewGenRef.current !== gen) return // stopped (or superseded) while rendering
-        ctx = new AudioContext()
-        const source = ctx.createBufferSource()
-        source.buffer = buffer
-        source.connect(ctx.destination)
-        source.onended = () => {
-          if (previewRef.current?.source === source) stopPreview()
-        }
-        source.start(0, 0, PREVIEW_SECONDS)
-        previewRef.current = { ctx, source }
-        setPreviewLoading(null)
-        setPreviewing(id)
-      } catch (err) {
-        if (previewGenRef.current === gen) {
-          setPreviewLoading(null)
-          setPreviewing(null)
-          setError(err instanceof Error ? err.message : String(err))
-        }
-        void ctx?.close().catch(() => undefined)
-      }
+      // a plain HTMLAudioElement (not rendered in the tree) is enough - only one plays at a
+      // time (stopPreview() above always tears down the previous one first) and nothing here
+      // needs to be part of the React tree
+      const el = new Audio(window.zc.media.url(track.path))
+      el.volume = MUSIC_CLIP_VOLUME
+      el.addEventListener('ended', () => stopPreview())
+      previewRef.current = el
+      setPreviewingId(track.id)
+      previewTimerRef.current = window.setTimeout(stopPreview, PREVIEW_MS)
+      void el.play().catch((err) => {
+        setError(err instanceof Error ? err.message : String(err))
+        stopPreview()
+      })
     },
-    [getRenderedBuffer, stopPreview]
+    [previewingId, stopPreview]
   )
 
-  const usePreset = useCallback(
-    async (id: MusicPresetId) => {
+  const useTrack = useCallback(
+    async (track: MusicTrack) => {
       stopPreview()
       setError(null)
-      setRendering(id)
+      setImportingId(track.id)
       try {
-        const preset = MUSIC_PRESETS.find((p) => p.id === id)
-        if (!preset) return
-        const buffer = await getRenderedBuffer(id)
-        const wav = audioBufferToWav(buffer)
-        // English in data, like "System audio" / "Microphone" / "Voiceover"; the UI always
-        // shows the translated preset name via audioClipLabel (looked up from clip.preset)
-        const name = en[preset.nameKey]
-        const result = await window.zc.audio.importClip(project.id, { kind: 'music', name, ext: 'wav', data: wav })
+        const result = await window.zc.audio.importMusic(project.id, track.id)
         addAudioClip({
           id: uid('audio'),
           kind: 'music',
           file: result.file,
-          name,
+          name: track.title,
           start: 0,
           durationMs: result.durationMs,
-          preset: id,
+          preset: track.id,
           ...newAudioClipDefaults('music'),
-          volume: 0.35,
+          volume: MUSIC_CLIP_VOLUME,
           fadeOutMs: 1500
         })
         setPickerOpen(false)
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
-        setRendering(null)
+        setImportingId(null)
       }
     },
-    [addAudioClip, getRenderedBuffer, project.id, stopPreview]
+    [addAudioClip, project.id, stopPreview]
   )
 
   const addFile = useCallback(async () => {
@@ -910,45 +882,37 @@ function MusicAndFilePicker({ t }: PanelProps): JSX.Element {
       )}
       {pickerOpen && (
         <div className="music-presets">
-          {MUSIC_PRESETS.map((preset) => (
-            <div key={preset.id} className="music-preset">
+          {tracks === null && !loadError && <p className="muted small">{t('audio.musicLoading')}</p>}
+          {loadError && (
+            <div className="error-box">
+              <strong>{t('audio.musicLoadError')}</strong> {loadError}
+            </div>
+          )}
+          {tracks?.map((track) => (
+            <div key={track.id} className="music-preset">
               <div className="music-preset-info">
-                <strong>{t(preset.nameKey)}</strong>
-                <span className="muted small">{t(preset.descriptionKey)}</span>
-                <span className="muted small">{preset.bpm} BPM</span>
+                <strong>{track.title}</strong>
+                <span className="muted small">
+                  {track.artist} · {t(MOOD_KEYS[track.mood])} · {formatElapsed(track.durationMs)}
+                </span>
               </div>
               <div className="music-preset-actions">
-                <button
-                  className="btn btn-ghost btn-small"
-                  title={t('audio.preview')}
-                  onClick={() => (previewing === preset.id || previewLoading === preset.id ? stopPreview() : void playPreview(preset.id))}
-                >
-                  {previewLoading === preset.id ? (
-                    <Loader2 size={14} className="spin" />
-                  ) : previewing === preset.id ? (
-                    <Square size={14} />
-                  ) : (
-                    <Play size={14} />
-                  )}
+                <button className="btn btn-ghost btn-small" title={t('audio.preview')} onClick={() => togglePreview(track)}>
+                  {previewingId === track.id ? <Square size={14} /> : <Play size={14} />}
                 </button>
                 <button
                   className="btn btn-small btn-primary btn-use-preset"
-                  disabled={rendering !== null}
-                  onClick={() => void usePreset(preset.id)}
+                  disabled={importingId !== null}
+                  onClick={() => void useTrack(track)}
                 >
-                  {rendering === preset.id ? <Loader2 size={14} className="spin" /> : null}
+                  {importingId === track.id ? <Loader2 size={14} className="spin" /> : null}
                   {t('audio.usePreset')}
                 </button>
               </div>
             </div>
           ))}
-          <button
-            className="btn btn-ghost btn-small music-presets-close"
-            onClick={() => {
-              stopPreview()
-              setPickerOpen(false)
-            }}
-          >
+          {tracks && tracks.length > 0 && <p className="muted small music-license-note">{t('audio.musicLicense')}</p>}
+          <button className="btn btn-ghost btn-small music-presets-close" onClick={() => setPickerOpen(false)}>
             <X size={14} /> {t('common.close')}
           </button>
         </div>
@@ -980,8 +944,8 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
           {project.audio.map((c) => (
             <li key={c.id} className={'list-item' + (clip?.id === c.id ? ' active' : '')}>
               <button className="list-main audio-list-item" onClick={() => select({ kind: 'audio', id: c.id })}>
-                {audioClipIcon(c.kind)}
-                <span className={c.muted ? 'muted' : ''}>{audioClipLabel(t, c)}</span>
+                {clipIcon(c.kind)}
+                <span className={c.muted ? 'muted' : ''}>{clipLabel(t, c)}</span>
                 {audioErrors[c.id] && (
                   <span className="audio-warn" title={t('audio.fileMissing')}>
                     <AlertTriangle size={13} />
@@ -1002,11 +966,11 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
       {clip && (
         <>
           <h3>{t('audio.selected')}</h3>
-          {!isRecordedClip(clip) && (
-            <Field label={t('audio.name')}>
-              <input type="text" value={clip.name} onFocus={checkpoint} onChange={(e) => updateAudioClip(clip.id, { name: e.target.value }, false)} />
-            </Field>
-          )}
+          {/* every kind is renamable, including system/mic - clipLabel shows the custom name
+              once it differs from the kind's default English name, in every language */}
+          <Field label={t('audio.name')}>
+            <input type="text" value={clip.name} onFocus={checkpoint} onChange={(e) => updateAudioClip(clip.id, { name: e.target.value }, false)} />
+          </Field>
           <Slider
             label={t('audio.volume')}
             value={clip.volume}

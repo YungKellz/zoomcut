@@ -116,7 +116,15 @@ test('captures clicks, typing and scrolling into a reviewable scenario', async (
 
   const kinds = await h.win.locator('.scenario-action').evaluateAll((els) => els.map((e) => e.getAttribute('data-kind')))
   console.log('[capture] actions:', JSON.stringify(kinds))
-  expect(kinds).toEqual(['click', 'click', 'click', 'type', 'scroll'])
+  const expected = ['click', 'click', 'click', 'type', 'scroll']
+  if (kinds.length !== expected.length) {
+    // the capture hooks the whole machine: any real mouse/keyboard activity during these seconds lands in the scenario
+    throw new Error(
+      `captured ${kinds.length} actions instead of ${expected.length} (${JSON.stringify(kinds)}): ` +
+        'someone used the mouse or keyboard while the capture ran – rerun this spec on an idle machine'
+    )
+  }
+  expect(kinds).toEqual(expected)
   await expect(h.win.locator('.scenario-marker')).toHaveCount(5)
   expect(await h.win.locator('.scenario-action img').count()).toBeGreaterThanOrEqual(3)
   await expect(h.win.locator('.scenario-total')).not.toHaveClass(/over/)

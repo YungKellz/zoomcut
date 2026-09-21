@@ -2,14 +2,15 @@ import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { AudioClip, TextOverlay } from '@shared/types'
-import { isRecordedClip } from '@shared/audio'
+import type { TextOverlay } from '@shared/types'
+import { audioClipPath, isRecordedClip } from '@shared/audio'
 import { useProject, useStore } from '../store'
 import { keepSegments, outToSrc, outputDuration, srcToOut } from '../engine/timeline'
 import { useThumbnails } from '../hooks/useThumbnails'
-import { MUSIC_PRESETS } from '../audio/music'
+import { clipIcon, clipLabel } from '../audio/clipLabel'
+import { AudioWaveform } from './AudioWaveform'
 import { clamp, formatTimecode } from '../util/format'
-import { useT, type Translate } from '../i18n'
+import { useT } from '../i18n'
 
 const TICK_STEPS = [100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000]
 const END_PAD_PX = 56
@@ -36,13 +37,18 @@ interface RegionProps {
    * whenever the region currently spans the full width, making it undraggable.
    */
   moveMax?: number
+  /** shown before the label inside the (sticky) label span, e.g. the audio kind icon */
+  icon?: JSX.Element
+  /** extra content painted behind the label, filling the region - the selected audio clip's
+   * waveform (AudioWaveform); undefined for every other region kind. */
+  overlay?: React.ReactNode
   onSelect: () => void
   onBegin: () => void
   onChange: (start: number, end: number) => void
 }
 
 function Region(props: RegionProps): JSX.Element {
-  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, resizable = true, moveMax, onSelect, onBegin, onChange } = props
+  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, resizable = true, moveMax, icon, overlay, onSelect, onBegin, onChange } = props
 
   const begin = (kind: 'move' | 'l' | 'r') => (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -82,25 +88,16 @@ function Region(props: RegionProps): JSX.Element {
       title={`${formatTimecode(start)} – ${formatTimecode(end)}`}
     >
       {resizable && <div className="region-handle l" onPointerDown={begin('l')} />}
-      <span className="region-label">{label}</span>
+      {overlay}
+      {/* chip background only when a waveform is actually painted underneath (`overlay` set) -
+          an unselected/plain region keeps its current look, nothing extra to read through */}
+      <span className={'region-label' + (overlay ? ' chip' : '')}>
+        {icon}
+        {label}
+      </span>
       {resizable && <div className="region-handle r" onPointerDown={begin('r')} />}
     </div>
   )
-}
-
-/** main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio)
- * and voiceover/music clips store an English name too (see the Audio panel); the timeline
- * always shows the translated kind/preset name for those, and the clip's own name otherwise
- * (a file import, or a music clip whose preset id is no longer a known preset). */
-function audioClipLabel(t: Translate, clip: AudioClip): string {
-  if (clip.kind === 'system') return t('audio.kind.system')
-  if (clip.kind === 'mic') return t('audio.kind.mic')
-  if (clip.kind === 'voiceover') return t('audio.kind.voiceover')
-  if (clip.kind === 'music' && clip.preset) {
-    const preset = MUSIC_PRESETS.find((p) => p.id === clip.preset)
-    if (preset) return t(preset.nameKey)
-  }
-  return clip.name
 }
 
 function assignLanes<T extends { id: string; start: number; end: number }>(items: T[]): Map<string, number> {
@@ -439,6 +436,7 @@ export function Timeline(): JSX.Element {
                 const lane = audioLanes.get(clip.id) ?? 0
                 const muted = clip.muted || clip.volume <= 0
                 const selected = selection?.kind === 'audio' && selection.id === clip.id
+                const url = window.zc.media.url(audioClipPath(project, clip))
                 if (isRecordedClip(clip)) {
                   // recorded (system/mic) clips follow the video through cuts, which can split
                   // them into several pieces – too fiddly to draw exactly, so this is a simple
@@ -449,9 +447,13 @@ export function Timeline(): JSX.Element {
                         className={'region audio recorded' + (muted ? ' muted' : '') + (selected ? ' selected' : '')}
                         style={{ left: 0, width: Math.max(4, outDur * pxPerMs) }}
                         onClick={() => select({ kind: 'audio', id: clip.id })}
-                        title={audioClipLabel(t, clip)}
+                        title={clipLabel(t, clip)}
                       >
-                        <span className="region-label">{audioClipLabel(t, clip)}</span>
+                        {selected && <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} />}
+                        <span className={'region-label' + (selected ? ' chip' : '')}>
+                          {clipIcon(clip.kind)}
+                          {clipLabel(t, clip)}
+                        </span>
                       </div>
                     </div>
                   )
@@ -470,7 +472,9 @@ export function Timeline(): JSX.Element {
                       // would be truncated by the output end
                       moveMax={clip.loop ? outDur : Math.max(0, outDur - clip.durationMs)}
                       className={'audio' + (muted ? ' muted' : '')}
-                      label={audioClipLabel(t, clip)}
+                      label={clipLabel(t, clip)}
+                      icon={clipIcon(clip.kind)}
+                      overlay={selected ? <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} /> : undefined}
                       selected={selected}
                       resizable={false}
                       onSelect={() => select({ kind: 'audio', id: clip.id })}

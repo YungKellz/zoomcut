@@ -5,7 +5,7 @@ import type { ScenarioAction } from '@shared/types'
 import { SCENARIO_MAX_MS } from '@shared/defaults'
 import { actionEnd, scenarioEnd } from '@shared/scenario'
 import { KIND_ICON } from '../scenario/kindMeta'
-import { formatMinSec } from '../scenario/format'
+import { formatMinSec, isSpanAction, spanLabel, spanWidthPx } from '../scenario/format'
 import { useT } from '../i18n'
 
 // Same small "pick the coarsest step whose pixel spacing clears a threshold" pattern as
@@ -101,6 +101,8 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
   const { action, pxPerMs, pxPerMsRef, selected, onSelect, onRetime } = props
   const Icon = KIND_ICON[action.kind]
   const over = actionEnd(action) > SCENARIO_MAX_MS
+  const span = isSpanAction(action)
+  const label = span ? spanLabel(action) : null
 
   const down = (e: React.PointerEvent<HTMLButtonElement>): void => {
     e.stopPropagation()
@@ -109,6 +111,10 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
     if (!track) return
     el.setPointerCapture(e.pointerId)
     const startX = e.clientX
+    // how far past the marker/span's own `left` (action.at * pxPerMs) the pointer grabbed it, in
+    // px - subtracted on every move so a wide span tracks the cursor from wherever it was
+    // grabbed instead of snapping its left edge to the pointer the instant the drag starts
+    const grabOffsetPx = startX - track.getBoundingClientRect().left - action.at * pxPerMs
     let moved = false
 
     const move = (ev: PointerEvent): void => {
@@ -116,7 +122,7 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
       moved = true
       const rect = track.getBoundingClientRect()
       // read the LATEST scale, not the one captured when the drag began (see pxPerMsRef above)
-      const at = (ev.clientX - rect.left) / pxPerMsRef.current
+      const at = (ev.clientX - rect.left - grabOffsetPx) / pxPerMsRef.current
       onRetime(action.id, at, ev.shiftKey)
     }
     // pointerup ends a normal drag; pointercancel/lostpointercapture cover the OS taking the
@@ -135,16 +141,14 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
     el.addEventListener('lostpointercapture', end, { once: true })
   }
 
+  const className = 'scenario-marker' + (span ? ' scenario-marker-span' : '') + (selected ? ' selected' : '') + (over ? ' over' : '')
+  const style = span ? { left: action.at * pxPerMs, width: spanWidthPx(action, pxPerMs) } : { left: action.at * pxPerMs }
+  const title = span ? `${formatMinSec(action.at)} – ${formatMinSec(actionEnd(action))}` : formatMinSec(action.at)
+
   return (
-    <button
-      type="button"
-      className={'scenario-marker' + (selected ? ' selected' : '') + (over ? ' over' : '')}
-      data-id={action.id}
-      style={{ left: action.at * pxPerMs }}
-      onPointerDown={down}
-      title={formatMinSec(action.at)}
-    >
+    <button type="button" className={className} data-id={action.id} style={style} onPointerDown={down} title={title}>
       <Icon size={12} />
+      {label && <span className="scenario-marker-label">{label}</span>}
     </button>
   )
 }

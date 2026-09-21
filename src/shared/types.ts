@@ -217,8 +217,10 @@ export interface RecordingStartMeta {
   width: number
   height: number
   fps: number
-  /** wall-clock time each audio MediaRecorder started, for turning it into a clip offset */
-  audio?: { mic?: { startWall: number }; system?: { startWall: number } }
+  /** wall-clock time the mic MediaRecorder started, for turning it into a clip offset. System
+   * audio has no entry here: its own helper (src/main/audio/loopback.ts) is started by
+   * RecordingController.prepare() and main reads its startWall directly in started(). */
+  audio?: { mic?: { startWall: number } }
 }
 
 export type RecordingPhase = 'idle' | 'countdown' | 'recording' | 'processing' | 'scenario'
@@ -313,8 +315,15 @@ export interface UpdateState {
 
 export type AudioClipKind = 'system' | 'mic' | 'voiceover' | 'music' | 'file'
 
-/** Which raw audio channel a captured chunk belongs to (recording:audio-chunk). */
-export type AudioTrackKind = 'mic' | 'system'
+/** Which raw audio channel a captured chunk belongs to (recording:audio-chunk). Mic only: system
+ * audio is captured directly by main through its own WASAPI loopback helper
+ * (src/main/audio/loopback.ts), never chunked over IPC. */
+export type AudioTrackKind = 'mic'
+
+/** Non-fatal problems recording.finish() reports alongside the finished project - degraded
+ * results the recording still succeeded despite (contrast with a rejected finish(), which means
+ * the recording itself failed). */
+export type RecordingWarning = 'systemAudio'
 
 export interface AudioClip {
   id: string
@@ -336,7 +345,9 @@ export interface AudioClip {
   loop: boolean
   fadeInMs: number
   fadeOutMs: number
-  /** id of the generated music preset, when kind === 'music' */
+  /** id of the bundled library track (resources/music/manifest.json), when kind === 'music' –
+   * an older project can carry an id from the removed procedural presets; nothing reads this
+   * back except as a display fallback (see clipLabel in src/renderer/src/audio/clipLabel.tsx). */
   preset?: string
 }
 
@@ -344,6 +355,22 @@ export interface AudioCaptureOptions {
   mic: boolean
   micDeviceId: string | null
   system: boolean
+}
+
+/** Mood tag on a bundled library track (resources/music/manifest.json), shown translated in the
+ * "Add music" picker via `music.mood.<mood>`. */
+export type MusicMood = 'upbeat' | 'corporate' | 'bright' | 'lofi' | 'calm' | 'minimal'
+
+/** One row of the bundled CC0 music library, returned by audio:music-list (see
+ * src/main/audio/musicLibrary.ts). `path` is the absolute file path, fed to `media.url()` for
+ * a `zc-media://` preview URL; `durationMs` is probed from the file, not trusted from the id. */
+export interface MusicTrack {
+  id: string
+  title: string
+  artist: string
+  mood: MusicMood
+  durationMs: number
+  path: string
 }
 
 /** What the renderer computes for the export (all times ms, output timeline). */
@@ -386,7 +413,9 @@ export interface ScenarioActionBase {
   /** mouse position when the action happens, DIP */
   x: number
   y: number
-  /** recorded mouse movement from the previous action to (x, y); [] = synthesize a curve at replay */
+  /** recorded mouse movement from the previous action to (x, y): recorded, currently not
+   * replayed (compileScenario in shared/scenario.ts always moves in a straight eased line
+   * instead) - kept in the data model for a possible future "as recorded" replay option */
   path: ScenarioPathPoint[]
   modifiers: ScenarioModifiers
   shot: ScenarioShot | null
@@ -410,6 +439,10 @@ export interface Scenario {
   displayBounds: Rect
   scaleFactor: number
   actions: ScenarioAction[]
+  /** cursor position, DIP, at the moment capture began (end of the countdown) - compileScenario
+   * (shared/scenario.ts) uses it as the start of the very first action's leading move; missing
+   * on a scenario captured before this field existed (falls back to no initial move). */
+  startPoint?: ScenarioPoint
   /**
    * ms; the RECORDED capture length (when Stop was pressed, ≥ last action end at that time) -
    * frozen at capture time, never updated by review-screen edits (retiming/deleting actions).
@@ -452,8 +485,9 @@ export interface OverlayEffect {
 
 /** Options for recording.prepare() / useRecorder's start(): what to capture besides the screen
  * (microphone / system audio) and, for the scenario recorder, which scenario to replay while
- * recording. Main only ever reads `scenario` - see RecordingController.prepare(), which ignores
- * `audio` entirely (the renderer captures audio itself, see useRecorder.ts). */
+ * recording. RecordingController.prepare() reads `audio.system` itself (starts the loopback
+ * helper, src/main/audio/loopback.ts) and `scenario`; the renderer still captures the microphone
+ * itself (see useRecorder.ts) and reads `audio.mic`/`audio.micDeviceId`. */
 export interface RecordOptions {
   audio?: AudioCaptureOptions
   scenario?: Scenario

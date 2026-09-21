@@ -128,8 +128,9 @@ export class ReplaySession {
 
   static async create(display: Display, scenario: Scenario, callbacks: ReplaySessionCallbacks): Promise<ReplaySession> {
     const first = scenario.actions[0]
-    const startPos: ScenarioPoint = first ? (first.path[0] ?? { x: first.x, y: first.y }) : { x: display.bounds.x, y: display.bounds.y }
-    const dipSteps = compileScenario(scenario, { leadMs: 800, startPos })
+    const startPos: ScenarioPoint =
+      scenario.startPoint ?? (first ? { x: first.x, y: first.y } : { x: display.bounds.x, y: display.bounds.y })
+    const dipSteps = compileScenario(scenario, { startPos })
     const steps = dipSteps.map(toPhysicalStep)
 
     const stamp = Date.now()

@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { type ChildProcess } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import { spawnPowerShell, writeScript } from '../psHelper'
 
 /**
  * The two PowerShell helpers used by the scenario recorder, written to disk once per launch
@@ -402,25 +403,6 @@ function keytextScriptName(): string {
 }
 function replayScriptName(): string {
   return `zoomcut-replay-${PID}.ps1`
-}
-
-async function writeScript(fileName: string, contents: string): Promise<string> {
-  const path = join(app.getPath('temp'), fileName)
-  await fsp.writeFile(path, contents, 'utf8')
-  return path
-}
-
-function spawnPowerShell(scriptPath: string, args: string[] = []): ChildProcess {
-  const proc = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
-    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
-  )
-  proc.stdin?.on('error', () => undefined)
-  // Without a listener, an 'error' event (e.g. ENOENT if powershell.exe were ever missing) is
-  // an uncaught exception in Node and takes down the whole main process.
-  proc.on('error', (err) => console.error('[scenario] failed to spawn powershell.exe', err))
-  return proc
 }
 
 /** Starts the long-running text resolver used while capturing. */

@@ -10,7 +10,7 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 | --- | --- |
 | `npm run dev` | dev app with hot reload; restart it after changes in `src/main` or `src/preload` |
 | `npm run typecheck` | main/preload/shared (`tsconfig.node.json`) and renderer (`tsconfig.json`) |
-| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine, audio export plan + ffmpeg graph, music scores, scenario engine, formatting helpers |
+| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine, formatting helpers |
 | `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window); needs a display, ~7 min |
 | `npm run dist` | installer + portable exe + `latest.yml` + `.blockmap` in `release/`; never publishes |
 
@@ -27,7 +27,10 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   both content-protected; e2e target window), `recorder/` (controller, 60 Hz cursor tracker with uiohook clicks,
   window layout snapshot via PowerShell), `media/ffmpeg.ts` (transcode, x264 MP4, two-pass GIF palettes, audio
   conversion), `media/audioGraph.ts` (pure ffmpeg filter graph for the audio mix), `media/audioImport.ts`
-  (voiceover / music / file import into the project folder, orphan sweep), `scenario/` (input capture through the
+  (voiceover / music / file import into the project folder, orphan sweep), `media/projectPaths.ts` (leaf module
+  with the project folder helpers), `audio/loopback.ts` (system audio: WASAPI loopback helper in PowerShell/C#,
+  see Gotchas), `audio/musicLibrary.ts` (the bundled CC0 tracks in `resources/music`, copied into the installer
+  as `extraResources`), `psHelper.ts` (writes/spawns the PowerShell helpers), `scenario/` (input capture through the
   shared uiohook in `hook.ts`, key-text resolver and SendInput replay helpers as PowerShell scripts in
   `inputHelper.ts`, `capture.ts`, `replay.ts`, scenario storage under `userData/scenarios/<id>/`),
   `exportManager.ts`, `storage.ts` (projects in `%USERPROFILE%\Videos\ZoomCut\<timestamp>\`, `settings.json` in
@@ -39,9 +42,10 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 - `src/renderer/src` – React app: `screens/` (Home, Editor, RecorderBar, ScenarioReview, ReplayOverlay, E2eTarget),
   `editor/` (Preview, Timeline, Inspector, ExportDialog, AudioPlayer), `engine/` (timeline math, cursor, camera,
   `compose.ts` = the single frame compositor used by both preview and export), `export/` (Mediabunny/WebCodecs or
-  raw RGBA → ffv1 path, size estimate, `audioPlan.ts`), `audio/music.ts` (procedural music presets), `scenario/`
-  (review-screen helpers), `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`), `store.ts` (zustand, lazy undo
-  checkpoints), `i18n/`, `components/`, `hooks/`.
+  raw RGBA → ffv1 path, size estimate, `audioPlan.ts`), `audio/` (`clipLabel.tsx` = the one place that names and
+  icons audio clips, `peaks.ts` = waveform peaks decoded through `zc-media://`), `editor/AudioWaveform.tsx`,
+  `scenario/` (review-screen helpers), `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`), `store.ts`
+  (zustand, lazy undo checkpoints), `i18n/`, `components/`, `hooks/`.
 - `tests/e2e` – Playwright specs and `adv-helpers.ts`; `scripts/` – icon rendering and release notes;
   `.github/workflows` – `ci.yml` (typecheck, tests, build) and `release.yml` (tag `v*` → GitHub release).
 
@@ -86,10 +90,16 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   real mouse/keyboard input (over a test window the app opens itself under `ZOOMCUT_E2E=1`) – never run it, or any
   other input-injecting check, while something else is being driven on the same screen, and open the e2e target
   window once per spec (recreating it at the same position confuses Windows' wheel routing).
-- System-audio capture (`audio: 'loopback'`) fails with `NotReadableError` on this machine even in a bare Electron
-  script (Chromium's WASAPI loopback vs. the headset); the app must keep degrading to "recorded without system
-  audio" + notice. Text typed through `KEYEVENTF_UNICODE` is invisible to the hook (keycode 0), so tests that need a
-  captured `type` action must type through scancode `key` steps; the characters then depend on the active layout.
+- System-audio capture (`audio: 'loopback'`, Chromium's own) failed with `NotReadableError` on this machine even in
+  a bare Electron script: the default playback device's shared mix format was 8 channels / 44100 Hz / 32-bit float
+  (WAVE_FORMAT_EXTENSIBLE), which Chromium's loopback does not handle even though plain WASAPI loopback on the same
+  endpoint works fine. System audio is now captured with our own PowerShell/C# WASAPI loopback helper
+  (`src/main/audio/loopback.ts`, started by `RecordingController.prepare()`) instead – the Chromium path
+  (`installDisplayMediaHandler`'s `audio: 'loopback'` branch, the renderer's system `MediaRecorder`) is gone. The
+  app still degrades to "recorded without system audio" + notice when the helper fails (no default playback
+  device, ...) – see `RecordingWarning`/`recording.finish()`'s `warnings`. Text typed through `KEYEVENTF_UNICODE` is
+  invisible to the hook (keycode 0), so tests that need a captured `type` action must type through scancode `key`
+  steps; the characters then depend on the active layout.
 - Both features append to shared files under section comments (`// ---- audio ----`, `// ---- scenario ----` in
   types/api/preload/ipc/i18n/styles); keep new keys inside the right section so the two dictionaries stay in sync.
 

@@ -5,6 +5,14 @@ import type { AppSettings, Project, ProjectSummary } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, DEFAULT_GIF_SETTINGS } from '@shared/defaults'
 import { allowMediaRoot } from './mediaProtocol'
 import { scenariosRoot } from './scenario/storage'
+import { musicDir } from './audio/musicLibrary'
+// recordingsRoot/projectDir/exists live in the leaf module media/projectPaths.ts (not defined
+// here) so audio/musicLibrary.ts and media/audioImport.ts can both depend on them without
+// recreating storage.ts -> musicLibrary.ts -> audioImport.ts -> storage.ts. Re-exported below so
+// every existing `import { projectDir } from '../storage'` elsewhere keeps working unchanged.
+import { exists, projectDir, recordingsRoot } from './media/projectPaths'
+
+export { exists, projectDir, recordingsRoot }
 
 const DEFAULT_SETTINGS: AppSettings = {
   lastExportFolder: null,
@@ -13,11 +21,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   cursorDefaults: null,
   frameDefaults: null,
   audioDefaults: null
-}
-
-export function recordingsRoot(): string {
-  // ZOOMCUT_RECORDINGS_DIR lets tests keep their recordings out of the user's Videos folder.
-  return process.env['ZOOMCUT_RECORDINGS_DIR'] || join(app.getPath('videos'), 'ZoomCut')
 }
 
 export function exportTempDir(): string {
@@ -38,6 +41,9 @@ export async function ensureDirs(): Promise<void> {
   allowMediaRoot(scenariosRoot())
   allowMediaRoot(app.getPath('userData'))
   allowMediaRoot(app.getPath('temp'))
+  // bundled read-only resource dir (dev: repo's resources/music, packaged: extraResources) –
+  // lets the "Add music" picker preview a track through zc-media:// before it is imported
+  allowMediaRoot(musicDir())
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -59,10 +65,6 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
   return next
 }
 
-export function projectDir(id: string): string {
-  return join(recordingsRoot(), id)
-}
-
 function projectFile(id: string): string {
   return join(projectDir(id), 'project.json')
 }
@@ -77,15 +79,6 @@ export async function newRecordingId(): Promise<string> {
     id = `${base}-${n++}`
   }
   return id
-}
-
-export async function exists(path: string): Promise<boolean> {
-  try {
-    await fsp.access(path)
-    return true
-  } catch {
-    return false
-  }
 }
 
 const saveQueues = new Map<string, Promise<void>>()

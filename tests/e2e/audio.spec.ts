@@ -79,14 +79,18 @@ test('recording with microphone and system audio enabled yields audio clips or a
   // either the sources were captured, or the app explains why not – silently dropping them is a bug
   expect(clips.length > 0 || noticeVisible, 'no audio clip and no notice after recording with audio enabled').toBe(true)
   const files = readdirSync(join(h.recordingsDir, projectId))
-  expect(files.filter((f) => f.endsWith('.webm')), 'raw audio files must be converted and removed').toEqual([])
+  // .webm: the mic's raw MediaRecorder output; .raw: the system-audio loopback helper's raw
+  // interleaved samples (src/main/audio/loopback.ts) - both are deleted once finish() converts them
+  expect(files.filter((f) => f.endsWith('.webm') || f.endsWith('.raw')), 'raw audio files must be converted and removed').toEqual([])
   for (const c of clips) {
     expect(['mic', 'system']).toContain(c.kind)
     expect(c.file.endsWith('.m4a')).toBe(true)
     expect(existsSync(join(h.recordingsDir, projectId, c.file))).toBe(true)
     expect(c.durationMs).toBeGreaterThan(1000)
-    // recorded clips sit at (or a little before) the first video frame
-    expect(Math.abs(c.start)).toBeLessThan(2000)
+    // recorded clips start at (or before) the first video frame: the mic recorder a moment before it,
+    // the system loopback helper already during the 3.2 s countdown
+    expect(c.start).toBeLessThanOrEqual(0)
+    expect(c.start).toBeGreaterThan(c.kind === 'system' ? -8000 : -2000)
   }
   if (noticeVisible) await h.win.click('.notice-bar .btn-ghost')
 
@@ -99,7 +103,7 @@ test('a music preset adds a looping clip on the timeline; undo and redo keep its
   await h.win.click('.tab:has-text("Audio")')
   const before = await h.win.locator('.audio-list .list-item').count()
   await h.win.click('.btn-add-music')
-  await expect(h.win.locator('.music-presets .music-preset')).toHaveCount(5)
+  await expect(h.win.locator('.music-presets .music-preset')).toHaveCount(6)
   await h.win.screenshot({ path: join(h.shotsDir, 'music-presets.png') })
   await h.win.locator('.btn-use-preset').first().click()
   await expect(h.win.locator('.audio-list .list-item')).toHaveCount(before + 1, { timeout: 90_000 })
@@ -180,7 +184,9 @@ test('a deleted clip keeps its file until the editor closes, then the orphan is 
   const music = clipsBefore.find((c) => c.kind === 'music')
   expect(music).toBeTruthy()
   const musicFile = join(h.recordingsDir, projectId, music!.file)
-  const row = h.win.locator('.audio-list .list-item').filter({ hasText: /calm|Calm|Спокой/ }).first()
+  // the previous test always picks the first row of the library chooser (manifest order),
+  // which is "Happy Whistling Ukulele" - see resources/music/manifest.json
+  const row = h.win.locator('.audio-list .list-item').filter({ hasText: 'Happy Whistling Ukulele' }).first()
   await row.locator('.btn-ghost.danger').click()
   await expect(h.win.locator('.audio-list .list-item')).toHaveCount(clipsBefore.length - 1)
   await sleep(1100)

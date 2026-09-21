@@ -3,9 +3,16 @@
  * Kept free of React and Electron so they are plain-unit-testable (format.test.ts).
  */
 import type { AudioCaptureOptions, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
-import { actionEnd, graphemes } from '@shared/scenario'
+import { actionEnd, effectiveDuration, graphemes } from '@shared/scenario'
 import { clamp } from '../util/format'
 import type { TKey } from '../i18n'
+
+/** Below this, a type/drag/scroll action is short enough to stay a point marker on the scenario
+ * review timeline. */
+const SPAN_MIN_DURATION_MS = 100
+/** Minimum visual width of a span marker, px - wide enough that its 12px kind icon (plus the
+ * span's own padding) is never clipped. */
+const SPAN_MIN_WIDTH_PX = 20
 
 /** "m:ss" (no leading zero on minutes, no fractional seconds) - the scenario total, e.g. "1:23 / 10:00". */
 export function formatMinSec(ms: number): string {
@@ -68,4 +75,24 @@ export function truncateCaption(text: string, max = 40): string {
   const chars = graphemes(text)
   if (chars.length <= max) return text
   return chars.slice(0, max).join('').trimEnd() + '…'
+}
+
+/** type/drag/scroll actions with a real duration are drawn as a span (from `at` to `actionEnd`)
+ * on the scenario review timeline instead of a point marker; clicks/doubleClick/key keep their
+ * fixed, near-instant duration and always stay points. Uses effectiveDuration (not the raw,
+ * recorded durationMs) so a fast drag/scroll that gets floor-clamped at replay still shows the
+ * span width it will actually occupy - see effectiveDuration's doc comment in shared/scenario.ts. */
+export function isSpanAction(a: ScenarioAction): boolean {
+  return (a.kind === 'type' || a.kind === 'drag' || a.kind === 'scroll') && effectiveDuration(a) > SPAN_MIN_DURATION_MS
+}
+
+/** Subtle label inside a span: the typed text (truncated) for `type`, nothing for drag/scroll. */
+export function spanLabel(a: ScenarioAction): string | null {
+  return a.kind === 'type' ? truncateCaption(a.text, 24) : null
+}
+
+/** Pixel width of a span marker at the timeline's current scale, floored so a span that barely
+ * qualifies (or a narrow timeline) never shrinks below SPAN_MIN_WIDTH_PX. */
+export function spanWidthPx(a: ScenarioAction, pxPerMs: number): number {
+  return Math.max(SPAN_MIN_WIDTH_PX, effectiveDuration(a) * pxPerMs)
 }

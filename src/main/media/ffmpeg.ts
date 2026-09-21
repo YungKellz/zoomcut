@@ -175,6 +175,64 @@ export async function convertAudio(
   })
 }
 
+/** Minimal shape `rawAudioInputArgs`/`convertRawAudio` need from a captured raw-audio format;
+ * `LoopbackFormat` (src/main/audio/loopback.ts) satisfies this structurally. */
+export interface RawAudioFormat {
+  isFloat: boolean
+  rate: number
+  channels: number
+  /** dwChannelMask from WAVEFORMATEXTENSIBLE, 0 when unknown. Only the masks in
+   * CHANNEL_LAYOUT_BY_MASK are given an explicit -channel_layout; anything else is left for
+   * ffmpeg to infer from the channel count alone (its usual behaviour without this field). */
+  channelMask?: number
+}
+
+/** Windows channel masks (WAVEFORMATEXTENSIBLE dwChannelMask) that map to an unambiguous ffmpeg
+ * channel layout name. Raw PCM/float carries no layout metadata of its own, so without this
+ * ffmpeg would guess a default layout from the channel count alone, which is not guaranteed to
+ * match the endpoint's actual speaker mapping. */
+const CHANNEL_LAYOUT_BY_MASK: Record<number, string> = {
+  0x3: 'stereo',
+  0x3f: '5.1',
+  0x63f: '7.1',
+  0xff: '7.1(wide)'
+}
+
+/** Pure "format -> ffmpeg input args" mapping, kept separate so it can be unit-tested without
+ * spawning ffmpeg (src/main/media/ffmpeg.test.ts). */
+export function rawAudioInputArgs(format: RawAudioFormat): string[] {
+  const args = ['-f', format.isFloat ? 'f32le' : 's16le', '-ar', String(format.rate), '-ac', String(format.channels)]
+  const layout = format.channelMask ? CHANNEL_LAYOUT_BY_MASK[format.channelMask] : undefined
+  if (layout) args.push('-channel_layout', layout)
+  return args
+}
+
+/**
+ * Converts a raw interleaved capture from the system-audio loopback helper (audio/loopback.ts) -
+ * float32 or int16, any channel count - into the AAC 48 kHz stereo .m4a that AudioClip.file
+ * always points at. ffmpeg's own default downmix collapses a surround-configured playback
+ * device's 6/8 channels to stereo. That downmix is only level-accurate when it runs in float:
+ * libswresample normalizes its channel-mix matrix for float samples but not for s16 - feeding it
+ * an s16 intermediate for a 7.1 source measured about 9.9 dB quieter output in testing. Keep the
+ * input format as f32le for any float capture (already the common case: `isFloat` mirrors
+ * whatever the endpoint's own mix format is) rather than "simplifying" this to a fixed s16 input.
+ */
+export async function convertRawAudio(
+  input: string,
+  output: string,
+  format: RawAudioFormat,
+  durationMs?: number,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  await runFfmpeg({
+    args: [...rawAudioInputArgs(format), '-i', input, '-vn', '-ac', '2', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', output],
+    durationMs,
+    onProgress,
+    signal
+  })
+}
+
 /** ffmpeg process that turns raw RGBA frames on stdin into a lossless intermediate with alpha. */
 export function startRawIntermediate(output: string, width: number, height: number, fps: number, signal?: AbortSignal): FfmpegProcess {
   return spawnFfmpeg({

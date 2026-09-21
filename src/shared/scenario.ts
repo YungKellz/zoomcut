@@ -97,6 +97,13 @@ const DOUBLE_CLICK_PX = 6
 const SCROLL_MERGE_MS = 400
 const TYPE_MERGE_MS = 1500
 const MIN_GAP_MS = 50
+/** A typed action's durationMs is never less than this many ms per character, even when the
+ * keystrokes themselves were faster - otherwise a one- or two-character `type` action ends up
+ * too short to read as a span on the review timeline, and replays at an unnaturally fast pace. */
+const MIN_TYPE_MS_PER_CHAR = 150
+/** A drag is never animated (and its button never released) faster than this, however fast the
+ * recorded gesture was - see effectiveDuration(). */
+const DRAG_MIN_MS = 200
 // Backspace, PC/AT set-1 scancode 0x0E, never extended.
 const BACKSPACE_SCAN = 14
 
@@ -104,16 +111,26 @@ function dist(a: ScenarioPoint, b: ScenarioPoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+// Lazily created once and reused for every graphemes() call - undefined = not yet attempted,
+// null = attempted and unavailable (very old runtime), so the failing `new Intl.Segmenter` is
+// never retried either.
+let segmenter: Intl.Segmenter | null | undefined
+
 /** Splits text into user-perceived characters (so backspace and per-character replay are unicode-correct). */
 export function graphemes(text: string): string[] {
-  try {
-    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
-    return Array.from(segmenter.segment(text), (s) => s.segment)
-  } catch {
-    // Intl.Segmenter is unavailable (very old runtime): fall back to code points, which is
-    // still surrogate-pair safe even if it does not merge combining marks.
+  if (segmenter === undefined) {
+    try {
+      segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    } catch {
+      segmenter = null
+    }
+  }
+  if (!segmenter) {
+    // Intl.Segmenter is unavailable: fall back to code points, which is still surrogate-pair
+    // safe even if it does not merge combining marks.
     return Array.from(text)
   }
+  return Array.from(segmenter.segment(text), (s) => s.segment)
 }
 
 function popGrapheme(text: string): string {
@@ -264,7 +281,10 @@ interface DownState {
  * is a drag. Right/middle down+up become rightClick/middleClick. Wheel events closer than
  * 400ms merge into one scroll. Resolved-text keys (no Ctrl/Alt/Win) merge into one `type`
  * while consecutive keys are closer than 1.5s; Backspace inside a non-empty type buffer
- * removes the last character instead of becoming its own action. Everything else becomes a
+ * removes the last character instead of becoming its own action. A `type` action's durationMs
+ * is inflated to at least MIN_TYPE_MS_PER_CHAR per character, even if the keystrokes themselves
+ * were faster, but never enough to overlap the action that follows it (or SCENARIO_MAX_MS, for
+ * the last action) - see the clamping pass after the final sort below. Everything else becomes a
  * `key` action. Pure modifier presses are dropped. Each action's `path` is the collapsed
  * mouse movement since the previous action ended.
  */
@@ -289,6 +309,9 @@ export function groupRawEvents(raw: RawInputEvent[], opts: GroupRawEventsOptions
     const buf = typeBuf
     typeBuf = null
     if (buf.text.length === 0) return
+    // durationMs here is still the raw recorded value - inflating it to the per-character
+    // minimum happens in a pass below, once every action's final `at` is known and it can be
+    // clamped to never overlap whatever comes after it.
     const action: ScenarioTypeAction = {
       id: buf.id, kind: 'type', at: buf.at, x: buf.x, y: buf.y,
       path: buf.path, modifiers: buf.mods, shot: null,
@@ -423,6 +446,23 @@ export function groupRawEvents(raw: RawInputEvent[], opts: GroupRawEventsOptions
   // click or key handled while a left button is still held down is pushed before the drag/click
   // that eventually closes it. Stable-sort by `at` so the output is always chronological.
   output.sort((a, b) => a.at - b.at)
+
+  // Inflate every `type` action's durationMs to the per-character minimum now that every
+  // action's final `at` is known, clamped to the room actually available before whatever follows
+  // it (or SCENARIO_MAX_MS for the last action) so the inflation can never make it overlap its
+  // neighbour - but never shrunk below what was really recorded, even if that leaves no room to
+  // spare (an inflated-but-clamped duration is still purely cosmetic/pacing, never a hard fact
+  // about what was typed).
+  for (let i = 0; i < output.length; i++) {
+    const a = output[i]
+    if (a.kind !== 'type') continue
+    const recorded = a.durationMs
+    const inflated = Math.max(recorded, MIN_TYPE_MS_PER_CHAR * graphemes(a.text).length)
+    const next = output[i + 1]
+    const room = (next ? next.at - MIN_GAP_MS : SCENARIO_MAX_MS) - a.at
+    output[i] = { ...a, durationMs: Math.max(recorded, Math.min(inflated, room)) }
+  }
+
   return output
 }
 
@@ -434,11 +474,35 @@ export function actionDuration(a: ScenarioAction): number {
     case 'doubleClick': return 250
     case 'rightClick': return 70
     case 'middleClick': return 70
-    case 'drag': return a.durationMs
-    case 'scroll': return a.durationMs
+    case 'drag': return effectiveDuration(a)
+    case 'scroll': return effectiveDuration(a)
     case 'type': return a.durationMs
     case 'key': return 60
   }
+}
+
+/** Number of physical wheel notches a scroll action replays as - the y and x axes are
+ * independent notch streams (see compileScenario's 'scroll' case), so the total is their sum. */
+function scrollNotchCount(a: ScenarioScrollAction): number {
+  return Math.ceil(Math.abs(a.deltaY)) + Math.ceil(Math.abs(a.deltaX))
+}
+
+/**
+ * The duration an action actually occupies once replayed or drawn, which can exceed its raw,
+ * recorded `durationMs`: a drag's button never lifts faster than DRAG_MIN_MS, and a multi-notch
+ * scroll is never compressed tighter than 40ms between notches (see compileScenario's 'drag' and
+ * 'scroll' cases). This is the single source of truth for both floors - actionDuration (and so
+ * actionEnd, scenarioEnd, retimeAction's neighbour clamps), compileScenario, and the review
+ * timeline's span rendering (isSpanAction/spanWidthPx in renderer/src/scenario/format.ts) all go
+ * through it, so replay timing, gap editing and the visual span can never drift apart or let a
+ * fast drag/scroll overlap whatever comes after it. A `type` action's durationMs already has its
+ * own per-character minimum baked in at capture time, clamped to never overlap its neighbour
+ * (see groupRawEvents), so it passes through actionDuration unchanged here.
+ */
+export function effectiveDuration(a: ScenarioAction): number {
+  if (a.kind === 'drag') return Math.max(a.durationMs, DRAG_MIN_MS)
+  if (a.kind === 'scroll') return Math.max(a.durationMs, (scrollNotchCount(a) - 1) * 40)
+  return actionDuration(a)
 }
 
 export function actionEnd(a: ScenarioAction): number {
@@ -491,7 +555,10 @@ export function retimeAction(actions: ScenarioAction[], id: string, at: number, 
   return actions.map((a, i) => (i >= idx ? { ...a, at: a.at + delta } : a))
 }
 
-/** Removes an action; the next one loses its recorded path (it gets synthesized at replay). */
+/** Removes an action; the next one's recorded leading path is cleared too, since it recorded
+ * movement from the now-deleted action, not from whatever now precedes it. Neither path is ever
+ * replayed either way (compileScenario always moves in a straight eased line, see its own doc
+ * comment) - this is purely about not keeping misleading recorded data attached to an action. */
 export function deleteAction(actions: ScenarioAction[], id: string): ScenarioAction[] {
   const idx = actions.findIndex((a) => a.id === id)
   if (idx === -1) return actions
@@ -510,8 +577,8 @@ const NORMALIZE_LEAD_MS = 1000
  * NORMALIZE_LEAD_MS. This avoids replaying (and recording) tens of seconds of nothing when the
  * user took a while to start after the countdown ended, while still leaving a believable moment
  * of lead-in - and the user can always retime the first action deliberately in the review
- * screen afterwards. Recorded paths are untouched (they keep their own dts; compileScenario
- * fits them into whatever gap results), only the absolute `at` of every action changes.
+ * screen afterwards. Recorded paths are untouched (they are not replayed either way - see
+ * ScenarioActionBase.path's doc comment), only the absolute `at` of every action changes.
  */
 export function normalizeLeadIn(actions: ScenarioAction[]): ScenarioAction[] {
   if (actions.length === 0) return actions
@@ -521,44 +588,79 @@ export function normalizeLeadIn(actions: ScenarioAction[]): ScenarioAction[] {
   return actions.map((a) => ({ ...a, at: a.at - delta }))
 }
 
-// ---- path synthesis ----
+// ---- cursor motion ----
+// The user's own recorded mouse movement is never reproduced at replay (see ScenarioActionBase.path's
+// doc comment) - every move the compiler emits is a straight line between two points, eased in/out
+// and timed from the distance travelled, at 60Hz. This keeps the replayed cursor looking deliberate
+// and synthetic rather than reproducing anyone's actual hand movement.
 
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v))
 }
 
-/** Deterministic per-endpoint sign, so the same two points always bulge the same way. */
-function hashSign(a: ScenarioPoint, b: ScenarioPoint): 1 | -1 {
-  const n = Math.round(a.x) + Math.round(b.y) * 3 + Math.round(a.y) * 7 + Math.round(b.x) * 11
-  return n % 2 === 0 ? 1 : -1
+/** Same easing curve as the renderer's engine/camera.ts easeInOutCubic - copied rather than
+ * imported, since shared code must not depend on renderer code. */
+function easeInOutCubic(p: number): number {
+  const t = clamp(p, 0, 1)
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
-/** Eased quadratic-Bézier path from `from` to `to` with a small perpendicular bulge, at 60Hz. */
-export function synthesizePath(from: ScenarioPoint, to: ScenarioPoint, durationMs: number, stepMs = 1000 / 60): ScenarioPathPoint[] {
-  const distance = dist(from, to)
-  if (durationMs <= 0 || distance < 1) return []
-  const steps = Math.max(1, Math.round(durationMs / stepMs))
+/** How long before an action's own effect fires the leading move finishes, so the cursor
+ * visibly rests before the action happens. */
+const MOVE_SETTLE_MS = 90
+/** Below this gap between the previous action's end and this one, an eased move is not worth
+ * animating - the cursor just jumps, shortly before the action fires. */
+const MOVE_MIN_GAP_MS = 120
+
+/**
+ * Samples a straight, eased cursor move from `from` to `to` between `start` and `end` (ms) into
+ * `steps`, at 60Hz, landing exactly on `to` at `end`. Two points within 2px are treated as the
+ * same point - the cursor is already there, so nothing is emitted.
+ */
+function emitEasedMove(steps: ReplayStep[], from: ScenarioPoint, to: ScenarioPoint, start: number, end: number): void {
   const dx = to.x - from.x
   const dy = to.y - from.y
-  const bulge = distance * 0.08 * hashSign(from, to)
-  const nx = -dy / distance
-  const ny = dx / distance
-  const midX = from.x + dx / 2 + nx * bulge
-  const midY = from.y + dy / 2 + ny * bulge
-
-  const points: ScenarioPathPoint[] = []
-  let lastT = 0
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps
-    const e = easeInOut(t)
-    const omt = 1 - e
-    const x = omt * omt * from.x + 2 * omt * e * midX + e * e * to.x
-    const y = omt * omt * from.y + 2 * omt * e * midY + e * e * to.y
-    const pointT = Math.round(t * durationMs)
-    points.push({ x, y, dt: pointT - lastT })
-    lastT = pointT
+  if (Math.hypot(dx, dy) < 2) return
+  const span = end - start
+  if (span <= 0) {
+    // clamped like every other step (see pushModifiers) - end is not guaranteed >= 0 for every
+    // caller/input combination, even though it is for the ones in this file today
+    steps.push({ t: Math.max(0, Math.round(end)), op: 'move', x: to.x, y: to.y })
+    return
   }
-  return points
+  const stepMs = 1000 / 60
+  const n = Math.max(1, Math.round(span / stepMs))
+  for (let i = 1; i < n; i++) {
+    const e = easeInOutCubic(i / n)
+    steps.push({ t: Math.round(start + span * (i / n)), op: 'move', x: from.x + dx * e, y: from.y + dy * e })
+  }
+  // pushed separately (rather than trusting the loop's own i===n sample) so the landing point is
+  // always exactly `to`, never a floating-point near-miss
+  steps.push({ t: Math.round(end), op: 'move', x: to.x, y: to.y })
+}
+
+/**
+ * Lays out the leading move from `from` (the previous action's resting point, or the scenario's
+ * start position for the very first action) to `to` (this action's own point), finishing
+ * MOVE_SETTLE_MS before `at`. A gap under MOVE_MIN_GAP_MS is not worth animating - the cursor
+ * just jumps to the target 10ms before `at`. The move's duration grows with distance (a short
+ * hop is quick, a long one takes longer to feel natural) but never eats more than 80% of the
+ * available gap, and never starts before `prevEnd` (the previous action's own end).
+ */
+function layOutLeadingMove(steps: ReplayStep[], from: ScenarioPoint, to: ScenarioPoint, prevEnd: number, at: number): void {
+  if (Math.hypot(to.x - from.x, to.y - from.y) < 2) return
+  const gap = at - prevEnd
+  if (gap < MOVE_MIN_GAP_MS) {
+    // clamped like every other step (see pushModifiers) - reachable when the very first action
+    // sits at a tiny `at` (the review screen allows retiming it down to 0)
+    steps.push({ t: Math.max(0, Math.round(at - 10)), op: 'move', x: to.x, y: to.y })
+    return
+  }
+  const distance = dist(from, to)
+  const duration = Math.min(clamp(220 + distance * 0.45, 260, 900), 0.8 * gap)
+  const end = at - MOVE_SETTLE_MS
+  const start = Math.max(prevEnd, end - duration)
+  emitEasedMove(steps, from, to, start, end)
 }
 
 // ---- compile to replay steps ----
@@ -572,8 +674,9 @@ export type ReplayStep =
   | { t: number; op: 'action'; index: number } // progress marker at the action's `at`
 
 export interface CompileOptions {
-  /** how much runway the very first action gets to approach its target, capped by its own `at` */
-  leadMs: number
+  /** where the replay cursor sits before the very first action's leading move, DIP - normally
+   * the captured Scenario.startPoint (see ReplaySession.create in main/scenario/replay.ts),
+   * falling back to the first action's own point (no initial move) when a scenario has none. */
   startPos: ScenarioPoint
 }
 
@@ -592,71 +695,21 @@ function pushModifiers(steps: ReplayStep[], mods: Array<keyof ScenarioModifiers>
 }
 
 /**
- * Lays out the recorded (or synthesized) leading path of an action between `gapStart` and
- * `gapEnd`, always landing exactly on `to` at `gapEnd`. A gap under 120ms is not worth
- * animating – the cursor just jumps. A recorded path keeps its own dts if they fit in the
- * gap, otherwise they are scaled down; an empty path is synthesized, ending 60ms early so
- * the cursor visibly rests before the action fires.
- */
-function layOutLeadingPath(steps: ReplayStep[], recorded: ScenarioPathPoint[], from: ScenarioPoint, to: ScenarioPoint, gapStart: number, gapEnd: number): void {
-  const gap = gapEnd - gapStart
-  if (gap < 120) {
-    steps.push({ t: gapEnd, op: 'move', x: to.x, y: to.y })
-    return
-  }
-  if (recorded.length > 0) {
-    const total = recorded.reduce((sum, p) => sum + p.dt, 0)
-    const scale = total > gap ? gap / total : 1
-    let t = gapStart
-    for (const p of recorded) {
-      t += p.dt * scale
-      steps.push({ t: Math.round(t), op: 'move', x: p.x, y: p.y })
-    }
-    steps.push({ t: gapEnd, op: 'move', x: to.x, y: to.y })
-    return
-  }
-  if (dist(from, to) < 1) return
-  const duration = Math.min(gap, Math.max(250, 0.9 * dist(from, to)))
-  const end = gapEnd - 60
-  const start = Math.max(gapStart, end - duration)
-  let t = start
-  for (const p of synthesizePath(from, to, end - start)) {
-    t += p.dt
-    steps.push({ t: Math.round(t), op: 'move', x: p.x, y: p.y })
-  }
-}
-
-/** The drag's own path, always rescaled to fill `durationMs` exactly and land on `to`. */
-function layOutDragPath(steps: ReplayStep[], recorded: ScenarioPathPoint[], from: ScenarioPoint, to: ScenarioPoint, startT: number, durationMs: number): void {
-  if (durationMs <= 0) {
-    steps.push({ t: startT, op: 'move', x: to.x, y: to.y })
-    return
-  }
-  const points = recorded.length > 0 ? recorded : synthesizePath(from, to, durationMs)
-  if (points.length > 0) {
-    const total = points.reduce((sum, p) => sum + p.dt, 0) || durationMs
-    const scale = durationMs / total
-    let t = startT
-    for (const p of points) {
-      t += p.dt * scale
-      steps.push({ t: Math.round(t), op: 'move', x: p.x, y: p.y })
-    }
-  }
-  steps.push({ t: startT + durationMs, op: 'move', x: to.x, y: to.y })
-}
-
-/**
  * Compiles a scenario (or a bare action list) into a flat, time-ordered replay schedule.
  * All times are ms; t=0 is the moment the helper receives `GO`, which the controller sends at
- * `recording start + leadMs` (RecordingController.started() -> ReplaySession.go()). Every
- * action's `at` is used literally here - compileScenario never shifts the schedule as a whole,
- * `leadMs` only bounds how much runway the very first action gets to approach its target,
- * capped by its own recorded `at`, so nothing here ever needs a negative timestamp (every
- * emitted step is additionally clamped to >= 0, see pushModifiers). A capture where the user
- * took a while before the first action is expected to already have been normalized once, right
- * after grouping, by normalizeLeadIn() - compileScenario itself does not do that, so replaying
- * an un-normalized scenario still starts its first action `leadMs` after `GO`, not at a fixed
- * offset.
+ * `recording start + 800` (RecordingController.started() -> ReplaySession.go()). Every action's
+ * `at` is used literally here - compileScenario never shifts the schedule as a whole. The
+ * recorded mouse path is never consulted: every leading move, and every drag's own move, is a
+ * straight line between two points eased in/out and timed from the distance travelled (see
+ * layOutLeadingMove / emitEasedMove above) - the goal is deliberate, synthetic cursor motion,
+ * not a reproduction of the user's own hand movement. A drag's button never lifts, and a multi-
+ * notch scroll's notches never space out, faster than effectiveDuration() allows - the same
+ * floor actionDuration/actionEnd use - so a fast drag or scroll can never overlap whatever comes
+ * after it. The cursor starts at `opts.startPos` (normally the captured Scenario.startPoint);
+ * every emitted step is additionally clamped to >= 0 (see pushModifiers), so nothing here ever
+ * needs a negative timestamp. A capture where the
+ * user took a while before the first action is expected to already have been normalized once,
+ * right after grouping, by normalizeLeadIn().
  */
 export function compileScenario(input: Scenario | ScenarioAction[], opts: CompileOptions): ReplayStep[] {
   const actions = Array.isArray(input) ? input : input.actions
@@ -664,8 +717,8 @@ export function compileScenario(input: Scenario | ScenarioAction[], opts: Compil
   let cursor: ScenarioPoint = opts.startPos
 
   actions.forEach((a, i) => {
-    const gapStart = i === 0 ? Math.max(0, a.at - opts.leadMs) : actionEnd(actions[i - 1])
-    layOutLeadingPath(steps, a.path, cursor, { x: a.x, y: a.y }, gapStart, a.at)
+    const prevEnd = i === 0 ? 0 : actionEnd(actions[i - 1])
+    layOutLeadingMove(steps, cursor, { x: a.x, y: a.y }, prevEnd, a.at)
     cursor = { x: a.x, y: a.y }
     steps.push({ t: a.at, op: 'action', index: i })
 
@@ -693,9 +746,10 @@ export function compileScenario(input: Scenario | ScenarioAction[], opts: Compil
       case 'drag': {
         pushModifiers(steps, mods, a.at - 20, true)
         steps.push({ t: a.at, op: 'down', button: 'left' })
-        layOutDragPath(steps, a.dragPath, { x: a.x, y: a.y }, { x: a.toX, y: a.toY }, a.at, a.durationMs)
-        steps.push({ t: a.at + a.durationMs, op: 'up', button: 'left' })
-        pushModifiers(steps, mods, a.at + a.durationMs + 20, false)
+        const dragMs = effectiveDuration(a)
+        emitEasedMove(steps, { x: a.x, y: a.y }, { x: a.toX, y: a.toY }, a.at, a.at + dragMs)
+        steps.push({ t: a.at + dragMs, op: 'up', button: 'left' })
+        pushModifiers(steps, mods, a.at + dragMs + 20, false)
         cursor = { x: a.toX, y: a.toY }
         break
       }
@@ -704,7 +758,7 @@ export function compileScenario(input: Scenario | ScenarioAction[], opts: Compil
         for (let k = 0; k < Math.ceil(Math.abs(a.deltaY)); k++) notches.push('y')
         for (let k = 0; k < Math.ceil(Math.abs(a.deltaX)); k++) notches.push('x')
         if (notches.length > 0) {
-          const span = Math.max(a.durationMs, (notches.length - 1) * 40)
+          const span = effectiveDuration(a)
           const step = notches.length > 1 ? span / (notches.length - 1) : 0
           const signY = a.deltaY < 0 ? -1 : 1
           const signX = a.deltaX < 0 ? -1 : 1

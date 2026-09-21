@@ -10,3 +10,5 @@ test-results/
 playwright-report/
 tests/e2e/.tmp/
 release-test/
+.idea/
+.claude/

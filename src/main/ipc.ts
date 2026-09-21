@@ -9,12 +9,14 @@ import type {
   Project,
   Rect,
   RecordingStartMeta,
+  RecordOptions,
   Scenario
 } from '@shared/types'
 import type { RecordingController } from './recorder/controller'
 import type { ExportManager } from './exportManager'
 import type { Updater } from './updater'
 import { importAudioClip, importAudioFile, sweepAudioFiles, type AudioImportClipInput } from './media/audioImport'
+import { importMusicTrack, listMusic } from './audio/musicLibrary'
 import type { ScenarioCapture } from './scenario/capture'
 import { ffmpegPath } from './media/ffmpeg'
 import {
@@ -75,7 +77,7 @@ export function registerIpc({ recorder, scenarioCapture, exporter, updater }: De
 
   // ---- displays / recording ----
   ipcMain.handle('displays:list', () => recorder.listDisplays())
-  ipcMain.handle('recording:prepare', (_e, displayId: number, options?: { scenario?: Scenario }) =>
+  ipcMain.handle('recording:prepare', (_e, displayId: number, options?: RecordOptions) =>
     recorder.prepare(displayId, options))
   ipcMain.handle('recording:started', (_e, id: string, meta: RecordingStartMeta) => recorder.started(id, meta))
   ipcMain.handle('recording:chunk', (_e, id: string, data: ArrayBuffer) => recorder.chunk(id, data))
@@ -113,6 +115,8 @@ export function registerIpc({ recorder, scenarioCapture, exporter, updater }: De
   ipcMain.handle('recording:audio-chunk', (_e, id: string, kind: AudioTrackKind, data: ArrayBuffer) => recorder.audioChunk(id, kind, data))
   ipcMain.handle('audio:import-clip', (_e, projectId: string, clip: AudioImportClipInput) => importAudioClip(projectId, clip))
   ipcMain.handle('audio:import-file', (_e, projectId: string) => importAudioFile(projectId))
+  ipcMain.handle('audio:music-list', () => listMusic())
+  ipcMain.handle('audio:import-music', (_e, projectId: string, id: string) => importMusicTrack(projectId, id))
   ipcMain.handle('audio:sweep', (_e, projectId: string, keepFiles: string[]) => sweepAudioFiles(projectId, keepFiles))
   // ---- scenario ----
   ipcMain.handle('scenario:start', (_e, displayId: number) => scenarioCapture.start(displayId))

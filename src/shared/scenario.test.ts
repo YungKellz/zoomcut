@@ -9,7 +9,6 @@ import {
   normalizeLeadIn,
   retimeAction,
   scenarioEnd,
-  synthesizePath,
   validateScenario,
   type RawDownEvent,
   type RawInputEvent,
@@ -19,7 +18,16 @@ import {
   type ReplayStep
 } from './scenario'
 import { SCENARIO_MAX_MS } from './defaults'
-import type { ScenarioAction, ScenarioClickAction, ScenarioDragAction, ScenarioModifiers } from './types'
+import type {
+  Scenario,
+  ScenarioAction,
+  ScenarioClickAction,
+  ScenarioDragAction,
+  ScenarioKeyAction,
+  ScenarioModifiers,
+  ScenarioScrollAction,
+  ScenarioTypeAction
+} from './types'
 
 // ---- fixtures ----
 
@@ -175,7 +183,55 @@ describe('groupRawEvents', () => {
       keyEvt('k5', 1200, 2, 49, '!')
     ])
     expect(actions).toHaveLength(1)
-    expect(actions[0]).toMatchObject({ id: 'k1', kind: 'type', at: 1000, text: 'hi!', durationMs: 200 })
+    // recorded lastT-at = 200ms, but 3 chars ('hi!') * MIN_TYPE_MS_PER_CHAR (150) = 450 wins
+    expect(actions[0]).toMatchObject({ id: 'k1', kind: 'type', at: 1000, text: 'hi!', durationMs: 450 })
+  })
+
+  it('gives a typed action at least 150ms per character, even when the keystrokes themselves were faster', () => {
+    const actions = groupRawEvents([
+      keyEvt('k1', 1000, 35, 72, 'h'),
+      keyEvt('k2', 1020, 23, 73, 'i')
+    ])
+    expect(actions).toHaveLength(1)
+    // recorded lastT-at = 20ms, far under 150 * 2 chars = 300ms
+    expect(actions[0]).toMatchObject({ kind: 'type', text: 'hi', durationMs: 300 })
+  })
+
+  it('keeps the recorded typing duration when it already exceeds the per-character minimum', () => {
+    const actions = groupRawEvents([
+      keyEvt('k1', 1000, 35, 72, 'h'),
+      keyEvt('k2', 2000, 23, 73, 'i')
+    ])
+    // recorded lastT-at = 1000ms, comfortably over 150 * 2 chars = 300ms
+    expect(actions[0]).toMatchObject({ kind: 'type', text: 'hi', durationMs: 1000 })
+  })
+
+  it('clamps an inflated type duration so it never overlaps the action right after it (e.g. "hello world" typed quickly, Enter right after)', () => {
+    const chars = Array.from('hello world') // 11 graphemes, including the space
+    const typeEvents = chars.map((ch, i) => keyEvt(`t${i}`, i * 100, 100 + i, 100 + i, ch))
+    const enter = keyEvt('enter', 1150, 28, 13, null) // scan 28 -> 'Enter', not text
+    const actions = groupRawEvents([...typeEvents, enter])
+    expect(actions.map((a) => a.kind)).toEqual(['type', 'key'])
+    const typeAction = actions[0] as ScenarioTypeAction
+    const enterAction = actions[1] as ScenarioKeyAction
+    expect(typeAction.text).toBe('hello world')
+    // recorded = 1000ms (last char at t=1000, first at t=0); naive inflation (150*11=1650) would
+    // run past Enter at 1150 - the clamp must pull it back to leave >= MIN_GAP_MS(50) before it
+    expect(typeAction.durationMs).toBe(1100)
+    expect(actionEnd(typeAction)).toBeLessThanOrEqual(enterAction.at)
+    expect(enterAction.at - actionEnd(typeAction)).toBeGreaterThanOrEqual(50)
+  })
+
+  it('compiles the clamped type action so every text step fires before the next action\'s own marker', () => {
+    const chars = Array.from('hello world')
+    const typeEvents = chars.map((ch, i) => keyEvt(`t${i}`, i * 100, 100 + i, 100 + i, ch))
+    const enter = keyEvt('enter', 1150, 28, 13, null)
+    const actions = groupRawEvents([...typeEvents, enter])
+    const steps = compileScenario(actions, { startPos: { x: 0, y: 0 } })
+    const enterMarker = steps.find((s) => s.op === 'action' && s.index === 1)!
+    const textSteps = steps.filter(isText)
+    expect(textSteps).toHaveLength(11)
+    expect(textSteps.every((s) => s.t < enterMarker.t)).toBe(true)
   })
 
   it('treats Backspace on an empty buffer as its own key action', () => {
@@ -333,36 +389,28 @@ describe('actionDuration / actionEnd / scenarioEnd / validateScenario', () => {
     expect(scenarioEnd([a, clickAction('b', 2000)])).toBe(2070)
   })
 
+  it("reports a drag's true (floor-clamped) duration, not its raw recorded one", () => {
+    const drag: ScenarioDragAction = {
+      id: 'd', kind: 'drag', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null,
+      toX: 10, toY: 10, dragPath: [], durationMs: 40
+    }
+    expect(actionDuration(drag)).toBe(200) // DRAG_MIN_MS, not the raw 40
+    expect(actionEnd(drag)).toBe(200)
+  })
+
+  it("reports a multi-notch scroll's true (40ms/notch-floor) duration, not its raw recorded one", () => {
+    const scroll: ScenarioScrollAction = {
+      id: 's', kind: 'scroll', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null,
+      deltaY: 5, deltaX: 0, durationMs: 10
+    }
+    // 5 notches need >= 4 * 40 = 160ms to space out, far more than the recorded 10ms
+    expect(actionDuration(scroll)).toBe(160)
+  })
+
   it('flags an empty or too-long scenario', () => {
     expect(validateScenario([])).toBe('empty')
     expect(validateScenario([clickAction('a', SCENARIO_MAX_MS)])).toBe('tooLong')
     expect(validateScenario([clickAction('a', 0)])).toBeNull()
-  })
-})
-
-describe('synthesizePath', () => {
-  it('is deterministic and lands exactly on the target', () => {
-    const from = { x: 0, y: 0 }
-    const to = { x: 300, y: 0 }
-    const a = synthesizePath(from, to, 300)
-    const b = synthesizePath(from, to, 300)
-    expect(a).toEqual(b)
-    expect(a.length).toBeGreaterThan(1)
-    const last = a[a.length - 1]
-    expect(last.x).toBeCloseTo(300)
-    expect(last.y).toBeCloseTo(0)
-    expect(a.reduce((sum, p) => sum + p.dt, 0)).toBe(300)
-  })
-
-  it('bulges away from the straight line', () => {
-    const path = synthesizePath({ x: 0, y: 0 }, { x: 300, y: 0 }, 300)
-    const mid = path[Math.floor(path.length / 2)]
-    expect(Math.abs(mid.y)).toBeGreaterThan(1)
-  })
-
-  it('returns nothing for zero distance or zero duration', () => {
-    expect(synthesizePath({ x: 5, y: 5 }, { x: 5, y: 5 }, 300)).toEqual([])
-    expect(synthesizePath({ x: 0, y: 0 }, { x: 300, y: 0 }, 0)).toEqual([])
   })
 })
 
@@ -385,45 +433,171 @@ function isButtonOp(op: 'down' | 'up') {
   return (s: ReplayStep): s is ButtonStep => s.op === op
 }
 
-describe('compileScenario: path layout', () => {
-  const startPos = { x: 0, y: 0 }
-  const base: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1000, x: 500, y: 500, path: [], modifiers: NO_MODS, shot: null }
-
-  it('keeps recorded dts when the path already fits in the gap', () => {
-    const a: ScenarioClickAction = { ...base, path: [{ x: 100, y: 100, dt: 100 }, { x: 300, y: 300, dt: 100 }] }
-    const moves = compileScenario([a], { leadMs: 800, startPos }).filter(isMove)
-    // gapStart = max(0, 1000-800) = 200; dts (100,100) sum to 200 <= gap(800), so kept as-is
-    expect(moves.slice(0, 2)).toEqual([
-      { t: 300, op: 'move', x: 100, y: 100 },
-      { t: 400, op: 'move', x: 300, y: 300 }
-    ])
-    expect(moves[moves.length - 1]).toEqual({ t: 1000, op: 'move', x: 500, y: 500 })
+describe('compileScenario: cursor motion', () => {
+  it('moves in a straight line: every sample is collinear with the from->to segment', () => {
+    const from = { x: 0, y: 0 }
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 2000, x: 500, y: 300, path: [], modifiers: NO_MODS, shot: null }
+    const moves = compileScenario([a], { startPos: from }).filter(isMove)
+    expect(moves.length).toBeGreaterThan(1)
+    for (const m of moves) {
+      // cross product of (to-from) and (m-from): 0 exactly on the line, whatever the easing
+      const cross = (a.x - from.x) * (m.y - from.y) - (a.y - from.y) * (m.x - from.x)
+      expect(Math.abs(cross)).toBeLessThan(0.5)
+    }
   })
 
-  it('scales recorded dts down when the path is longer than the gap', () => {
-    const a: ScenarioClickAction = { ...base, path: [{ x: 100, y: 100, dt: 600 }, { x: 300, y: 300, dt: 600 }] }
-    const moves = compileScenario([a], { leadMs: 800, startPos }).filter(isMove)
-    // sum(dt) = 1200 > gap(800) -> scale = 800/1200 = 2/3; first point lands at 200 + 400 = 600
-    expect(moves[0]).toEqual({ t: 600, op: 'move', x: 100, y: 100 })
+  it('the last move lands exactly on the target, settleMs (90ms) before `at`', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 2000, x: 500, y: 300, path: [], modifiers: NO_MODS, shot: null }
+    const moves = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    expect(moves[moves.length - 1]).toEqual({ t: 1910, op: 'move', x: 500, y: 300 })
   })
 
-  it('synthesizes a curve ending 60ms before `at` when there is no recorded path', () => {
-    const a: ScenarioClickAction = { ...base, path: [] }
-    const moves = compileScenario([a], { leadMs: 800, startPos }).filter(isMove)
-    expect(moves.length).toBeGreaterThan(0)
-    const last = moves[moves.length - 1]
-    expect(last.t).toBe(1000 - 60)
-    expect(last.x).toBe(500)
-    expect(last.y).toBe(500)
+  it('eases in and out: the middle sample nears the midpoint, the outer quarters cover less distance than the middle half', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 2000, x: 600, y: 0, path: [], modifiers: NO_MODS, shot: null }
+    const moves = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    const total = moves.length
+    const mid = moves[Math.floor(total / 2)]
+    expect(mid.x).toBeGreaterThan(600 * 0.35)
+    expect(mid.x).toBeLessThan(600 * 0.65)
+
+    const q1 = moves[Math.floor(total / 4)]
+    const q3 = moves[Math.floor((3 * total) / 4)]
+    const firstQuarterDistance = q1.x - moves[0].x
+    const lastQuarterDistance = moves[total - 1].x - q3.x
+    const middleHalfDistance = q3.x - q1.x
+    expect(firstQuarterDistance).toBeLessThan(middleHalfDistance)
+    expect(lastQuarterDistance).toBeLessThan(middleHalfDistance)
   })
 
-  it('jumps straight to the target when the gap is under 120ms', () => {
-    const a: ScenarioClickAction = { ...base, at: 1000 }
-    const b: ScenarioClickAction = { ...base, id: 'c2', at: 1080, x: 520, y: 505 }
-    const moves = compileScenario([a, b], { leadMs: 800, startPos }).filter(isMove)
-    // the gap between c1's end (1070) and c2's at (1080) is only 10ms
-    const jump = moves.find((m) => m.t === 1080)
-    expect(jump).toEqual({ t: 1080, op: 'move', x: 520, y: 505 })
+  it('caps the leading move duration at 80% of the available gap, even when distance alone would call for more', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1000, x: 2000, y: 0, path: [], modifiers: NO_MODS, shot: null }
+    // distance=2000 alone wants clamp(220+2000*0.45, 260, 900) = 900ms, but gap=1000ms caps the
+    // move at 0.8*1000 = 800ms - an 800ms move starts at end-800=110, a 900ms one at end-900=10
+    const moves = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    expect(moves[0].t).toBeGreaterThan(60)
+    expect(moves[moves.length - 1]).toEqual({ t: 910, op: 'move', x: 2000, y: 0 })
+  })
+
+  it('clamps the leading move duration at 900ms even for a very long, unhurried move', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 100_000, x: 5000, y: 0, path: [], modifiers: NO_MODS, shot: null }
+    // distance=5000 alone wants clamp(220+5000*0.45, 260, 900) = 2470 -> clamped to 900; the gap
+    // (100000ms) is nowhere near tight enough to be the binding constraint (0.8*gap=80000)
+    const moves = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    const end = 100_000 - 90 // MOVE_SETTLE_MS
+    expect(moves[0].t).toBeGreaterThan(end - 900) // an uncapped ~2470ms move would start far earlier
+    expect(moves[moves.length - 1]).toEqual({ t: end, op: 'move', x: 5000, y: 0 })
+  })
+
+  it('a gap under 120ms collapses to a single move, 10ms before `at`', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1000, x: 100, y: 100, path: [], modifiers: NO_MODS, shot: null }
+    const b: ScenarioClickAction = { id: 'c2', kind: 'click', at: 1080, x: 150, y: 100, path: [], modifiers: NO_MODS, shot: null }
+    // startPos === a's own point, so a itself has no leading move; gap for b = 1080 - actionEnd(a)(1070) = 10ms
+    const moves = compileScenario([a, b], { startPos: { x: 100, y: 100 } }).filter(isMove)
+    expect(moves).toEqual([{ t: 1070, op: 'move', x: 150, y: 100 }])
+  })
+
+  it('never emits a negative move time, even for a first action retimed to a tiny `at`', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 5, x: 100, y: 100, path: [], modifiers: NO_MODS, shot: null }
+    // prevEnd = 0 (first action), gap = 5 - 0 = 5ms: the tiny-gap branch would naturally land at
+    // at - 10 = -5 without the clamp
+    const moves = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    expect(moves).toEqual([{ t: 0, op: 'move', x: 100, y: 100 }])
+  })
+
+  it('a sub-2px distance emits no moves at all', () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1000, x: 100, y: 100, path: [], modifiers: NO_MODS, shot: null }
+    const moves = compileScenario([a], { startPos: { x: 100, y: 100.5 } }).filter(isMove)
+    expect(moves).toEqual([])
+  })
+
+  it('a drag moves in a straight line over durationMs, `down` at `at` and `up` at `at + durationMs`; dragPath is ignored', () => {
+    const drag: ScenarioDragAction = {
+      id: 'd1', kind: 'drag', at: 1000, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null,
+      toX: 400, toY: 0, dragPath: [{ x: 999, y: 999, dt: 5 }], durationMs: 300
+    }
+    const steps = compileScenario([drag], { startPos: { x: 0, y: 0 } })
+    expect(steps.find(isButtonOp('down'))).toEqual({ t: 1000, op: 'down', button: 'left' })
+    expect(steps.find(isButtonOp('up'))).toEqual({ t: 1300, op: 'up', button: 'left' })
+    const moves = steps.filter(isMove)
+    expect(moves.length).toBeGreaterThan(1)
+    expect(moves[moves.length - 1]).toEqual({ t: 1300, op: 'move', x: 400, y: 0 })
+    for (const m of moves) {
+      expect(m.y).toBeCloseTo(0)
+      expect(m.x).not.toBe(999) // dragPath's own point is never used
+    }
+  })
+
+  it('a fast drag is still animated over at least 200ms, with `up` following the animation', () => {
+    const drag: ScenarioDragAction = {
+      id: 'd1', kind: 'drag', at: 1000, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null,
+      toX: 100, toY: 0, dragPath: [], durationMs: 40
+    }
+    const steps = compileScenario([drag], { startPos: { x: 0, y: 0 } })
+    expect(steps.find(isButtonOp('up'))!.t).toBe(1200) // at + max(40, 200)
+  })
+
+  it("the first action's leading move starts from opts.startPos (fed from the captured Scenario.startPoint by the caller)", () => {
+    const a: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1000, x: 500, y: 0, path: [], modifiers: NO_MODS, shot: null }
+    const fromOrigin = compileScenario([a], { startPos: { x: 0, y: 0 } }).filter(isMove)
+    expect(fromOrigin[0].x).toBeGreaterThan(0)
+    expect(fromOrigin[0].x).toBeLessThan(500)
+
+    // startPos already at the action's own point (the documented fallback "no startPoint"
+    // behaviour) - no initial move at all
+    const fromOwnPoint = compileScenario([a], { startPos: { x: 500, y: 0 } }).filter(isMove)
+    expect(fromOwnPoint).toEqual([])
+  })
+})
+
+describe('drag effective duration: nothing after it starts before the button lifts', () => {
+  it("retimeAction and compileScenario agree on where a fast drag really ends, so a next action packed right after it never starts before the drag's up", () => {
+    const drag: ScenarioDragAction = {
+      id: 'd1', kind: 'drag', at: 1000, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null,
+      toX: 100, toY: 0, dragPath: [], durationMs: 40
+    }
+    const rough: ScenarioClickAction = { id: 'c1', kind: 'click', at: 1050, x: 500, y: 500, path: [], modifiers: NO_MODS, shot: null }
+    // pack the click as tight as retimeAction allows right after the drag
+    const packed = retimeAction([drag, rough], 'c1', 0, false)
+    const next = packed[1] as ScenarioClickAction
+    // actionEnd(drag) + MIN_GAP_MS(50): with the bug (raw durationMs=40) this would be 1000+40+50
+    // = 1090; with the fix (effectiveDuration=200) it is 1000+200+50 = 1250
+    expect(next.at).toBe(1250)
+
+    const steps = compileScenario(packed, { startPos: { x: 0, y: 0 } })
+    const up = steps.find(isButtonOp('up'))!
+    const downs = steps.filter(isButtonOp('down'))
+    expect(up.t).toBe(1200) // the drag's own up: at + effectiveDuration
+    expect(downs).toHaveLength(2)
+    // the click's own down (the drag's is the first) must not fire before the drag's real up
+    expect(downs[1].t).toBeGreaterThanOrEqual(up.t)
+  })
+})
+
+describe('Scenario.startPoint', () => {
+  const baseScenario: Scenario = {
+    version: 1,
+    id: 's1',
+    name: 'Test',
+    createdAt: 0,
+    displayId: 1,
+    displayBounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    scaleFactor: 1,
+    actions: [clickAction('a', 1000)],
+    durationMs: 1070,
+    dir: 'C:/scenarios/s1'
+  }
+
+  it('round-trips through JSON (as storage.ts saves/loads it) without loss', () => {
+    const scenario: Scenario = { ...baseScenario, startPoint: { x: 123, y: 456 } }
+    const roundTripped = JSON.parse(JSON.stringify(scenario)) as Scenario
+    expect(roundTripped.startPoint).toEqual({ x: 123, y: 456 })
+    expect(roundTripped.actions).toEqual(scenario.actions)
+  })
+
+  it('is omitted, rather than present as null, for a scenario captured before the field existed', () => {
+    const roundTripped = JSON.parse(JSON.stringify(baseScenario)) as Scenario
+    expect(roundTripped.startPoint).toBeUndefined()
+    expect('startPoint' in roundTripped).toBe(false)
   })
 })
 
@@ -438,7 +612,7 @@ describe('compileScenario: step ordering', () => {
     { id: 't1', kind: 'type', at: 2000, x: 100, y: 100, path: [], modifiers: NO_MODS, shot: null, text: 'hi', durationMs: 100 },
     { id: 's1', kind: 'scroll', at: 2500, x: 100, y: 100, path: [], modifiers: NO_MODS, shot: null, deltaY: 3, deltaX: 0, durationMs: 150 }
   ]
-  const steps = compileScenario(scenario, { leadMs: 800, startPos })
+  const steps = compileScenario(scenario, { startPos })
 
   it('is sorted with non-decreasing times', () => {
     for (let i = 1; i < steps.length; i++) expect(steps[i].t).toBeGreaterThanOrEqual(steps[i - 1].t)
@@ -480,7 +654,7 @@ describe('compileScenario: step ordering', () => {
     const emoji: ScenarioAction[] = [
       { id: 'e1', kind: 'type', at: 500, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, text: '👍🏽!', durationMs: 100 }
     ]
-    const textSteps = compileScenario(emoji, { leadMs: 800, startPos }).filter(isText)
+    const textSteps = compileScenario(emoji, { startPos }).filter(isText)
     expect(textSteps.map((s) => s.text)).toEqual(['👍🏽', '!'])
   })
 
@@ -499,7 +673,7 @@ describe('compileScenario: step ordering', () => {
     const early: ScenarioAction[] = [
       { id: 'k0', kind: 'key', at: 10, x: 0, y: 0, path: [], modifiers: withMods({ ctrl: true }), shot: null, key: 'Ctrl+S', vk: 83, scan: 31, extended: false }
     ]
-    const s = compileScenario(early, { leadMs: 800, startPos })
+    const s = compileScenario(early, { startPos })
     expect(s.every((step) => step.t >= 0)).toBe(true)
     // the modifier-down would naturally land at at-20 = -10; it must be clamped to 0
     const ctrlDown = s.find(isKey)!.t
@@ -522,7 +696,7 @@ describe('wheel sign: capture <-> compile round trip', () => {
         deltaY: CAPTURED_DELTA_FOR_ONE_UP_NOTCH, deltaX: 0, durationMs: 0
       }
     ]
-    const wheelSteps = compileScenario(scrolledUp, { leadMs: 800, startPos: { x: 0, y: 0 } }).filter(
+    const wheelSteps = compileScenario(scrolledUp, { startPos: { x: 0, y: 0 } }).filter(
       (s): s is Extract<ReplayStep, { op: 'wheel' }> => s.op === 'wheel'
     )
     expect(wheelSteps).toHaveLength(1)
@@ -535,7 +709,7 @@ describe('wheel sign: capture <-> compile round trip', () => {
     const scrolledDown: ScenarioAction[] = [
       { id: 's1', kind: 'scroll', at: 500, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, deltaY: 1, deltaX: 0, durationMs: 0 }
     ]
-    const wheelSteps = compileScenario(scrolledDown, { leadMs: 800, startPos: { x: 0, y: 0 } }).filter(
+    const wheelSteps = compileScenario(scrolledDown, { startPos: { x: 0, y: 0 } }).filter(
       (s): s is Extract<ReplayStep, { op: 'wheel' }> => s.op === 'wheel'
     )
     expect(wheelSteps).toHaveLength(1)

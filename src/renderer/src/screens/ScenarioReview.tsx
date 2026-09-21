@@ -433,16 +433,6 @@ function ActionPreview({ action, dir }: { action: ScenarioAction; dir: string })
           <dt>{t('scenario.detailDuration')}</dt>
           <dd>{t('scenario.detailDurationValue', { ms: actionDuration(action) })}</dd>
         </div>
-        <div>
-          <dt>{t('scenario.detailPath')}</dt>
-          <dd>{t('scenario.detailPathValue', { n: action.path.length })}</dd>
-        </div>
-        {action.kind === 'drag' && (
-          <div>
-            <dt>{t('scenario.detailDragPath')}</dt>
-            <dd>{t('scenario.detailPathValue', { n: action.dragPath.length })}</dd>
-          </div>
-        )}
       </dl>
     </>
   )

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { createInterface, type Interface } from 'node:readline'
 import type { ChildProcess } from 'node:child_process'
 import type { UiohookKeyboardEvent, UiohookMouseEvent, UiohookWheelEvent } from 'uiohook-napi'
-import type { RecorderBarState, Scenario, ScenarioCaptureState, ScenarioModifiers, ScenarioShot } from '@shared/types'
+import type { RecorderBarState, Scenario, ScenarioCaptureState, ScenarioModifiers, ScenarioPoint, ScenarioShot } from '@shared/types'
 import { SCENARIO_MAX_MS } from '@shared/defaults'
 import { groupRawEvents, isModifierKey, normalizeLeadIn, scenarioEnd, type RawDownEvent, type RawInputEvent, type RawKeyEvent, type RawUpEvent, type RawWheelEvent } from '@shared/scenario'
 import { createBarWindow, getMainWindow } from '../windows'
@@ -87,6 +87,9 @@ export class ScenarioCapture {
   private id: string | null = null
   private dir: string | null = null
   private startedAt: number | null = null
+  /** cursor position at the moment capture began (end of the countdown), DIP; stored on the
+   * saved Scenario so the compiler can start the first action's leading move from here. */
+  private startPoint: ScenarioPoint | null = null
   private stopRequestedAt: number | null = null
   private countdownTimer: NodeJS.Timeout | null = null
   private capTimer: NodeJS.Timeout | null = null
@@ -215,6 +218,7 @@ export class ScenarioCapture {
     this.countdownTimer = null
     if (this.state.phase !== 'countdown') return
     this.startedAt = Date.now()
+    this.startPoint = screen.getCursorScreenPoint()
     this.setState({ phase: 'capturing', actions: 0, startedAt: this.startedAt })
     this.setBarState({ phase: 'scenario', startedAt: this.startedAt, countdownEndsAt: null, mode: 'scenario', actions: 0 })
     this.startPolling()
@@ -249,6 +253,7 @@ export class ScenarioCapture {
           displayBounds: this.display.bounds,
           scaleFactor: this.display.scaleFactor,
           actions,
+          startPoint: this.startPoint ?? undefined,
           durationMs: Math.max(scenarioEnd(actions), Date.now() - startedAt),
           dir: this.dir
         }
@@ -354,6 +359,7 @@ export class ScenarioCapture {
     this.id = null
     this.dir = null
     this.startedAt = null
+    this.startPoint = null
     this.stopRequestedAt = null
     this.lastMove = null
     this.raw = []

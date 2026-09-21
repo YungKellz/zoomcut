@@ -10,14 +10,16 @@ import type {
   ExportFinishResult,
   ExportProgress,
   ExportSettings,
+  MusicTrack,
   OverlayEffect,
   Project,
   ProjectSummary,
   Rect,
   RecorderBarState,
-  RecordOptions,
   RecordingProgress,
   RecordingStartMeta,
+  RecordingWarning,
+  RecordOptions,
   ReplayState,
   Scenario,
   ScenarioCaptureState,
@@ -46,9 +48,11 @@ export interface ZcApi {
     prepare(displayId: number, options?: RecordOptions): Promise<{ id: string; countdownEndsAt: number }>
     started(id: string, meta: RecordingStartMeta): Promise<void>
     chunk(id: string, data: ArrayBuffer): Promise<void>
-    /** one opus chunk from the mic or system-audio MediaRecorder */
+    /** one opus chunk from the mic MediaRecorder */
     audioChunk(id: string, kind: AudioTrackKind, data: ArrayBuffer): Promise<void>
-    finish(id: string): Promise<Project>
+    /** `warnings` reports non-fatal degradation (e.g. system audio failed) - the recording
+     * itself still succeeded and `project` is complete. */
+    finish(id: string): Promise<{ project: Project; warnings: RecordingWarning[] }>
     cancel(id: string): Promise<void>
     /** Stop / cancel requests coming from the floating bar or the global shortcut. */
     onStopRequested(cb: () => void): Unsubscribe
@@ -92,11 +96,11 @@ export interface ZcApi {
     install(): Promise<void>
     onState(cb: (s: UpdateState) => void): Unsubscribe
   }
-  // ---- audio (A2: voiceover, music presets, file import) ----
+  // ---- audio (A2: voiceover, bundled music library, file import) ----
   audio: {
-    /** Converts a renderer-produced blob (voiceover recording, generated music bed) into the
-     * project's AAC .m4a (see src/shared/audio.ts), probes its duration and returns the new
-     * file name. Rejects with a clear message when the project folder does not exist. */
+    /** Converts a renderer-produced blob (voiceover recording) into the project's AAC .m4a
+     * (see src/shared/audio.ts), probes its duration and returns the new file name. Rejects
+     * with a clear message when the project folder does not exist. */
     importClip(
       projectId: string,
       clip: { kind: AudioClipKind; name: string; ext: 'webm' | 'wav' | 'mp3' | 'm4a' | 'ogg' | 'flac'; data: ArrayBuffer }
@@ -104,6 +108,13 @@ export interface ZcApi {
     /** Opens a native file picker with audio filters and imports the chosen file the same
      * way importClip does; resolves to null when the user cancels. */
     importFile(projectId: string): Promise<{ file: string; durationMs: number; name: string } | null>
+    /** Lists the bundled CC0 music library (resources/music/manifest.json; see
+     * src/main/audio/musicLibrary.ts), skipping entries whose file is missing. */
+    listMusic(): Promise<MusicTrack[]>
+    /** Copies a bundled track's `.m4a` into the project folder unchanged (no re-encoding) as
+     * `music-<id>.m4a` and probes the copy's real duration. Rejects when `id` is not a track
+     * in the manifest or the project folder does not exist. */
+    importMusic(projectId: string, id: string): Promise<{ file: string; durationMs: number }>
     /** Deletes every `.m4a` in the project folder that is not listed in `keepFiles`. Clip
      * removal itself is undoable (Ctrl+Z), so nothing deletes a clip's file eagerly – this is
      * called once when the editor closes (main.tsx), after undo history for that project is

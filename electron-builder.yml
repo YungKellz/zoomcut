@@ -9,6 +9,15 @@ files:
 asarUnpack:
   - node_modules/ffmpeg-static/**
   - node_modules/uiohook-napi/**
+# bundled CC0 music library (resources/music) for the "Add music" picker - see
+# src/main/audio/musicLibrary.ts musicDir(), which reads it from here once packaged
+extraResources:
+  - from: resources/music
+    to: music
+    filter:
+      - '*.m4a'
+      - manifest.json
+      - README.md
 win:
   target:
     - nsis

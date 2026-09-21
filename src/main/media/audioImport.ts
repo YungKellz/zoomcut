@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import type { AudioClipKind } from '@shared/types'
-import { exists, exportTempDir, projectDir } from '../storage'
+import { exportTempDir } from '../storage'
+import { assertProjectId, exists, projectDir, requireProjectDir } from './projectPaths'
 import { getMainWindow } from '../windows'
 import { convertAudio, probeAudio } from './ffmpeg'
 
@@ -32,22 +33,6 @@ const FILE_DIALOG_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac
 
 function newClipId(kind: string): string {
   return `${kind}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`
-}
-
-/** `projectId` always becomes a literal path segment (projectDir/exportTempDir joins); reject
- * anything that is not a plain folder-name-shaped string before it ever touches the filesystem. */
-function assertProjectId(projectId: string): void {
-  if (!/^[A-Za-z0-9_.-]+$/.test(projectId) || projectId.includes('..')) {
-    throw new Error(`Refusing to use project id '${projectId}': not a plain folder name.`)
-  }
-}
-
-async function requireProjectDir(projectId: string): Promise<string> {
-  const dir = projectDir(projectId)
-  if (!(await exists(dir))) {
-    throw new Error(`Project '${projectId}' was not found; its folder may have been deleted.`)
-  }
-  return dir
 }
 
 /**
