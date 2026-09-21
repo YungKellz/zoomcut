@@ -50,11 +50,18 @@ export function AudioPlayer(): JSX.Element {
     const isPlaying = useStore.getState().playing
     const globalMuted = useStore.getState().audioMuted
     const playheadMs = useStore.getState().playheadMs
+    const errors = useStore.getState().audioErrors
     const segments = keepSegments(p.recording.durationMs, p.cuts)
     const outDurationMs = outputDuration(segments)
     for (const clip of p.audio) {
       const el = elements.current.get(clip.id)
       if (!el) continue
+      // a clip whose file failed to load (missing/corrupt) is left alone: no point calling
+      // play() again every 100ms, it will only keep failing
+      if (errors[clip.id]) {
+        if (!el.paused) el.pause()
+        continue
+      }
       const info = isRecordedClip(clip)
         ? recordedActive(clip, playheadMs, segments)
         : overlayActive(clip, playheadMs, segments, outDurationMs)
@@ -96,6 +103,9 @@ export function AudioPlayer(): JSX.Element {
           }}
           src={window.zc.media.url(audioClipPath(project, clip))}
           preload="auto"
+          loop={clip.loop}
+          onError={() => useStore.getState().setAudioError(clip.id, true)}
+          onCanPlay={() => useStore.getState().setAudioError(clip.id, false)}
         />
       ))}
     </div>

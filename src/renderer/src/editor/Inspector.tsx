@@ -1,33 +1,42 @@
 import type React from 'react'
 import type { JSX } from 'react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   AppWindow,
   AudioLines,
   Crosshair,
   Crop,
   FileAudio,
+  Loader2,
   Mic,
   MousePointer2,
   Music,
+  Play,
   Scissors,
   Sparkles,
+  Square,
   Trash2,
   Type,
   Undo2,
+  Upload,
   Volume2,
   VolumeX,
+  X,
   ZoomIn
 } from 'lucide-react'
 import type { AudioClip, TextOverlay, ZoomSegment } from '@shared/types'
-import { GRADIENT_PRESETS } from '@shared/defaults'
-import { isRecordedClip } from '@shared/audio'
+import { DEFAULT_AUDIO_CAPTURE, GRADIENT_PRESETS } from '@shared/defaults'
+import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
+import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
 import { findZoom } from '../engine/camera'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
-import { keepSegments, outputDuration } from '../engine/timeline'
+import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
+import { MUSIC_PRESETS, audioBufferToWav, renderMusic, type MusicPresetId } from '../audio/music'
+import { en } from '../i18n/en'
 import { formatTimecode } from '../util/format'
 import { useT, type Translate } from '../i18n'
 
@@ -448,12 +457,509 @@ function audioClipIcon(kind: AudioClip['kind']): JSX.Element {
   }
 }
 
-// main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio);
-// the UI always shows the translated kind name for those two, and the clip's own name otherwise
+// main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio)
+// and voiceover/music clips store an English name too (see VoiceoverRecorder/MusicAndFilePicker
+// below); the UI always shows the translated kind/preset name for those, and the clip's own
+// name otherwise (a file import, or a music clip whose preset id is no longer known)
 function audioClipLabel(t: Translate, clip: AudioClip): string {
   if (clip.kind === 'system') return t('audio.kind.system')
   if (clip.kind === 'mic') return t('audio.kind.mic')
+  if (clip.kind === 'voiceover') return t('audio.kind.voiceover')
+  if (clip.kind === 'music' && clip.preset) {
+    const preset = MUSIC_PRESETS.find((p) => p.id === clip.preset)
+    if (preset) return t(preset.nameKey)
+  }
   return clip.name
+}
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+interface VoiceoverSession {
+  recorder: MediaRecorder
+  stream: MediaStream
+  /** unsubscribes the store watcher used to anchor the clip's start, see startRecording */
+  unsubscribe: () => void
+}
+
+/** Mic <select> + "Record voiceover" button. Starts a MediaRecorder from getUserMedia while
+ * playing the project back (muted for every other clip) from the current playhead, and turns
+ * the recorded blob into a `voiceover` AudioClip positioned where the recording began. */
+function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
+  const project = useProject()
+  const addAudioClip = useStore((s) => s.addAudioClip)
+  const playing = useStore((s) => s.playing)
+  const [micDeviceId, setMicDeviceId] = useState<string | null>(null)
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([])
+  const [recording, setRecording] = useState(false)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const sessionRef = useRef<VoiceoverSession | null>(null)
+  const discardRef = useRef(false)
+  // MediaRecorder.state flips to 'inactive' SYNCHRONOUSLY inside .stop(), before the 'stop'
+  // event fires – so recorder.state alone cannot tell "never started" apart from "stop() was
+  // already called, onstop just has not run yet". This guards stopRecording so a second call
+  // (double-click, Escape racing the button) cannot re-enter and stop the mic tracks early.
+  const stoppingRef = useRef(false)
+  const startWallRef = useRef(0)
+
+  // the last used device is shared with Home's mic checkbox (AppSettings.audioDefaults.micDeviceId)
+  useEffect(() => {
+    void window.zc.app
+      .getSettings()
+      .then((s) => setMicDeviceId(s.audioDefaults?.micDeviceId ?? null))
+      .catch(() => undefined)
+  }, [])
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const list = devices.filter((d) => d.kind === 'audioinput' && d.deviceId !== '')
+      setMicDevices(list)
+      // a stale exact deviceId (unplugged mic, a project reopened on another machine) makes
+      // getUserMedia reject with OverconstrainedError instead of falling back to the default
+      setMicDeviceId((current) => (current && !list.some((d) => d.deviceId === current) ? null : current))
+    } catch {
+      setMicDevices([])
+    }
+  }, [])
+  useEffect(() => {
+    void refreshDevices()
+    navigator.mediaDevices.addEventListener('devicechange', refreshDevices)
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshDevices)
+  }, [refreshDevices])
+
+  const chooseMic = (value: string): void => {
+    const id = value || null
+    setMicDeviceId(id)
+    void window.zc.app
+      .getSettings()
+      .then((s) => window.zc.app.setSettings({ audioDefaults: { ...(s.audioDefaults ?? DEFAULT_AUDIO_CAPTURE), micDeviceId: id } }))
+      .catch(() => undefined)
+  }
+
+  useEffect(() => {
+    if (!recording) return
+    const timer = window.setInterval(() => setElapsedMs(Date.now() - startWallRef.current), 200)
+    return () => window.clearInterval(timer)
+  }, [recording])
+
+  const finishSession = useCallback(
+    (chunks: Blob[], clipStart: number, resumePlayheadMs: number, discard: boolean) => {
+      sessionRef.current = null
+      setRecording(false)
+      useStore.getState().setAudioMuted(false)
+      useStore.getState().setPlaying(false)
+      useStore.getState().setPlayhead(resumePlayheadMs, true)
+      if (discard || chunks.length === 0) return
+      setBusy(true)
+      void (async () => {
+        try {
+          const blob = new Blob(chunks, { type: 'audio/webm' })
+          const data = await blob.arrayBuffer()
+          const name = 'Voiceover' // English in data, like "System audio" / "Microphone"; UI translates via audioClipLabel
+          const result = await window.zc.audio.importClip(project.id, { kind: 'voiceover', name, ext: 'webm', data })
+          addAudioClip({
+            id: uid('audio'),
+            kind: 'voiceover',
+            file: result.file,
+            name,
+            start: clipStart,
+            durationMs: result.durationMs,
+            ...newAudioClipDefaults('voiceover')
+          })
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      })()
+    },
+    [addAudioClip, project.id]
+  )
+
+  const stopRecording = useCallback((discard: boolean) => {
+    const s = sessionRef.current
+    // stoppingRef makes this idempotent: a second call for the same session (double-click,
+    // Escape firing right after the button) must not re-run the cleanup below, or it would
+    // stop the mic tracks itself instead of leaving that to the pending recorder.onstop
+    if (!s || stoppingRef.current) return
+    stoppingRef.current = true
+    discardRef.current = discard
+    if (s.recorder.state !== 'inactive') {
+      // tracks are stopped inside recorder.onstop, after the last chunk has been flushed –
+      // stopping them here too would race the recorder's own finalization
+      s.recorder.stop()
+    } else {
+      // defensive: the recorder never actually reached recorder.start() (or was somehow
+      // already inactive) – onstop will not fire, so this is the only place left to release
+      // the mic and reset the UI; nothing was ever captured, so there is nothing to keep
+      s.unsubscribe()
+      s.stream.getTracks().forEach((tr) => tr.stop())
+      sessionRef.current = null
+      setRecording(false)
+      useStore.getState().setAudioMuted(false)
+      useStore.getState().setPlaying(false)
+    }
+  }, [])
+
+  // stop when the recorder's own Stop button is not the trigger: Escape, or playback reaching
+  // the end (the preview render loop flips `playing` to false by itself, see Preview.tsx)
+  useEffect(() => {
+    if (recording && !playing) stopRecording(false)
+  }, [playing, recording, stopRecording])
+
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') stopRecording(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [recording, stopRecording])
+
+  // unmounting (switching tabs, closing the project) mid-recording discards cleanly: this
+  // must release the mic and reset audioMuted/playing unconditionally, even for a recorder
+  // that never actually reached recorder.start() (its onstop would then never fire to do it)
+  useEffect(
+    () => () => {
+      const s = sessionRef.current
+      if (!s) return
+      discardRef.current = true
+      if (stoppingRef.current) {
+        // a stop was already requested (e.g. the user clicked Stop just before switching
+        // tabs): the recorder is finishing on its own account – forcing the tracks stopped
+        // here too would cut it off before recorder.onstop flushes/releases them itself
+        return
+      }
+      stoppingRef.current = true
+      s.unsubscribe()
+      if (s.recorder.state !== 'inactive') s.recorder.stop()
+      s.stream.getTracks().forEach((tr) => tr.stop())
+      sessionRef.current = null
+      useStore.getState().setAudioMuted(false)
+      useStore.getState().setPlaying(false)
+    },
+    []
+  )
+
+  const startRecording = useCallback(async () => {
+    setError(null)
+    let stream: MediaStream | null = null
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+          echoCancellation: false,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      })
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128_000 })
+      const chunks: Blob[] = []
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data)
+      }
+      const segments = keepSegments(project.recording.durationMs, project.cuts)
+      const resumePlayheadMs = useStore.getState().playheadMs
+      const outStart = srcToOut(resumePlayheadMs, segments)
+
+      // Anchor the clip to when the video actually starts advancing, not to when we merely
+      // requested play(): there is a short gap between the mic's recorder.start() and the
+      // preview loop's first playheadMs tick (buffering/seek). The audio started before the
+      // video moved, so the clip must begin a little earlier – a negative `start` is fine,
+      // the export plan (audioPlan.ts) trims it.
+      let recorderStartWall = 0
+      let firstAdvanceWall: number | null = null
+      const unsubscribe = useStore.subscribe((state) => {
+        if (firstAdvanceWall === null && state.playheadMs !== resumePlayheadMs) firstAdvanceWall = Date.now()
+      })
+
+      const activeStream = stream
+      recorder.onstop = () => {
+        unsubscribe()
+        activeStream.getTracks().forEach((tr) => tr.stop())
+        const clipStart = firstAdvanceWall !== null ? outStart - (firstAdvanceWall - recorderStartWall) : outStart
+        finishSession(chunks, clipStart, resumePlayheadMs, discardRef.current)
+      }
+      recorder.onerror = (ev) => {
+        console.error('[voiceover] recorder error', ev)
+        setError(t('audio.voiceoverError'))
+        stopRecording(true)
+      }
+      discardRef.current = false
+      stoppingRef.current = false
+      sessionRef.current = { recorder, stream: activeStream, unsubscribe }
+      setElapsedMs(0)
+      // order matters: flip `playing` before `recording` so the auto-stop effect above never
+      // sees recording=true with playing still false in an intermediate render
+      useStore.getState().setPlaying(true)
+      useStore.getState().setAudioMuted(true)
+      setRecording(true)
+      recorder.start(250)
+      recorderStartWall = Date.now()
+      startWallRef.current = recorderStartWall
+    } catch (err) {
+      // undo everything this attempt may have already done, however far it got
+      stream?.getTracks().forEach((tr) => tr.stop())
+      sessionRef.current = null
+      setRecording(false)
+      useStore.getState().setAudioMuted(false)
+      useStore.getState().setPlaying(false)
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [finishSession, micDeviceId, project.cuts, project.recording.durationMs, stopRecording, t])
+
+  return (
+    <div className="voiceover">
+      <Field label={t('home.audioMic')}>
+        <select value={micDeviceId ?? ''} disabled={recording} onChange={(e) => chooseMic(e.target.value)}>
+          <option value="">{t('home.audioMicDefault')}</option>
+          {micDevices.map((d, i) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label || t('home.audioMicUnnamed', { n: i + 1 })}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <button
+        className={'btn btn-small btn-voiceover' + (recording ? ' recording' : '')}
+        disabled={busy}
+        onClick={() => (recording ? stopRecording(false) : void startRecording())}
+      >
+        {recording ? <Square size={14} fill="currentColor" /> : <Mic size={14} />}
+        {recording ? `${t('home.stop')} · ${formatElapsed(elapsedMs)}` : busy ? t('audio.importing') : t('audio.recordVoiceover')}
+      </button>
+      {error && (
+        <div className="error-box">
+          <strong>{t('audio.voiceoverError')}</strong> {error}
+          <button className="btn btn-ghost" onClick={() => setError(null)}>
+            {t('home.dismiss')}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const PREVIEW_SECONDS = 8
+
+/** "Add music" preset chooser + "Add audio file…" – both add an overlay AudioClip via
+ * window.zc.audio.importClip / importFile. */
+function MusicAndFilePicker({ t }: PanelProps): JSX.Element {
+  const project = useProject()
+  const addAudioClip = useStore((s) => s.addAudioClip)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [rendering, setRendering] = useState<MusicPresetId | null>(null)
+  // "loading" = rendering audio for the preview specifically (spinner); "previewing" = a
+  // rendered preview is actually playing (stop icon) – two states because renderMusic() can
+  // take a moment and the button must show that it is busy, not just Play/Stop
+  const [previewLoading, setPreviewLoading] = useState<MusicPresetId | null>(null)
+  const [previewing, setPreviewing] = useState<MusicPresetId | null>(null)
+  const [fileImporting, setFileImporting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const previewRef = useRef<{ ctx: AudioContext; source: AudioBufferSourceNode } | null>(null)
+  // bumped by every stopPreview()/playPreview() call; playPreview checks it after the await so
+  // a stop clicked while renderMusic() is still running (previewRef isn't set yet at that point)
+  // actually cancels the preview instead of being silently swallowed
+  const previewGenRef = useRef(0)
+  // renderMusic() is deterministic per preset id, so the same render is reused between a
+  // preview and a "Use" click (and between repeated previews) instead of recomputing it
+  const bufferCacheRef = useRef(new Map<MusicPresetId, Promise<AudioBuffer>>())
+  // guards "Add audio file…" against a double-click opening two native dialogs at once
+  const fileImportBusyRef = useRef(false)
+
+  const getRenderedBuffer = useCallback((id: MusicPresetId): Promise<AudioBuffer> => {
+    let pending = bufferCacheRef.current.get(id)
+    if (!pending) {
+      pending = renderMusic(id)
+      bufferCacheRef.current.set(id, pending)
+      // a failed render must not poison the cache forever – let a later click retry
+      pending.catch(() => bufferCacheRef.current.delete(id))
+    }
+    return pending
+  }, [])
+
+  const stopPreview = useCallback(() => {
+    previewGenRef.current++
+    setPreviewLoading(null)
+    const p = previewRef.current
+    previewRef.current = null
+    setPreviewing(null)
+    if (!p) return
+    p.source.onended = null
+    try {
+      p.source.stop()
+    } catch {
+      // already stopped
+    }
+    void p.ctx.close().catch(() => undefined)
+  }, [])
+
+  // stop a running preview when the panel goes away (tab switch, project close)
+  useEffect(() => stopPreview, [stopPreview])
+
+  const playPreview = useCallback(
+    async (id: MusicPresetId) => {
+      stopPreview()
+      setError(null)
+      setPreviewLoading(id)
+      const gen = ++previewGenRef.current
+      let ctx: AudioContext | null = null
+      try {
+        const buffer = await getRenderedBuffer(id)
+        if (previewGenRef.current !== gen) return // stopped (or superseded) while rendering
+        ctx = new AudioContext()
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.connect(ctx.destination)
+        source.onended = () => {
+          if (previewRef.current?.source === source) stopPreview()
+        }
+        source.start(0, 0, PREVIEW_SECONDS)
+        previewRef.current = { ctx, source }
+        setPreviewLoading(null)
+        setPreviewing(id)
+      } catch (err) {
+        if (previewGenRef.current === gen) {
+          setPreviewLoading(null)
+          setPreviewing(null)
+          setError(err instanceof Error ? err.message : String(err))
+        }
+        void ctx?.close().catch(() => undefined)
+      }
+    },
+    [getRenderedBuffer, stopPreview]
+  )
+
+  const usePreset = useCallback(
+    async (id: MusicPresetId) => {
+      stopPreview()
+      setError(null)
+      setRendering(id)
+      try {
+        const preset = MUSIC_PRESETS.find((p) => p.id === id)
+        if (!preset) return
+        const buffer = await getRenderedBuffer(id)
+        const wav = audioBufferToWav(buffer)
+        // English in data, like "System audio" / "Microphone" / "Voiceover"; the UI always
+        // shows the translated preset name via audioClipLabel (looked up from clip.preset)
+        const name = en[preset.nameKey]
+        const result = await window.zc.audio.importClip(project.id, { kind: 'music', name, ext: 'wav', data: wav })
+        addAudioClip({
+          id: uid('audio'),
+          kind: 'music',
+          file: result.file,
+          name,
+          start: 0,
+          durationMs: result.durationMs,
+          preset: id,
+          ...newAudioClipDefaults('music'),
+          volume: 0.35,
+          fadeOutMs: 1500
+        })
+        setPickerOpen(false)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setRendering(null)
+      }
+    },
+    [addAudioClip, getRenderedBuffer, project.id, stopPreview]
+  )
+
+  const addFile = useCallback(async () => {
+    if (fileImportBusyRef.current) return
+    fileImportBusyRef.current = true
+    setFileImporting(true)
+    setError(null)
+    try {
+      const result = await window.zc.audio.importFile(project.id)
+      if (!result) return
+      const segments = keepSegments(project.recording.durationMs, project.cuts)
+      addAudioClip({
+        id: uid('audio'),
+        kind: 'file',
+        file: result.file,
+        name: result.name,
+        start: srcToOut(useStore.getState().playheadMs, segments),
+        durationMs: result.durationMs,
+        ...newAudioClipDefaults('file')
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      fileImportBusyRef.current = false
+      setFileImporting(false)
+    }
+  }, [addAudioClip, project.cuts, project.id, project.recording.durationMs])
+
+  return (
+    <div className="audio-add-row">
+      <button className="btn btn-small btn-add-music" onClick={() => setPickerOpen((v) => !v)}>
+        <Music size={14} /> {t('audio.addMusic')}
+      </button>
+      <button className="btn btn-small btn-add-audio-file" disabled={fileImporting} onClick={() => void addFile()}>
+        <Upload size={14} /> {t('audio.addFile')}
+      </button>
+      {error && (
+        <div className="error-box">
+          <strong>{t('audio.importError')}</strong> {error}
+          <button className="btn btn-ghost" onClick={() => setError(null)}>
+            {t('home.dismiss')}
+          </button>
+        </div>
+      )}
+      {pickerOpen && (
+        <div className="music-presets">
+          {MUSIC_PRESETS.map((preset) => (
+            <div key={preset.id} className="music-preset">
+              <div className="music-preset-info">
+                <strong>{t(preset.nameKey)}</strong>
+                <span className="muted small">{t(preset.descriptionKey)}</span>
+                <span className="muted small">{preset.bpm} BPM</span>
+              </div>
+              <div className="music-preset-actions">
+                <button
+                  className="btn btn-ghost btn-small"
+                  title={t('audio.preview')}
+                  onClick={() => (previewing === preset.id || previewLoading === preset.id ? stopPreview() : void playPreview(preset.id))}
+                >
+                  {previewLoading === preset.id ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : previewing === preset.id ? (
+                    <Square size={14} />
+                  ) : (
+                    <Play size={14} />
+                  )}
+                </button>
+                <button
+                  className="btn btn-small btn-primary btn-use-preset"
+                  disabled={rendering !== null}
+                  onClick={() => void usePreset(preset.id)}
+                >
+                  {rendering === preset.id ? <Loader2 size={14} className="spin" /> : null}
+                  {t('audio.usePreset')}
+                </button>
+              </div>
+            </div>
+          ))}
+          <button
+            className="btn btn-ghost btn-small music-presets-close"
+            onClick={() => {
+              stopPreview()
+              setPickerOpen(false)
+            }}
+          >
+            <X size={14} /> {t('common.close')}
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function AudioPanel({ t }: PanelProps): JSX.Element {
@@ -463,20 +969,29 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
   const updateAudioClip = useStore((s) => s.updateAudioClip)
   const removeAudioClip = useStore((s) => s.removeAudioClip)
   const checkpoint = useStore((s) => s.checkpoint)
+  const audioErrors = useStore((s) => s.audioErrors)
   const clip: AudioClip | undefined = selection?.kind === 'audio' ? project.audio.find((c) => c.id === selection.id) : undefined
   const outDurationMs = outputDuration(keepSegments(project.recording.durationMs, project.cuts))
 
   return (
     <>
+      <VoiceoverRecorder t={t} />
+      <MusicAndFilePicker t={t} />
+
       {project.audio.length === 0 ? (
         <p className="muted small">{t('audio.empty')}</p>
       ) : (
-        <ul className="list">
+        <ul className="list audio-list">
           {project.audio.map((c) => (
             <li key={c.id} className={'list-item' + (clip?.id === c.id ? ' active' : '')}>
               <button className="list-main audio-list-item" onClick={() => select({ kind: 'audio', id: c.id })}>
                 {audioClipIcon(c.kind)}
                 <span className={c.muted ? 'muted' : ''}>{audioClipLabel(t, c)}</span>
+                {audioErrors[c.id] && (
+                  <span className="audio-warn" title={t('audio.fileMissing')}>
+                    <AlertTriangle size={13} />
+                  </span>
+                )}
               </button>
               <button className="btn btn-ghost" onClick={() => updateAudioClip(c.id, { muted: !c.muted })} title={c.muted ? t('audio.unmute') : t('audio.mute')}>
                 {c.muted || c.volume <= 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
@@ -492,6 +1007,11 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
       {clip && (
         <>
           <h3>{t('audio.selected')}</h3>
+          {!isRecordedClip(clip) && (
+            <Field label={t('audio.name')}>
+              <input type="text" value={clip.name} onFocus={checkpoint} onChange={(e) => updateAudioClip(clip.id, { name: e.target.value }, false)} />
+            </Field>
+          )}
           <Slider
             label={t('audio.volume')}
             value={clip.volume}
@@ -518,8 +1038,33 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
               onChange={(v) => updateAudioClip(clip.id, { start: v }, false)}
             />
           ) : (
-            <TimeInput label={t('audio.startTime')} value={clip.start} max={outDurationMs} onChange={(v) => updateAudioClip(clip.id, { start: v })} />
+            <>
+              <TimeInput label={t('audio.startTime')} value={clip.start} max={outDurationMs} onChange={(v) => updateAudioClip(clip.id, { start: v })} />
+              <Toggle label={t('audio.loop')} value={clip.loop} onChange={(v) => updateAudioClip(clip.id, { loop: v })} />
+            </>
           )}
+          <div className="row2">
+            <Slider
+              label={t('audio.fadeIn')}
+              value={clip.fadeInMs}
+              min={0}
+              max={3000}
+              step={50}
+              format={(v) => `${v} ms`}
+              onBegin={checkpoint}
+              onChange={(v) => updateAudioClip(clip.id, { fadeInMs: v }, false)}
+            />
+            <Slider
+              label={t('audio.fadeOut')}
+              value={clip.fadeOutMs}
+              min={0}
+              max={3000}
+              step={50}
+              format={(v) => `${v} ms`}
+              onBegin={checkpoint}
+              onChange={(v) => updateAudioClip(clip.id, { fadeOutMs: v }, false)}
+            />
+          </div>
           <button className="btn btn-small danger" onClick={() => removeAudioClip(clip.id)}>
             <Trash2 size={14} /> {t('audio.delete')}
           </button>

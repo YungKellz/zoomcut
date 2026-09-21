@@ -261,5 +261,32 @@ export const ru: Record<TKey, string> = {
   'audio.delete': 'Удалить дорожку',
   'audio.kind.system': 'Звук системы',
   'audio.kind.mic': 'Микрофон',
-  'audio.help': 'Записанные дорожки следуют за видео через вырезки; смещение синхронизации немного сдвигает их, если звук отстаёт или опережает.'
+  'audio.kind.voiceover': 'Озвучка',
+  'audio.help': 'Записанные дорожки следуют за видео через вырезки; смещение синхронизации немного сдвигает их, если звук отстаёт или опережает.',
+  'audio.name': 'Название',
+  'audio.loop': 'Зациклить',
+  'audio.fadeIn': 'Появление',
+  'audio.fadeOut': 'Затухание',
+  'audio.recordVoiceover': 'Записать озвучку',
+  'audio.importing': 'Импортируем…',
+  'audio.voiceoverError': 'Не удалось записать озвучку.',
+  'audio.addMusic': 'Добавить музыку',
+  'audio.addFile': 'Добавить аудиофайл…',
+  'audio.usePreset': 'Использовать',
+  'audio.preview': 'Прослушать (~8с)',
+  'audio.importError': 'Не удалось добавить звук.',
+  'audio.fileMissing': 'Не удалось загрузить файл этой дорожки.',
+  'timeline.trackAudio': 'звук',
+
+  // ---- music presets ----
+  'music.preset.calm.name': 'Спокойная',
+  'music.preset.calm.desc': 'Медленные тёплые аккорды пэда – не мешает озвучке.',
+  'music.preset.upbeat.name': 'Энергичная',
+  'music.preset.upbeat.desc': 'Перебор аккордов и лёгкий бит – для динамичных демо.',
+  'music.preset.lofi.name': 'Lo-fi',
+  'music.preset.lofi.desc': 'Мягкие свинг-клавиши на фоне лёгкого шума.',
+  'music.preset.corporate.name': 'Корпоративная',
+  'music.preset.corporate.desc': 'Яркий оптимистичный пэд с фортепианным перебором.',
+  'music.preset.minimal.name': 'Минимал',
+  'music.preset.minimal.desc': 'Редкие ноты в духе маримбы на глубоком сабе.'
 }

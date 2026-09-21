@@ -60,6 +60,11 @@ const api: ZcApi = {
     check: () => ipcRenderer.invoke('update:check'),
     install: () => ipcRenderer.invoke('update:install'),
     onState: (cb) => subscribe('update:changed', cb)
+  },
+  audio: {
+    importClip: (projectId, clip) => ipcRenderer.invoke('audio:import-clip', projectId, clip),
+    importFile: (projectId) => ipcRenderer.invoke('audio:import-file', projectId),
+    sweep: (projectId, keepFiles) => ipcRenderer.invoke('audio:sweep', projectId, keepFiles)
   }
 }
 

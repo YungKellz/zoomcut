@@ -2,12 +2,14 @@ import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { TextOverlay } from '@shared/types'
+import type { AudioClip, TextOverlay } from '@shared/types'
+import { isRecordedClip } from '@shared/audio'
 import { useProject, useStore } from '../store'
 import { keepSegments, outToSrc, outputDuration, srcToOut } from '../engine/timeline'
 import { useThumbnails } from '../hooks/useThumbnails'
+import { MUSIC_PRESETS } from '../audio/music'
 import { clamp, formatTimecode } from '../util/format'
-import { useT } from '../i18n'
+import { useT, type Translate } from '../i18n'
 
 const TICK_STEPS = [100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000]
 const END_PAD_PX = 56
@@ -22,13 +24,25 @@ interface RegionProps {
   label: string
   selected: boolean
   minLength?: number
+  /** false hides the l/r handles and disables resizing – the block can only be moved (audio overlay clips). */
+  resizable?: boolean
+  /**
+   * Upper bound for `start` while dragging. Defaults to `maxEnd - len` (the region keeps its
+   * current length, sliding inside [0, maxEnd]) – correct for a fixed-length region (zoom/text).
+   * A non-resizable region whose `end` is re-derived every render from something other than a
+   * stored duration (e.g. a looping audio clip, which Timeline always draws touching the output
+   * end) needs the caller to pass the real bound explicitly, since `len` at drag-start is not a
+   * stable width to preserve there – using the default would clamp to 0 (maxEnd - maxEnd)
+   * whenever the region currently spans the full width, making it undraggable.
+   */
+  moveMax?: number
   onSelect: () => void
   onBegin: () => void
   onChange: (start: number, end: number) => void
 }
 
 function Region(props: RegionProps): JSX.Element {
-  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, onSelect, onBegin, onChange } = props
+  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, resizable = true, moveMax, onSelect, onBegin, onChange } = props
 
   const begin = (kind: 'move' | 'l' | 'r') => (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -40,10 +54,11 @@ function Region(props: RegionProps): JSX.Element {
     const sx = e.clientX
     const o = { start, end }
     const len = end - start
+    const moveUpper = moveMax ?? Math.max(0, maxEnd - len)
     const move = (ev: PointerEvent): void => {
       const dMs = (ev.clientX - sx) / pxPerMs
       if (kind === 'move') {
-        const s = clamp(o.start + dMs, 0, Math.max(0, maxEnd - len))
+        const s = clamp(o.start + dMs, 0, moveUpper)
         onChange(s, s + len)
       } else if (kind === 'l') {
         onChange(clamp(o.start + dMs, 0, o.end - minLength), o.end)
@@ -66,14 +81,29 @@ function Region(props: RegionProps): JSX.Element {
       onPointerDown={begin('move')}
       title={`${formatTimecode(start)} – ${formatTimecode(end)}`}
     >
-      <div className="region-handle l" onPointerDown={begin('l')} />
+      {resizable && <div className="region-handle l" onPointerDown={begin('l')} />}
       <span className="region-label">{label}</span>
-      <div className="region-handle r" onPointerDown={begin('r')} />
+      {resizable && <div className="region-handle r" onPointerDown={begin('r')} />}
     </div>
   )
 }
 
-function assignLanes(items: TextOverlay[]): Map<string, number> {
+/** main stores "System audio" / "Microphone" in English (see RecordingController.finishAudio)
+ * and voiceover/music clips store an English name too (see the Audio panel); the timeline
+ * always shows the translated kind/preset name for those, and the clip's own name otherwise
+ * (a file import, or a music clip whose preset id is no longer a known preset). */
+function audioClipLabel(t: Translate, clip: AudioClip): string {
+  if (clip.kind === 'system') return t('audio.kind.system')
+  if (clip.kind === 'mic') return t('audio.kind.mic')
+  if (clip.kind === 'voiceover') return t('audio.kind.voiceover')
+  if (clip.kind === 'music' && clip.preset) {
+    const preset = MUSIC_PRESETS.find((p) => p.id === clip.preset)
+    if (preset) return t(preset.nameKey)
+  }
+  return clip.name
+}
+
+function assignLanes<T extends { id: string; start: number; end: number }>(items: T[]): Map<string, number> {
   const lanes: number[] = []
   const out = new Map<string, number>()
   for (const item of [...items].sort((a, b) => a.start - b.start)) {
@@ -111,6 +141,7 @@ export function Timeline(): JSX.Element {
   const addText = useStore((s) => s.addText)
   const updateZoom = useStore((s) => s.updateZoom)
   const updateText = useStore((s) => s.updateText)
+  const updateAudioClip = useStore((s) => s.updateAudioClip)
   const checkpoint = useStore((s) => s.checkpoint)
   const { stepMs: thumbStep, thumbs } = useThumbnails(project)
 
@@ -162,6 +193,20 @@ export function Timeline(): JSX.Element {
 
   const textLanes = useMemo(() => assignLanes(project.texts), [project.texts])
   const laneCount = Math.max(1, ...Array.from(textLanes.values()).map((l) => l + 1))
+
+  // recorded clips (system/mic) are drawn spanning the whole output (see DESIGN.md); overlay
+  // clips (voiceover/music/file) use their real output-time span, looped ones reaching to the end
+  const audioLaneItems = useMemo(
+    () =>
+      project.audio.map((c) =>
+        isRecordedClip(c)
+          ? { id: c.id, start: 0, end: outDur }
+          : { id: c.id, start: c.start, end: Math.max(c.start, c.loop ? outDur : Math.min(outDur, c.start + c.durationMs)) }
+      ),
+    [project.audio, outDur]
+  )
+  const audioLanes = useMemo(() => assignLanes(audioLaneItems), [audioLaneItems])
+  const audioLaneCount = Math.max(1, ...Array.from(audioLanes.values()).map((l) => l + 1))
 
   const clickMarks = useMemo(() => {
     return project.cursorData.clicks
@@ -286,6 +331,9 @@ export function Timeline(): JSX.Element {
           <div className="track-label text-label" style={{ height: 30 * laneCount }}>
             {t('timeline.trackText')}
           </div>
+          <div className="track-label audio-label" style={{ height: 30 * audioLaneCount }}>
+            {t('timeline.trackAudio')}
+          </div>
         </div>
 
         <div className="timeline-scroll" ref={scrollRef}>
@@ -382,6 +430,54 @@ export function Timeline(): JSX.Element {
                   />
                 </div>
               ))}
+            </div>
+
+            <div className="track track-audio" style={{ height: 30 * audioLaneCount }} onPointerDown={emptyTrackClick}>
+              {project.audio.map((clip) => {
+                const lane = audioLanes.get(clip.id) ?? 0
+                const muted = clip.muted || clip.volume <= 0
+                const selected = selection?.kind === 'audio' && selection.id === clip.id
+                if (isRecordedClip(clip)) {
+                  // recorded (system/mic) clips follow the video through cuts, which can split
+                  // them into several pieces – too fiddly to draw exactly, so this is a simple
+                  // fixed, non-draggable label spanning the whole output (see DESIGN.md)
+                  return (
+                    <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
+                      <div
+                        className={'region audio recorded' + (muted ? ' muted' : '') + (selected ? ' selected' : '')}
+                        style={{ left: 0, width: Math.max(4, outDur * pxPerMs) }}
+                        onClick={() => select({ kind: 'audio', id: clip.id })}
+                        title={audioClipLabel(t, clip)}
+                      >
+                        <span className="region-label">{audioClipLabel(t, clip)}</span>
+                      </div>
+                    </div>
+                  )
+                }
+                const end = Math.max(clip.start, clip.loop ? outDur : Math.min(outDur, clip.start + clip.durationMs))
+                return (
+                  <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
+                    <Region
+                      start={clip.start}
+                      end={end}
+                      pxPerMs={pxPerMs}
+                      maxEnd={outDur}
+                      // a looping clip always plays to the end of the output regardless of
+                      // where it starts, so its start can range all the way to outDur; a
+                      // non-looping clip should not be dragged so far right that most of it
+                      // would be truncated by the output end
+                      moveMax={clip.loop ? outDur : Math.max(0, outDur - clip.durationMs)}
+                      className={'audio' + (muted ? ' muted' : '')}
+                      label={audioClipLabel(t, clip)}
+                      selected={selected}
+                      resizable={false}
+                      onSelect={() => select({ kind: 'audio', id: clip.id })}
+                      onBegin={checkpoint}
+                      onChange={(s) => updateAudioClip(clip.id, { start: Math.round(s) }, false)}
+                    />
+                  </div>
+                )
+              })}
             </div>
 
             <div className="timeline-end" style={{ left: outDur * pxPerMs }}>

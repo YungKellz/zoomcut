@@ -1,6 +1,7 @@
 import type {
   AppInfo,
   AppSettings,
+  AudioClipKind,
   AudioExportPlan,
   AudioTrackKind,
   DisplayInfo,
@@ -80,5 +81,23 @@ export interface ZcApi {
     /** quit, install the downloaded update silently and relaunch */
     install(): Promise<void>
     onState(cb: (s: UpdateState) => void): Unsubscribe
+  }
+  // ---- audio (A2: voiceover, music presets, file import) ----
+  audio: {
+    /** Converts a renderer-produced blob (voiceover recording, generated music bed) into the
+     * project's AAC .m4a (see src/shared/audio.ts), probes its duration and returns the new
+     * file name. Rejects with a clear message when the project folder does not exist. */
+    importClip(
+      projectId: string,
+      clip: { kind: AudioClipKind; name: string; ext: 'webm' | 'wav' | 'mp3' | 'm4a' | 'ogg' | 'flac'; data: ArrayBuffer }
+    ): Promise<{ file: string; durationMs: number }>
+    /** Opens a native file picker with audio filters and imports the chosen file the same
+     * way importClip does; resolves to null when the user cancels. */
+    importFile(projectId: string): Promise<{ file: string; durationMs: number; name: string } | null>
+    /** Deletes every `.m4a` in the project folder that is not listed in `keepFiles`. Clip
+     * removal itself is undoable (Ctrl+Z), so nothing deletes a clip's file eagerly – this is
+     * called once when the editor closes (main.tsx), after undo history for that project is
+     * discarded, to clean up files orphaned by edits that were never saved back. */
+    sweep(projectId: string, keepFiles: string[]): Promise<void>
   }
 }

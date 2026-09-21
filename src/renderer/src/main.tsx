@@ -31,6 +31,13 @@ useStore.subscribe((state, prev) => {
   if (state.project === prev.project) return
   if (!state.project) {
     flushSave()
+    // undo history for this project is discarded the moment it closes (openProject/
+    // closeProject reset history/future), so it is now safe to permanently delete any
+    // .m4a in its folder that no clip references any more (see audioImport.ts sweepAudioFiles).
+    if (prev.project) {
+      const keepFiles = prev.project.audio.map((c) => c.file)
+      void window.zc.audio.sweep(prev.project.id, keepFiles).catch((err) => console.error('audio sweep failed', err))
+    }
     return
   }
   pending = state.project

@@ -12,6 +12,7 @@ import type {
 import type { RecordingController } from './recorder/controller'
 import type { ExportManager } from './exportManager'
 import type { Updater } from './updater'
+import { importAudioClip, importAudioFile, sweepAudioFiles, type AudioImportClipInput } from './media/audioImport'
 import { ffmpegPath } from './media/ffmpeg'
 import {
   deleteProject,
@@ -93,4 +94,7 @@ export function registerIpc({ recorder, exporter, updater }: Deps): void {
 
   // ---- audio ----
   ipcMain.handle('recording:audio-chunk', (_e, id: string, kind: AudioTrackKind, data: ArrayBuffer) => recorder.audioChunk(id, kind, data))
+  ipcMain.handle('audio:import-clip', (_e, projectId: string, clip: AudioImportClipInput) => importAudioClip(projectId, clip))
+  ipcMain.handle('audio:import-file', (_e, projectId: string) => importAudioFile(projectId))
+  ipcMain.handle('audio:sweep', (_e, projectId: string, keepFiles: string[]) => sweepAudioFiles(projectId, keepFiles))
 }

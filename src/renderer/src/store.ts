@@ -58,6 +58,9 @@ export interface EditorState {
   exportOpen: boolean
   /** editor UI state (not saved): silences every audio clip, e.g. while recording a voiceover */
   audioMuted: boolean
+  /** clip ids whose <audio> element reported a load/decode error (e.g. a missing file);
+   * AudioPlayer sets this instead of retrying play() forever, the Audio panel shows a warning */
+  audioErrors: Record<string, boolean>
 
   openProject(project: Project): void
   closeProject(): void
@@ -100,6 +103,7 @@ export interface EditorState {
   updateAudioClip(id: string, patch: Partial<AudioClip>, record?: boolean): void
   removeAudioClip(id: string): void
   setAudioMuted(muted: boolean): void
+  setAudioError(id: string, hasError: boolean): void
 }
 
 export const useStore = create<EditorState>((set, get) => ({
@@ -118,6 +122,7 @@ export const useStore = create<EditorState>((set, get) => ({
   future: [],
   exportOpen: false,
   audioMuted: false,
+  audioErrors: {},
 
   openProject: (project) =>
     set({
@@ -354,11 +359,23 @@ export const useStore = create<EditorState>((set, get) => ({
     get().mutate((p) => ({ ...p, audio: p.audio.map((c) => (c.id === id ? { ...c, ...patch } : c)) }), record),
 
   removeAudioClip: (id) => {
+    // the underlying file is NOT deleted here: this change is undoable (Ctrl+Z), and deleting
+    // eagerly would leave a restored clip pointing at a file that no longer exists. Orphaned
+    // files are swept once, when the editor closes and undo history is discarded (main.tsx).
     get().mutate((p) => ({ ...p, audio: p.audio.filter((c) => c.id !== id) }))
     set({ selection: null })
   },
 
   setAudioMuted: (audioMuted) => set({ audioMuted }),
+
+  setAudioError: (id, hasError) =>
+    set((s) => {
+      if (Boolean(s.audioErrors[id]) === hasError) return s
+      const next = { ...s.audioErrors }
+      if (hasError) next[id] = true
+      else delete next[id]
+      return { audioErrors: next }
+    }),
 
   setNotice: (notice) => set({ notice })
 }))

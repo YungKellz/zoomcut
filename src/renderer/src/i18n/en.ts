@@ -273,7 +273,34 @@ export const en = {
   'audio.delete': 'Delete clip',
   'audio.kind.system': 'System audio',
   'audio.kind.mic': 'Microphone',
-  'audio.help': 'Recorded clips follow the video through cuts; the sync offset shifts them a little if they sound early or late.'
+  'audio.kind.voiceover': 'Voiceover',
+  'audio.help': 'Recorded clips follow the video through cuts; the sync offset shifts them a little if they sound early or late.',
+  'audio.name': 'Name',
+  'audio.loop': 'Loop',
+  'audio.fadeIn': 'Fade in',
+  'audio.fadeOut': 'Fade out',
+  'audio.recordVoiceover': 'Record voiceover',
+  'audio.importing': 'Importing…',
+  'audio.voiceoverError': 'Voiceover recording failed.',
+  'audio.addMusic': 'Add music',
+  'audio.addFile': 'Add audio file…',
+  'audio.usePreset': 'Use',
+  'audio.preview': 'Preview (~8s)',
+  'audio.importError': 'Could not add the audio.',
+  'audio.fileMissing': 'This clip’s audio file could not be loaded.',
+  'timeline.trackAudio': 'audio',
+
+  // ---- music presets ----
+  'music.preset.calm.name': 'Calm',
+  'music.preset.calm.desc': 'Slow, warm pad chords – stays out of the way of narration.',
+  'music.preset.upbeat.name': 'Upbeat',
+  'music.preset.upbeat.desc': 'Plucked arpeggio with a light beat – energetic demos.',
+  'music.preset.lofi.name': 'Lo-fi',
+  'music.preset.lofi.desc': 'Mellow swung keys over a gentle noise bed.',
+  'music.preset.corporate.name': 'Corporate',
+  'music.preset.corporate.desc': 'Bright, optimistic pad with a piano-like pluck.',
+  'music.preset.minimal.name': 'Minimal',
+  'music.preset.minimal.desc': 'Sparse marimba-like notes over a deep sub bass.'
 }
 
 export type TKey = keyof typeof en
