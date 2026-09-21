@@ -1,6 +1,6 @@
 {
   "name": "zoomcut",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Free, open-source screen recorder and demo editor: cuts, timed text, smooth follow-cursor zoom, cursor highlight, MP4/GIF export with full palette control.",
   "main": "./out/main/index.js",
   "license": "MIT",

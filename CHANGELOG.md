@@ -3,7 +3,7 @@
 Notable changes per version, English first, Russian below. The section of a version becomes the body of its
 GitHub release (`node scripts/release-notes.cjs <version>`, run by `.github/workflows/release.yml`).
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-09-21)
 
 - **Audio in recordings**: the home screen has "Microphone" (with a device picker) and "System audio" checkboxes.
   Each source is recorded as its own track next to the video and shows up as a clip in the new **Audio** tab of

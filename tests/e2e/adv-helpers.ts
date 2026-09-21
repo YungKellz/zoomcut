@@ -32,8 +32,10 @@ export async function launch(name: string): Promise<Harness> {
   mkdirSync(shotsDir, { recursive: true })
   mkdirSync(scenariosDir, { recursive: true })
 
+  // ZOOMCUT_EXE=release\win-unpacked\ZoomCut.exe runs the same specs against the packaged app (like smoke.spec.ts)
+  const exe = process.env['ZOOMCUT_EXE']
   const app = await electron.launch({
-    args: ['.'],
+    ...(exe ? { executablePath: resolve(exe) } : { args: ['.'] }),
     env: { ...process.env, ZOOMCUT_RECORDINGS_DIR: recordingsDir, ZOOMCUT_SCENARIOS_DIR: scenariosDir, ZOOMCUT_E2E: '1' }
   })
   const win = await app.firstWindow()
