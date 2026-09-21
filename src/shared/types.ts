@@ -217,7 +217,7 @@ export interface RecordingStartMeta {
   width: number
   height: number
   fps: number
-  /** track A: wall-clock time each audio MediaRecorder started, for turning it into a clip offset */
+  /** wall-clock time each audio MediaRecorder started, for turning it into a clip offset */
   audio?: { mic?: { startWall: number }; system?: { startWall: number } }
 }
 
@@ -227,7 +227,7 @@ export interface RecorderBarState {
   phase: RecordingPhase
   startedAt: number | null
   countdownEndsAt: number | null
-  /** track A: audio being captured, for a small indicator on the bar */
+  /** audio being captured, for a small indicator on the bar */
   audio?: { mic: boolean; system: boolean }
   /** what the countdown leads to; 'scenario' = capturing input, not video */
   mode?: 'record' | 'scenario'
@@ -448,4 +448,13 @@ export interface OverlayEffect {
   /** scroll only: wheel notches, same sign convention as ScenarioScrollAction (positive = down/right) */
   deltaY?: number
   deltaX?: number
+}
+
+/** Options for recording.prepare() / useRecorder's start(): what to capture besides the screen
+ * (microphone / system audio) and, for the scenario recorder, which scenario to replay while
+ * recording. Main only ever reads `scenario` - see RecordingController.prepare(), which ignores
+ * `audio` entirely (the renderer captures audio itself, see useRecorder.ts). */
+export interface RecordOptions {
+  audio?: AudioCaptureOptions
+  scenario?: Scenario
 }

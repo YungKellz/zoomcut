@@ -145,10 +145,15 @@ export const useStore = create<EditorState>((set, get) => ({
       mode: 'normal',
       history: [],
       future: [],
-      exportOpen: false
+      exportOpen: false,
+      // a previous project's mute (e.g. mid-voiceover-recording) or file-missing warnings must
+      // never bleed into the next project opened
+      audioMuted: false,
+      audioErrors: {}
     }),
 
-  closeProject: () => set({ screen: 'home', project: null, playing: false, history: [], future: [] }),
+  closeProject: () =>
+    set({ screen: 'home', project: null, playing: false, history: [], future: [], audioMuted: false, audioErrors: {} }),
 
   openScenario: (scenario) => set({ screen: 'scenario', scenario }),
   closeScenario: () => set({ screen: 'home', scenario: null }),

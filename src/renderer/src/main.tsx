@@ -18,25 +18,30 @@ void window.zc.app
 let saveTimer: number | null = null
 let lastSaved: unknown = null
 let pending: Project | null = null
-function flushSave(): void {
+let lastSave: Promise<void> = Promise.resolve()
+function flushSave(): Promise<void> {
   if (saveTimer) window.clearTimeout(saveTimer)
   saveTimer = null
   const project = pending
   pending = null
-  if (!project || project === lastSaved) return
+  if (!project || project === lastSaved) return lastSave
   lastSaved = project
-  void window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
+  lastSave = window.zc.projects.save(project).catch((err) => console.error('autosave failed', err))
+  return lastSave
 }
 useStore.subscribe((state, prev) => {
   if (state.project === prev.project) return
   if (!state.project) {
-    flushSave()
+    const saved = flushSave()
     // undo history for this project is discarded the moment it closes (openProject/
     // closeProject reset history/future), so it is now safe to permanently delete any
     // .m4a in its folder that no clip references any more (see audioImport.ts sweepAudioFiles).
+    // It waits for the flushed save: scanning the folder while project.json is being renamed
+    // into place can make that rename fail on Windows.
     if (prev.project) {
-      const keepFiles = prev.project.audio.map((c) => c.file)
-      void window.zc.audio.sweep(prev.project.id, keepFiles).catch((err) => console.error('audio sweep failed', err))
+      const { id, audio } = prev.project
+      const keepFiles = audio.map((c) => c.file)
+      void saved.then(() => window.zc.audio.sweep(id, keepFiles)).catch((err) => console.error('audio sweep failed', err))
     }
     return
   }

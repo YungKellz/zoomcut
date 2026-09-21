@@ -194,8 +194,10 @@ export function Timeline(): JSX.Element {
   const textLanes = useMemo(() => assignLanes(project.texts), [project.texts])
   const laneCount = Math.max(1, ...Array.from(textLanes.values()).map((l) => l + 1))
 
-  // recorded clips (system/mic) are drawn spanning the whole output (see DESIGN.md); overlay
-  // clips (voiceover/music/file) use their real output-time span, looped ones reaching to the end
+  // recorded clips (system/mic) are drawn spanning the whole output (they follow the video
+  // through cuts, too fiddly to draw exactly - see the region.audio.recorded comment below);
+  // overlay clips (voiceover/music/file) use their real output-time span, looped ones reaching
+  // to the end
   const audioLaneItems = useMemo(
     () =>
       project.audio.map((c) =>
@@ -440,7 +442,7 @@ export function Timeline(): JSX.Element {
                 if (isRecordedClip(clip)) {
                   // recorded (system/mic) clips follow the video through cuts, which can split
                   // them into several pieces – too fiddly to draw exactly, so this is a simple
-                  // fixed, non-draggable label spanning the whole output (see DESIGN.md)
+                  // fixed, non-draggable label spanning the whole output
                   return (
                     <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
                       <div

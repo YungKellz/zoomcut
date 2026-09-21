@@ -78,7 +78,7 @@ export function AudioPlayer(): JSX.Element {
     }
   }
 
-  // 100 ms poll, matching the sync rule in DESIGN.md
+  // 100 ms poll, close enough to stay in sync without constantly nudging currentTime
   useEffect(() => {
     sync()
     const timer = window.setInterval(sync, SYNC_INTERVAL_MS)

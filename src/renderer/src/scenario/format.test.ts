@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt, truncateCaption } from './format'
-import type { ScenarioClickAction, ScenarioModifiers, ScenarioShot } from '@shared/types'
+import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt, truncateCaption } from './format'
+import type { AudioCaptureOptions, ScenarioClickAction, ScenarioModifiers, ScenarioShot } from '@shared/types'
 
 const NO_MODS: ScenarioModifiers = { ctrl: false, shift: false, alt: false, meta: false }
 function click(id: string, at: number): ScenarioClickAction {
@@ -89,6 +89,31 @@ describe('dotPositionPercent', () => {
   it('reports the top-left corner for a degenerate (zero-size) rect instead of dividing by zero', () => {
     const degenerate: ScenarioShot = { file: 'x', x: 0, y: 0, w: 0, h: 0 }
     expect(dotPositionPercent(degenerate, { x: 50, y: 50 })).toEqual({ left: 0, top: 0 })
+  })
+})
+
+describe('audioHintKey', () => {
+  const opts = (mic: boolean, system: boolean): AudioCaptureOptions => ({ mic, micDeviceId: null, system })
+
+  it('reports both sources when mic and system are enabled', () => {
+    expect(audioHintKey(opts(true, true))).toBe('scenario.audioHintBoth')
+  })
+
+  it('reports mic only', () => {
+    expect(audioHintKey(opts(true, false))).toBe('scenario.audioHintMic')
+  })
+
+  it('reports system only', () => {
+    expect(audioHintKey(opts(false, true))).toBe('scenario.audioHintSystem')
+  })
+
+  it('reports none when neither source is enabled', () => {
+    expect(audioHintKey(opts(false, false))).toBe('scenario.audioHintNone')
+  })
+
+  it('reports none when settings were never loaded (null/undefined)', () => {
+    expect(audioHintKey(null)).toBe('scenario.audioHintNone')
+    expect(audioHintKey(undefined)).toBe('scenario.audioHintNone')
   })
 })
 

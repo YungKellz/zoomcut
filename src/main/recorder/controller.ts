@@ -48,9 +48,10 @@ interface ActiveRecording {
 }
 
 /**
- * Ends the mic/system raw write streams if they are still open. Idempotent (checks
- * writableEnded/destroyed first) so it is safe to call from every exit path – finish's
- * success path (via finishAudio), finish's error path, and cancel – without double-ending.
+ * Ends the mic/system raw write streams if they are still open, and resolves once each one's fd
+ * has actually closed (not merely flushed - see the 'close' vs 'finish' note below). Idempotent
+ * (checks `destroyed` first) so it is safe to call from every exit path – finish's success path
+ * (via finishAudio), finish's error path, and cancel – without double-ending.
  */
 function closeAudioStreams(a: ActiveRecording): Promise<void> {
   const tracks = [a.audio.mic, a.audio.system].filter((t): t is AudioTrackState => Boolean(t))
@@ -58,11 +59,18 @@ function closeAudioStreams(a: ActiveRecording): Promise<void> {
     tracks.map(
       (track) =>
         new Promise<void>((resolve) => {
-          if (track.stream.writableEnded || track.stream.destroyed) {
+          const stream = track.stream
+          // already fully closed by an earlier call (finishAudio() already ran, or a previous
+          // cancel already did) - 'close' will never fire again, so waiting for it would hang
+          if (stream.destroyed) {
             resolve()
             return
           }
-          track.stream.end(() => resolve())
+          // wait for 'close' (the fd actually released) rather than 'finish' (all data flushed -
+          // what end()'s own callback waits for): on Windows a stream whose fd has not yet fully
+          // closed can make a following recursive delete of the recording folder fail
+          stream.once('close', () => resolve())
+          if (!stream.writableEnded) stream.end()
         })
     )
   ).then(() => undefined)
@@ -265,9 +273,14 @@ export class RecordingController {
   requestCancel(): void {
     if (!this.active) return
     if (this.replaySession && !this.cancelingViaAbort) {
-      // release input first (this re-enters requestCancel() via onAbort, past this branch,
-      // once the helper has actually stopped pressing keys/buttons)
-      void this.replaySession.abort('bar')
+      // release input first (this re-enters requestCancel() via onAbort, past this branch, once
+      // the helper has actually stopped pressing keys/buttons); a replay already in a terminal
+      // phase (or disposed) makes abort() a no-op that resolves false immediately - fall through
+      // to the normal cancel path right away instead of leaving the bar's X dead until finish()
+      // eventually tears the recording down on its own
+      void this.replaySession.abort('bar').then((aborted) => {
+        if (!aborted) getMainWindow()?.webContents.send('recorder:cancel')
+      })
       return
     }
     getMainWindow()?.webContents.send('recorder:cancel')
@@ -409,6 +422,11 @@ export class RecordingController {
     const a = this.active
     if (!a || a.id !== id) return
     this.tracker.stop(null)
+    // release any input the replay helper might still be holding before spending time on the
+    // audio flush below - a helper that was mid-keystroke when cancel arrived must not keep a
+    // modifier held any longer than necessary just because closing the audio streams takes a moment
+    this.replaySession?.dispose()
+    this.replaySession = null
     if (a.stream) {
       await new Promise<void>((resolve) => a.stream!.end(() => resolve()))
     }
@@ -416,7 +434,9 @@ export class RecordingController {
     this.teardownRecordingUi()
     this.active = null
     this.selectedSource = null
-    await fsp.rm(a.dir, { recursive: true, force: true })
+    // maxRetries/retryDelay: a still-closing audio stream fd (or antivirus) can otherwise make
+    // this fail on Windows even after closeAudioStreams() above has resolved
+    await fsp.rm(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 
   dispose(): void {

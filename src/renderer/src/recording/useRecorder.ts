@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AudioCaptureOptions, Project, RecordingProgress, RecordingStartMeta, Scenario } from '@shared/types'
+import type { AudioCaptureOptions, Project, RecordingProgress, RecordingStartMeta, RecordOptions } from '@shared/types'
 import { useStore } from '../store'
 import { t } from '../i18n'
 
@@ -21,13 +21,6 @@ export function pickMimeType(): string {
     if (MediaRecorder.isTypeSupported(type)) return type
   }
   return ''
-}
-
-export interface RecordOptions {
-  /** what to capture besides the screen (microphone / system audio) */
-  audio?: AudioCaptureOptions
-  /** replay this scenario while recording (scenario recorder) */
-  scenario?: Scenario
 }
 
 /**
@@ -132,7 +125,7 @@ function makeAudioRecorder(track: MediaStreamTrack): MediaRecorder | null {
  * fail (no hardware, OS/driver refuses loopback, permission denied) without losing the
  * recording: failures are reported through the store's dismissible notice (App.tsx), which
  * survives the Home -> Editor screen switch that a successful recording causes.
- * Scenario replay (track B): when `start()` is given a scenario, the main process drives a
+ * Scenario replay: when `start()` is given a scenario, the main process drives a
  * helper that replays its actions while this same recording runs. `onAborted` fires once a
  * real Escape (or the bar X) aborted that replay - but only after the existing cancel path
  * below has actually finished discarding the attempt, not the instant the replay-state event
@@ -208,7 +201,7 @@ export function useRecorder(
     const offStop = window.zc.recording.onStopRequested(stop)
     const offCancel = window.zc.recording.onCancelRequested(cancel)
     const offProgress = window.zc.recording.onProgress(setProgress)
-    // A replay driving this recording (track B) reports its own state on this channel. An
+    // A replay driving this recording reports its own state on this channel. An
     // abort is only remembered here - resolvePendingAbort() fires the callback once the
     // ordinary cancel path above (triggered by the 'recorder:cancel' this same abort causes
     // in main) has actually reached 'idle', not at the moment this event arrives.
@@ -253,7 +246,9 @@ export function useRecorder(
 
       let countdownEndsAt = Date.now() + 3000
       try {
-        const prepared = await window.zc.recording.prepare(displayId, options)
+        // main only ever reads `scenario` (RecordingController.prepare ignores audio entirely -
+        // the renderer captures audio itself, below), so it never receives the audio object too
+        const prepared = await window.zc.recording.prepare(displayId, { scenario: options?.scenario })
         s.id = prepared.id
         countdownEndsAt = prepared.countdownEndsAt
         if (s.cancelled) {

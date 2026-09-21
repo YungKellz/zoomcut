@@ -5,6 +5,15 @@ export function formatDuration(ms: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
 }
 
+/** "mm:ss" (zero-padded minutes and seconds) - elapsed time for the bar and a live-recording
+ * button label (voiceover), as opposed to formatDuration's unpadded minutes for a clip length. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 export function formatTimecode(ms: number): string {
   const total = Math.max(0, ms)
   const m = Math.floor(total / 60000)

@@ -108,6 +108,9 @@ export class ReplaySession {
    * treat the helper's exit as a failure (that used to fire onError -> cancel even for a
    * plain "Stop and keep the recording"). */
   private releasing = false
+  /** true once go() has sent GO to the helper: from that point on it may be mid-keystroke at
+   * any moment, so dispose() must release unconditionally, however the process ended. */
+  private goHappened = false
   private doneTimer: NodeJS.Timeout | null = null
   private readyResolve: (() => void) | null = null
   private readyReject: ((err: Error) => void) | null = null
@@ -185,19 +188,26 @@ export class ReplaySession {
   go(epochMs: number): void {
     if (this.disposed || !this.proc) return
     this.goEpoch = epochMs
+    this.goHappened = true
     this.setState({ phase: 'running', index: 0, total: this.total })
     this.proc.stdin?.write(`GO ${Math.round(epochMs)}\r\n`)
   }
 
-  /** Escape / bar X: stop injecting input, release everything, tell the recording to discard. */
-  async abort(reason: string): Promise<void> {
-    if (this.disposed || this.state.phase === 'aborted' || this.state.phase === 'done') return
+  /**
+   * Escape / bar X: stop injecting input, release everything, tell the recording to discard.
+   * Returns whether it actually drove the abort - false in a terminal phase (already 'aborted'
+   * or 'done') or once disposed, so a caller like the controller's requestCancel() can fall back
+   * to its normal cancel path instead of waiting on an onAbort that will never come.
+   */
+  async abort(reason: string): Promise<boolean> {
+    if (this.disposed || this.state.phase === 'aborted' || this.state.phase === 'done') return false
     // Set the terminal state *before* release() so that if the helper's exit races in during
     // release() and reaches onProcessExit(), the phase guard there already reads 'aborted' -
     // belt and suspenders alongside the `releasing` flag onProcessExit() also checks.
     this.setState({ phase: 'aborted', index: this.state.index, total: this.total, message: reason })
     await this.release()
     this.callbacks.onAbort(reason)
+    return true
   }
 
   /** Bar Stop / Ctrl+Alt+R: stop injecting input (same release), but keep the recording. */
@@ -224,8 +234,13 @@ export class ReplaySession {
       } catch {
         /* already gone */
       }
-      void releaseAllInputs()
     }
+    // Once go() has sent GO, the helper may have been holding a key or mouse button down at any
+    // point - including a crash we never observed an 'exit' for, where proc.exitCode is already
+    // non-null by the time we get here. Release unconditionally rather than only when this call
+    // is the one doing the killing, or a helper that died mid-keystroke leaves a modifier stuck
+    // held system-wide.
+    if (this.goHappened) void releaseAllInputs()
     this.closeOverlay()
     if (this.hookInstance) {
       this.hookInstance.removeListener('keydown', this.onRealKeyDown)

@@ -30,6 +30,8 @@ export function Home(): JSX.Element {
     openProject(project)
   })
   const scenario = useScenarioCapture((s) => openScenario(s))
+  const recording = recorder.phase !== 'idle' && recorder.phase !== 'error'
+  const capturing = scenario.phase !== 'idle' && scenario.phase !== 'error'
 
   // last used mic / system audio choice becomes the default, like cursor/frame settings
   useEffect(() => {
@@ -101,12 +103,14 @@ export function Home(): JSX.Element {
     if (recorder.phase === 'idle') void refreshProjects()
   }, [recorder.phase, refreshProjects])
 
-  // displays come and go (docking, projectors): keep the list fresh while idle
+  // displays come and go (docking, projectors): keep the list fresh while idle - a scenario
+  // capture also has to stay excluded, the same as an ordinary recording, or this ends up
+  // polling desktopCapturer for every display every 5s on top of the input capture
   useEffect(() => {
-    if (recorder.phase !== 'idle') return
+    if (recorder.phase !== 'idle' || capturing) return
     const timer = window.setInterval(() => void refreshDisplays(), 5000)
     return () => window.clearInterval(timer)
-  }, [recorder.phase, refreshDisplays])
+  }, [recorder.phase, capturing, refreshDisplays])
 
   const open = async (id: string): Promise<void> => {
     setBusy(id)
@@ -145,9 +149,6 @@ export function Home(): JSX.Element {
     }
     await refreshScenarios()
   }
-
-  const recording = recorder.phase !== 'idle' && recorder.phase !== 'error'
-  const capturing = scenario.phase !== 'idle' && scenario.phase !== 'error'
 
   return (
     <div className="home">
@@ -215,7 +216,7 @@ export function Home(): JSX.Element {
 
           <div className="audio-row">
             <label className="field-row audio-check">
-              <input type="checkbox" checked={audio.mic} disabled={recording} onChange={(e) => updateAudio({ mic: e.target.checked })} />
+              <input type="checkbox" checked={audio.mic} disabled={recording || capturing} onChange={(e) => updateAudio({ mic: e.target.checked })} />
               <Mic size={14} />
               <span>{t('home.audioMic')}</span>
             </label>
@@ -223,7 +224,7 @@ export function Home(): JSX.Element {
               <select
                 className="mic-select"
                 value={audio.micDeviceId ?? ''}
-                disabled={recording}
+                disabled={recording || capturing}
                 onChange={(e) => updateAudio({ micDeviceId: e.target.value || null })}
               >
                 <option value="">{t('home.audioMicDefault')}</option>
@@ -235,7 +236,7 @@ export function Home(): JSX.Element {
               </select>
             )}
             <label className="field-row audio-check">
-              <input type="checkbox" checked={audio.system} disabled={recording} onChange={(e) => updateAudio({ system: e.target.checked })} />
+              <input type="checkbox" checked={audio.system} disabled={recording || capturing} onChange={(e) => updateAudio({ system: e.target.checked })} />
               <Volume2 size={14} />
               <span>{t('home.audioSystem')}</span>
             </label>

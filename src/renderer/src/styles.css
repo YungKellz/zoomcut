@@ -1550,6 +1550,70 @@ input.name-input:focus {
 }
 
 .music-preset-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.music-presets-close {
+  align-self: flex-end;
+}
+
+.spin {
+  animation: audio-spin 0.9s linear infinite;
+}
+
+@keyframes audio-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.audio-label {
+  min-height: 30px;
+}
+
+.track-audio {
+  min-height: 30px;
+}
+
+.region.audio {
+  background: rgba(255, 159, 10, 0.45);
+  color: #ffe9d1;
+}
+
+.region.audio.recorded {
+  background: rgba(255, 159, 10, 0.2);
+  cursor: default;
+}
+
+.region.audio.muted {
+  opacity: 0.45;
+}
+
+.notice-bar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 560px;
+  padding: 10px 12px;
+  background: rgba(255, 176, 32, 0.16);
+  border: 1px solid rgba(255, 176, 32, 0.45);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  user-select: text;
+}
+
 /* ---- scenario ---- */
 
 .btn-scenario {
@@ -1772,62 +1836,6 @@ input.scenario-name:focus {
   flex: none;
 }
 
-.music-presets-close {
-  align-self: flex-end;
-}
-
-.spin {
-  animation: audio-spin 0.9s linear infinite;
-}
-
-@keyframes audio-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.audio-label {
-  min-height: 30px;
-}
-
-.track-audio {
-  min-height: 30px;
-}
-
-.region.audio {
-  background: rgba(255, 159, 10, 0.45);
-  color: #ffe9d1;
-}
-
-.region.audio.recorded {
-  background: rgba(255, 159, 10, 0.2);
-  cursor: default;
-}
-
-.region.audio.muted {
-  opacity: 0.45;
-}
-
-.notice-bar {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 560px;
-  padding: 10px 12px;
-  background: rgba(255, 176, 32, 0.16);
-  border: 1px solid rgba(255, 176, 32, 0.45);
-  border-radius: 10px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
-  color: var(--text);
-  user-select: text;
 .scenario-action-field {
   display: flex;
   flex-direction: column;

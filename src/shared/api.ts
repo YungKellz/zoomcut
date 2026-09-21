@@ -15,6 +15,7 @@ import type {
   ProjectSummary,
   Rect,
   RecorderBarState,
+  RecordOptions,
   RecordingProgress,
   RecordingStartMeta,
   ReplayState,
@@ -42,10 +43,10 @@ export interface ZcApi {
     list(): Promise<DisplayInfo[]>
   }
   recording: {
-    prepare(displayId: number, options?: { scenario?: Scenario }): Promise<{ id: string; countdownEndsAt: number }>
+    prepare(displayId: number, options?: RecordOptions): Promise<{ id: string; countdownEndsAt: number }>
     started(id: string, meta: RecordingStartMeta): Promise<void>
     chunk(id: string, data: ArrayBuffer): Promise<void>
-    /** track A: one opus chunk from the mic or system-audio MediaRecorder */
+    /** one opus chunk from the mic or system-audio MediaRecorder */
     audioChunk(id: string, kind: AudioTrackKind, data: ArrayBuffer): Promise<void>
     finish(id: string): Promise<Project>
     cancel(id: string): Promise<void>

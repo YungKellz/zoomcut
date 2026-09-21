@@ -37,7 +37,7 @@ import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
 import { MUSIC_PRESETS, audioBufferToWav, renderMusic, type MusicPresetId } from '../audio/music'
 import { en } from '../i18n/en'
-import { formatTimecode } from '../util/format'
+import { formatElapsed, formatTimecode } from '../util/format'
 import { useT, type Translate } from '../i18n'
 
 type Tab = 'clip' | 'zoom' | 'text' | 'audio' | 'cursor' | 'style'
@@ -470,11 +470,6 @@ function audioClipLabel(t: Translate, clip: AudioClip): string {
     if (preset) return t(preset.nameKey)
   }
   return clip.name
-}
-
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
 interface VoiceoverSession {

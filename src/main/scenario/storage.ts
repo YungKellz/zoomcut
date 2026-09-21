@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import type { Scenario, ScenarioSummary } from '@shared/types'
 import { scenarioEnd } from '@shared/scenario'
 
-/** userData/scenarios is already covered by the media protocol's allowed roots (the whole
- * userData tree is registered in src/main/storage.ts's ensureDirs()), so scenario shot PNGs
- * are servable through zc-media:// with no extra setup. */
+/** ZOOMCUT_SCENARIOS_DIR lets tests keep scenario captures (scenario.json + shot PNGs) out of
+ * the developer's real userData folder - same pattern as ZOOMCUT_RECORDINGS_DIR in ../storage.ts.
+ * Either way, ensureDirs() (../storage.ts) creates this directory and registers it as an allowed
+ * media root on startup, so scenario shot PNGs are servable through zc-media://. */
 export function scenariosRoot(): string {
-  return join(app.getPath('userData'), 'scenarios')
+  return process.env['ZOOMCUT_SCENARIOS_DIR'] || join(app.getPath('userData'), 'scenarios')
 }
 
 export function scenarioDir(id: string): string {

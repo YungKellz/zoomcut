@@ -2,14 +2,14 @@ import type { JSX } from 'react'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Play, Trash2 } from 'lucide-react'
-import type { DisplayInfo, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
-import { SCENARIO_MAX_MS } from '@shared/defaults'
+import type { AudioCaptureOptions, DisplayInfo, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
+import { DEFAULT_AUDIO_CAPTURE, SCENARIO_MAX_MS } from '@shared/defaults'
 import { actionDuration, deleteAction, describeAction, retimeAction, scenarioEnd, validateScenario } from '@shared/scenario'
 import { useScenario, useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
 import { ScenarioTimeline } from '../components/ScenarioTimeline'
 import { KIND_ICON, KIND_LABEL_KEY } from '../scenario/kindMeta'
-import { dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt } from '../scenario/format'
+import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt } from '../scenario/format'
 import { useT } from '../i18n'
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -46,6 +46,7 @@ export function ScenarioReview(): JSX.Element {
   const [displaysLoaded, setDisplaysLoaded] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [replay, setReplay] = useState<{ index: number; total: number } | null>(null)
+  const [audioDefaults, setAudioDefaults] = useState<AudioCaptureOptions | null>(null)
 
   const recorder = useRecorder(
     (project) => {
@@ -57,6 +58,16 @@ export function ScenarioReview(): JSX.Element {
     },
     () => setNotice(t('scenario.replayAborted'))
   )
+  const busy = recorder.phase !== 'idle' && recorder.phase !== 'error'
+
+  // same audio sources the home screen's checkboxes remember - just for the "Record & replay"
+  // hint below; startReplay() re-reads settings fresh at the moment it actually starts
+  useEffect(() => {
+    void window.zc.app
+      .getSettings()
+      .then((s) => setAudioDefaults(s.audioDefaults ?? DEFAULT_AUDIO_CAPTURE))
+      .catch(() => undefined)
+  }, [])
 
   const refreshDisplays = useCallback(async () => {
     const list = await window.zc.displays.list()
@@ -65,10 +76,14 @@ export function ScenarioReview(): JSX.Element {
   }, [])
 
   useEffect(() => {
+    // the replay recording already grabs every screen at 60fps; polling desktopCapturer for
+    // every display on top of that (and the input replay) every 5s is needless load - skip it
+    // while busy, matching Home's own display-refresh interval, and re-arm once idle again
+    if (busy) return
     void refreshDisplays()
     const timer = window.setInterval(() => void refreshDisplays(), 5000)
     return () => window.clearInterval(timer)
-  }, [refreshDisplays])
+  }, [busy, refreshDisplays])
 
   useEffect(() => {
     const off = window.zc.recording.onReplayState((s) => {
@@ -94,8 +109,6 @@ export function ScenarioReview(): JSX.Element {
       setSelectedId(fallback ? fallback.id : null)
     }
   }
-
-  const busy = recorder.phase !== 'idle' && recorder.phase !== 'error'
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -140,6 +153,10 @@ export function ScenarioReview(): JSX.Element {
 
   const startReplay = async (): Promise<void> => {
     setNotice(null)
+    // a stale warning from a previous attempt (e.g. "system audio failed") must not linger into
+    // this one - NoticeBar (App.tsx) shows store.notice across screens, so it otherwise outlives
+    // this component
+    useStore.getState().setNotice(null)
     const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
     const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
     if (target === undefined) return
@@ -221,6 +238,7 @@ export function ScenarioReview(): JSX.Element {
           <button className="btn btn-primary btn-replay" disabled={validationMessage !== null || busy} onClick={() => void startReplay()}>
             <Play size={16} /> {t('scenario.replay')}
           </button>
+          <span className="muted small scenario-audio-hint">{t(audioHintKey(audioDefaults))}</span>
           <p className={validationMessage ? 'scenario-validation' : 'muted'}>{validationMessage ?? t('scenario.replayHelp')}</p>
         </div>
       </footer>

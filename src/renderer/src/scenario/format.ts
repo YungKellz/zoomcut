@@ -2,9 +2,10 @@
  * Pure formatting/computation helpers for the scenario review screen and the replay overlay.
  * Kept free of React and Electron so they are plain-unit-testable (format.test.ts).
  */
-import type { ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
+import type { AudioCaptureOptions, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
 import { actionEnd, graphemes } from '@shared/scenario'
 import { clamp } from '../util/format'
+import type { TKey } from '../i18n'
 
 /** "m:ss" (no leading zero on minutes, no fractional seconds) - the scenario total, e.g. "1:23 / 10:00". */
 export function formatMinSec(ms: number): string {
@@ -45,6 +46,19 @@ export function dotPositionPercent(shot: ScenarioShot, point: ScenarioPoint): { 
   const left = shot.w > 0 ? clamp((point.x - shot.x) / shot.w, 0, 1) * 100 : 0
   const top = shot.h > 0 ? clamp((point.y - shot.y) / shot.h, 0, 1) * 100 : 0
   return { left, top }
+}
+
+/** Which i18n key describes the audio sources `audio` will capture, for the "Record & replay"
+ * hint on the review screen - the same AppSettings.audioDefaults the home screen's checkboxes
+ * write to and a plain recording reads from. Null/undefined (settings never loaded yet) reads
+ * the same as both sources off. */
+export function audioHintKey(audio: AudioCaptureOptions | null | undefined): TKey {
+  const mic = audio?.mic ?? false
+  const system = audio?.system ?? false
+  if (mic && system) return 'scenario.audioHintBoth'
+  if (mic) return 'scenario.audioHintMic'
+  if (system) return 'scenario.audioHintSystem'
+  return 'scenario.audioHintNone'
 }
 
 /** Truncates a caption to at most `max` user-perceived characters (grapheme clusters, so a

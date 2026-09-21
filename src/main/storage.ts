@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { AppSettings, Project, ProjectSummary } from '@shared/types'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, DEFAULT_GIF_SETTINGS } from '@shared/defaults'
 import { allowMediaRoot } from './mediaProtocol'
+import { scenariosRoot } from './scenario/storage'
 
 const DEFAULT_SETTINGS: AppSettings = {
   lastExportFolder: null,
@@ -30,7 +31,11 @@ function settingsPath(): string {
 export async function ensureDirs(): Promise<void> {
   await fsp.mkdir(recordingsRoot(), { recursive: true })
   await fsp.mkdir(exportTempDir(), { recursive: true })
+  await fsp.mkdir(scenariosRoot(), { recursive: true })
   allowMediaRoot(recordingsRoot())
+  // registered explicitly (not just via the userData root below): ZOOMCUT_SCENARIOS_DIR can
+  // point scenariosRoot() outside userData entirely, same reasoning as recordingsRoot() above
+  allowMediaRoot(scenariosRoot())
   allowMediaRoot(app.getPath('userData'))
   allowMediaRoot(app.getPath('temp'))
 }
@@ -107,9 +112,12 @@ async function saveProjectNow(project: Project): Promise<void> {
       await fsp.rename(tmp, target)
       return
     } catch {
+      // the project was deleted while the save was in flight: give up quietly, never recreate it
+      if (!(await exists(projectDir(project.id)))) return
       await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)))
     }
   }
+  if (!(await exists(projectDir(project.id)))) return
   await fsp.writeFile(target, json, 'utf8')
   await fsp.rm(tmp, { force: true }).catch(() => undefined)
 }

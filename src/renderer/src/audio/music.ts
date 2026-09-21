@@ -3,7 +3,7 @@ import type { TKey } from '../i18n'
 /**
  * Five procedural background-music presets, rendered on demand with OfflineAudioContext.
  *
- * The module is split in two halves on purpose (see BRIEF-A2 / DESIGN.md):
+ * The module is split in two halves on purpose:
  *  - a pure "score" half (notes/times, plain data, no Web Audio) that vitest can exercise in
  *    node and that is fully deterministic (seeded PRNG, never Math.random / Date.now), and
  *  - a Web Audio "render" half (OfflineAudioContext, oscillators, filters) that turns a score
