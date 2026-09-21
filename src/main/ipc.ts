@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type {
   AppInfo,
   AppSettings,
@@ -7,12 +7,15 @@ import type {
   ExportBeginRequest,
   ExportSettings,
   Project,
-  RecordingStartMeta
+  Rect,
+  RecordingStartMeta,
+  Scenario
 } from '@shared/types'
 import type { RecordingController } from './recorder/controller'
 import type { ExportManager } from './exportManager'
 import type { Updater } from './updater'
 import { importAudioClip, importAudioFile, sweepAudioFiles, type AudioImportClipInput } from './media/audioImport'
+import type { ScenarioCapture } from './scenario/capture'
 import { ffmpegPath } from './media/ffmpeg'
 import {
   deleteProject,
@@ -24,15 +27,27 @@ import {
   saveProject,
   updateSettings
 } from './storage'
-import { getMainWindow } from './windows'
+import type { ReplayStep } from '@shared/scenario'
+import { deleteScenario, listScenarios, loadScenario, saveScenario } from './scenario/storage'
+import { runStepsOnce } from './scenario/replay'
+import { createE2eTargetWindow, getMainWindow } from './windows'
 
 interface Deps {
   recorder: RecordingController
+  scenarioCapture: ScenarioCapture
   exporter: ExportManager
   updater: Updater
 }
 
-export function registerIpc({ recorder, exporter, updater }: Deps): void {
+// scenario ids come from newScenarioId() (a timestamp, optionally "-N" deduplicated) - never
+// accept anything else from the renderer here, so a crafted id cannot walk `join()` outside
+// userData/scenarios (see scenarioDir()).
+const SCENARIO_ID_RE = /^[0-9A-Za-z_-]+$/
+function assertValidScenarioId(id: string): void {
+  if (typeof id !== 'string' || !SCENARIO_ID_RE.test(id)) throw new Error('Invalid scenario id')
+}
+
+export function registerIpc({ recorder, scenarioCapture, exporter, updater }: Deps): void {
   // ---- app ----
   ipcMain.handle('app:info', (): AppInfo => ({
     version: app.getVersion(),
@@ -60,16 +75,18 @@ export function registerIpc({ recorder, exporter, updater }: Deps): void {
 
   // ---- displays / recording ----
   ipcMain.handle('displays:list', () => recorder.listDisplays())
-  ipcMain.handle('recording:prepare', (_e, displayId: number) => recorder.prepare(displayId))
+  ipcMain.handle('recording:prepare', (_e, displayId: number, options?: { scenario?: Scenario }) =>
+    recorder.prepare(displayId, options))
   ipcMain.handle('recording:started', (_e, id: string, meta: RecordingStartMeta) => recorder.started(id, meta))
   ipcMain.handle('recording:chunk', (_e, id: string, data: ArrayBuffer) => recorder.chunk(id, data))
   ipcMain.handle('recording:finish', (_e, id: string) => recorder.finish(id))
   ipcMain.handle('recording:cancel', (_e, id: string) => recorder.cancel(id))
 
   // ---- floating bar ----
-  ipcMain.handle('bar:request-state', () => recorder.getBarState())
-  ipcMain.handle('bar:stop', () => recorder.requestStop())
-  ipcMain.handle('bar:cancel', () => recorder.requestCancel())
+  // a scenario capture and a recording never run at once, so whichever is active owns the bar
+  ipcMain.handle('bar:request-state', () => (scenarioCapture.isActive() ? scenarioCapture.getBarState() : recorder.getBarState()))
+  ipcMain.handle('bar:stop', () => (scenarioCapture.isActive() ? scenarioCapture.requestStop() : recorder.requestStop()))
+  ipcMain.handle('bar:cancel', () => (scenarioCapture.isActive() ? scenarioCapture.requestCancel() : recorder.requestCancel()))
 
   // ---- projects ----
   ipcMain.handle('projects:list', () => listProjects())
@@ -97,4 +114,36 @@ export function registerIpc({ recorder, exporter, updater }: Deps): void {
   ipcMain.handle('audio:import-clip', (_e, projectId: string, clip: AudioImportClipInput) => importAudioClip(projectId, clip))
   ipcMain.handle('audio:import-file', (_e, projectId: string) => importAudioFile(projectId))
   ipcMain.handle('audio:sweep', (_e, projectId: string, keepFiles: string[]) => sweepAudioFiles(projectId, keepFiles))
+  // ---- scenario ----
+  ipcMain.handle('scenario:start', (_e, displayId: number) => scenarioCapture.start(displayId))
+  ipcMain.handle('scenario:stop', () => scenarioCapture.requestStop())
+  ipcMain.handle('scenario:cancel', () => scenarioCapture.requestCancel())
+  ipcMain.handle('scenario:state', () => scenarioCapture.getState())
+  ipcMain.handle('scenario:list', () => listScenarios())
+  ipcMain.handle('scenario:load', (_e, id: string) => {
+    assertValidScenarioId(id)
+    return loadScenario(id)
+  })
+  ipcMain.handle('scenario:save', (_e, scenario: Scenario) => {
+    assertValidScenarioId(scenario.id)
+    return saveScenario(scenario)
+  })
+  ipcMain.handle('scenario:delete', (_e, id: string) => {
+    assertValidScenarioId(id)
+    return deleteScenario(id)
+  })
+
+  // Test-only: exists only under ZOOMCUT_E2E, so the e2e suite can open a page with known
+  // coordinates and drive it through the real capture/replay path with real input.
+  if (process.env['ZOOMCUT_E2E']) {
+    let targetWindow: BrowserWindow | null = null
+    ipcMain.handle('e2e:open-target', (_e, bounds: Rect) => {
+      if (targetWindow && !targetWindow.isDestroyed()) targetWindow.close()
+      targetWindow = createE2eTargetWindow(bounds)
+      targetWindow.on('closed', () => {
+        targetWindow = null
+      })
+    })
+    ipcMain.handle('e2e:inject-steps', (_e, steps: ReplayStep[]) => runStepsOnce(steps, true))
+  }
 }

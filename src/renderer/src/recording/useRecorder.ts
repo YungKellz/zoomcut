@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AudioCaptureOptions, Project, RecordingProgress, RecordingStartMeta } from '@shared/types'
+import type { AudioCaptureOptions, Project, RecordingProgress, RecordingStartMeta, Scenario } from '@shared/types'
 import { useStore } from '../store'
 import { t } from '../i18n'
 
@@ -24,9 +24,10 @@ export function pickMimeType(): string {
 }
 
 export interface RecordOptions {
-  /** track A: what to capture besides the screen */
+  /** what to capture besides the screen (microphone / system audio) */
   audio?: AudioCaptureOptions
-  // track B adds an optional `scenario?: Scenario` field here (replay this scenario while recording)
+  /** replay this scenario while recording (scenario recorder) */
+  scenario?: Scenario
 }
 
 /**
@@ -131,8 +132,16 @@ function makeAudioRecorder(track: MediaStreamTrack): MediaRecorder | null {
  * fail (no hardware, OS/driver refuses loopback, permission denied) without losing the
  * recording: failures are reported through the store's dismissible notice (App.tsx), which
  * survives the Home -> Editor screen switch that a successful recording causes.
+ * Scenario replay (track B): when `start()` is given a scenario, the main process drives a
+ * helper that replays its actions while this same recording runs. `onAborted` fires once a
+ * real Escape (or the bar X) aborted that replay - but only after the existing cancel path
+ * below has actually finished discarding the attempt, not the instant the replay-state event
+ * arrives, so the caller never sees the notice while a stale session is still tearing down.
  */
-export function useRecorder(onDone: (project: Project) => void): {
+export function useRecorder(
+  onDone: (project: Project) => void,
+  onAborted?: (reason: string) => void
+): {
   phase: RecorderPhase
   progress: RecordingProgress | null
   error: string | null
@@ -147,16 +156,31 @@ export function useRecorder(onDone: (project: Project) => void): {
   const session = useRef<ActiveSession | null>(null)
   const onDoneRef = useRef(onDone)
   onDoneRef.current = onDone
+  const onAbortedRef = useRef(onAborted)
+  onAbortedRef.current = onAborted
+  /** set by the 'aborted' replay-state event, consumed once the cancel path reaches idle */
+  const pendingAbortRef = useRef<string | null>(null)
+
+  const resolvePendingAbort = useCallback(() => {
+    if (!pendingAbortRef.current) return
+    const message = pendingAbortRef.current
+    pendingAbortRef.current = null
+    onAbortedRef.current?.(message)
+  }, [])
 
   /** Releases the capture and tells the main process to drop the attempt. */
-  const discard = useCallback(async (s: ActiveSession) => {
-    s.stream?.getTracks().forEach((tr) => tr.stop())
-    s.micStream?.getTracks().forEach((tr) => tr.stop())
-    if (s.probe) s.probe.srcObject = null
-    if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
-    if (session.current === s) session.current = null
-    setPhase('idle')
-  }, [])
+  const discard = useCallback(
+    async (s: ActiveSession) => {
+      s.stream?.getTracks().forEach((tr) => tr.stop())
+      s.micStream?.getTracks().forEach((tr) => tr.stop())
+      if (s.probe) s.probe.srcObject = null
+      if (s.id) await window.zc.recording.cancel(s.id).catch(() => undefined)
+      if (session.current === s) session.current = null
+      setPhase('idle')
+      resolvePendingAbort()
+    },
+    [resolvePendingAbort]
+  )
 
   const stop = useCallback(() => {
     const s = session.current
@@ -184,10 +208,22 @@ export function useRecorder(onDone: (project: Project) => void): {
     const offStop = window.zc.recording.onStopRequested(stop)
     const offCancel = window.zc.recording.onCancelRequested(cancel)
     const offProgress = window.zc.recording.onProgress(setProgress)
+    // A replay driving this recording (track B) reports its own state on this channel. An
+    // abort is only remembered here - resolvePendingAbort() fires the callback once the
+    // ordinary cancel path above (triggered by the 'recorder:cancel' this same abort causes
+    // in main) has actually reached 'idle', not at the moment this event arrives.
+    const offReplay = window.zc.recording.onReplayState((s) => {
+      if (s.phase === 'aborted') {
+        pendingAbortRef.current = s.message ?? 'aborted'
+      } else if (s.phase === 'error') {
+        setError(s.message ?? 'Replay failed')
+      }
+    })
     return () => {
       offStop()
       offCancel()
       offProgress()
+      offReplay()
     }
   }, [stop, cancel])
 
@@ -197,6 +233,9 @@ export function useRecorder(onDone: (project: Project) => void): {
       setError(null)
       setProgress(null)
       setPhase('starting')
+      // a leftover abort from a previous scenario replay must never pop the notice on this
+      // (possibly plain, non-scenario) attempt's later Discard
+      pendingAbortRef.current = null
       const s: ActiveSession = {
         id: null,
         recorder: null,
@@ -214,7 +253,7 @@ export function useRecorder(onDone: (project: Project) => void): {
 
       let countdownEndsAt = Date.now() + 3000
       try {
-        const prepared = await window.zc.recording.prepare(displayId)
+        const prepared = await window.zc.recording.prepare(displayId, options)
         s.id = prepared.id
         countdownEndsAt = prepared.countdownEndsAt
         if (s.cancelled) {
@@ -384,6 +423,7 @@ export function useRecorder(onDone: (project: Project) => void): {
           if (s.cancelled) {
             await window.zc.recording.cancel(recordingId)
             setPhase('idle')
+            resolvePendingAbort()
             return
           }
           setPhase('processing')
@@ -428,7 +468,7 @@ export function useRecorder(onDone: (project: Project) => void): {
       }
       if (meta.mic || meta.system) audioStartMeta = meta
     },
-    [stop, discard]
+    [stop, discard, resolvePendingAbort]
   )
 
   return {
@@ -438,6 +478,10 @@ export function useRecorder(onDone: (project: Project) => void): {
     start,
     stop,
     cancel,
-    reset: () => setPhase('idle')
+    reset: () => {
+      setPhase('idle')
+      setError(null)
+      pendingAbortRef.current = null
+    }
   }
 }

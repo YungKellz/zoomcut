@@ -21,7 +21,7 @@ const api: ZcApi = {
     list: () => ipcRenderer.invoke('displays:list')
   },
   recording: {
-    prepare: (displayId) => ipcRenderer.invoke('recording:prepare', displayId),
+    prepare: (displayId, options) => ipcRenderer.invoke('recording:prepare', displayId, options),
     started: (id, meta) => ipcRenderer.invoke('recording:started', id, meta),
     chunk: (id, data) => ipcRenderer.invoke('recording:chunk', id, data),
     audioChunk: (id, kind, data) => ipcRenderer.invoke('recording:audio-chunk', id, kind, data),
@@ -29,7 +29,8 @@ const api: ZcApi = {
     cancel: (id) => ipcRenderer.invoke('recording:cancel', id),
     onStopRequested: (cb) => subscribe('recorder:stop', cb),
     onCancelRequested: (cb) => subscribe('recorder:cancel', cb),
-    onProgress: (cb) => subscribe('recording:progress', cb)
+    onProgress: (cb) => subscribe('recording:progress', cb),
+    onReplayState: (cb) => subscribe('recording:replay-state', cb)
   },
   bar: {
     onState: (cb) => subscribe('bar:state', cb),
@@ -65,6 +66,26 @@ const api: ZcApi = {
     importClip: (projectId, clip) => ipcRenderer.invoke('audio:import-clip', projectId, clip),
     importFile: (projectId) => ipcRenderer.invoke('audio:import-file', projectId),
     sweep: (projectId, keepFiles) => ipcRenderer.invoke('audio:sweep', projectId, keepFiles)
+  },
+  scenario: {
+    start: (displayId) => ipcRenderer.invoke('scenario:start', displayId),
+    stop: () => ipcRenderer.invoke('scenario:stop'),
+    cancel: () => ipcRenderer.invoke('scenario:cancel'),
+    getState: () => ipcRenderer.invoke('scenario:state'),
+    onState: (cb) => subscribe('scenario:state', cb),
+    onDone: (cb) => subscribe('scenario:done', cb),
+    list: () => ipcRenderer.invoke('scenario:list'),
+    load: (id) => ipcRenderer.invoke('scenario:load', id),
+    save: (scenario) => ipcRenderer.invoke('scenario:save', scenario),
+    remove: (id) => ipcRenderer.invoke('scenario:delete', id)
+  },
+  overlay: {
+    onEffect: (cb) => subscribe('overlay:effect', cb),
+    onReplayState: (cb) => subscribe('recording:replay-state', cb)
+  },
+  e2e: {
+    openTarget: (bounds) => ipcRenderer.invoke('e2e:open-target', bounds),
+    injectSteps: (steps) => ipcRenderer.invoke('e2e:inject-steps', steps)
   }
 }
 

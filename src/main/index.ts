@@ -6,6 +6,8 @@ import { RecordingController } from './recorder/controller'
 import { ExportManager } from './exportManager'
 import { Updater } from './updater'
 import { ensureDirs } from './storage'
+import { ScenarioCapture } from './scenario/capture'
+import { cleanupHelperScripts } from './scenario/inputHelper'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -22,6 +24,7 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let recorder: RecordingController | null = null
+let scenarioCapture: ScenarioCapture | null = null
 let updater: Updater | null = null
 
 // Tests launch their own instance next to a running dev app, so they skip the lock.
@@ -44,9 +47,13 @@ if (!gotLock) {
 
     recorder = new RecordingController()
     recorder.installDisplayMediaHandler()
+    scenarioCapture = new ScenarioCapture()
+    // recording and scenario capture are mutually exclusive
+    recorder.setOtherBusyCheck(() => scenarioCapture!.isActive())
+    scenarioCapture.setOtherBusyCheck(() => recorder!.isActive())
     const exporter = new ExportManager()
     updater = new Updater()
-    registerIpc({ recorder, exporter, updater })
+    registerIpc({ recorder, scenarioCapture, exporter, updater })
 
     createMainWindow()
     updater.start()
@@ -63,6 +70,8 @@ if (!gotLock) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     recorder?.dispose()
+    scenarioCapture?.dispose()
     updater?.dispose()
+    void cleanupHelperScripts()
   })
 }

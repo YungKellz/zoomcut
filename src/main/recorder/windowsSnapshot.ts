@@ -55,7 +55,7 @@ public static class ZcWinEnum {
 [ZcWinEnum]::List() | ForEach-Object { Write-Output $_ }
 `
 
-const OWN_TITLES = new Set(['ZoomCut', 'ZoomCut recorder', 'Program Manager'])
+const OWN_TITLES = new Set(['ZoomCut', 'ZoomCut recorder', 'ZoomCut overlay', 'Program Manager'])
 
 interface RawWindow {
   left: number

@@ -102,3 +102,6 @@ export const DEFAULT_AUDIO_CAPTURE: AudioCaptureOptions = {
   micDeviceId: null,
   system: false
 }
+// ---- scenario ----
+/** longest a captured scenario (and therefore a replayed recording) may run. */
+export const SCENARIO_MAX_MS = 600_000

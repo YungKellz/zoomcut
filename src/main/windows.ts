@@ -93,3 +93,59 @@ export function createBarWindow(displayBounds: Rect): BrowserWindow {
   void loadRenderer(bar, 'bar')
   return bar
 }
+
+/**
+ * Transparent, click-through overlay drawn on top of the display during a scenario replay
+ * (click ripples, typed text, the progress HUD). Must never take focus or show up in the
+ * recording: content-protected, ignores mouse events, and shown inactive.
+ */
+export function createOverlayWindow(displayBounds: Rect): BrowserWindow {
+  const overlay = new BrowserWindow({
+    x: displayBounds.x,
+    y: displayBounds.y,
+    width: displayBounds.width,
+    height: displayBounds.height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    show: false,
+    title: 'ZoomCut overlay',
+    webPreferences: webPreferences()
+  })
+  overlay.setIgnoreMouseEvents(true)
+  overlay.setContentProtection(true)
+  overlay.setAlwaysOnTop(true, 'screen-saver')
+  overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  overlay.once('ready-to-show', () => overlay.showInactive())
+  void loadRenderer(overlay, 'overlay')
+  return overlay
+}
+
+/**
+ * Test-only: a plain, visible window loading the E2eTarget page, used by the e2e suite to
+ * drive real mouse/keyboard input against known real screen coordinates. Only ever created
+ * behind the `e2e:open-target` IPC handler, itself gated on ZOOMCUT_E2E.
+ */
+export function createE2eTargetWindow(bounds: Rect): BrowserWindow {
+  const win = new BrowserWindow({
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.round(bounds.width),
+    height: Math.round(bounds.height),
+    frame: true,
+    alwaysOnTop: true,
+    title: 'ZoomCut e2e target',
+    webPreferences: webPreferences()
+  })
+  win.once('ready-to-show', () => win.show())
+  void loadRenderer(win, 'target')
+  return win
+}
