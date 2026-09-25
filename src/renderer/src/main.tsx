@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import { useStore } from './store'
 import { useI18n } from './i18n'
-import type { Project, Scenario } from '@shared/types'
+import type { Composition, Project, Scenario } from '@shared/types'
 import './styles.css'
 
 // Language: system by default, overridden by the saved setting.
@@ -87,6 +87,36 @@ useStore.subscribe((state, prev) => {
   pendingScenario = state.scenario
   if (scenarioSaveTimer) window.clearTimeout(scenarioSaveTimer)
   scenarioSaveTimer = window.setTimeout(flushScenarioSave, 500)
+})
+
+// Composition autosave: same scheme as the scenario autosave above - opening one is not an
+// edit, closeComposition() (composition: null) flushes the pending save at once.
+let compositionSaveTimer: number | null = null
+let lastSavedComposition: unknown = null
+let pendingComposition: Composition | null = null
+function flushCompositionSave(): void {
+  if (compositionSaveTimer) window.clearTimeout(compositionSaveTimer)
+  compositionSaveTimer = null
+  const composition = pendingComposition
+  pendingComposition = null
+  if (!composition || composition === lastSavedComposition) return
+  lastSavedComposition = composition
+  void window.zc.compositions.save(composition).catch((err) => console.error('composition autosave failed', err))
+}
+useStore.subscribe((state, prev) => {
+  if (state.composition === prev.composition) return
+  if (!state.composition) {
+    flushCompositionSave()
+    return
+  }
+  if (!prev.composition || prev.composition.id !== state.composition.id) {
+    flushCompositionSave()
+    lastSavedComposition = state.composition
+    return
+  }
+  pendingComposition = state.composition
+  if (compositionSaveTimer) window.clearTimeout(compositionSaveTimer)
+  compositionSaveTimer = window.setTimeout(flushCompositionSave, 500)
 })
 
 // The last used cursor / frame settings become the defaults for new projects.

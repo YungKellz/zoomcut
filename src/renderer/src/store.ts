@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type {
   AudioClip,
+  BlurRegion,
+  Composition,
   CropRect,
   CursorSettings,
   CutRange,
@@ -11,15 +13,16 @@ import type {
   TextOverlay,
   ZoomSegment
 } from '@shared/types'
-import { TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
+import { BLUR_DEFAULTS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
 import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts } from './engine/timeline'
 import { findZoom, resolveZoomOverlaps } from './engine/camera'
 import { clamp } from './util/format'
 import { t } from './i18n'
 
-export type Selection = { kind: 'cut' | 'zoom' | 'text' | 'audio'; id: string } | null
-export type EditorMode = 'normal' | 'pickTarget' | 'crop'
+export type Selection = { kind: 'cut' | 'zoom' | 'text' | 'audio' | 'blur'; id: string } | null
+/** 'blur' = editing the selected blur region's rectangle on the uncropped-by-zoom source */
+export type EditorMode = 'normal' | 'pickTarget' | 'crop' | 'blur'
 export interface RangeSelection {
   start: number
   end: number
@@ -41,11 +44,13 @@ const HISTORY_LIMIT = 60
 let pendingCheckpoint: Project | null = null
 
 export interface EditorState {
-  screen: 'home' | 'editor' | 'scenario'
+  screen: 'home' | 'editor' | 'scenario' | 'composition'
   /** transient dismissible notice shown by NoticeBar (App.tsx); outlives Home unmounting */
   notice: string | null
   project: Project | null
   scenario: Scenario | null
+  /** open composition; stays set while one of its recordings is edited, so Back returns to it */
+  composition: Composition | null
   playheadMs: number
   playing: boolean
   /** bumped whenever the user explicitly seeks, so the player applies it */
@@ -69,6 +74,9 @@ export interface EditorState {
   openScenario(scenario: Scenario): void
   closeScenario(): void
   setScenario(scenario: Scenario): void
+  openComposition(composition: Composition): void
+  closeComposition(): void
+  setComposition(fn: (c: Composition) => Composition): void
   setPlayhead(ms: number, seek?: boolean): void
   setPlaying(playing: boolean): void
   togglePlay(): void
@@ -96,6 +104,10 @@ export interface EditorState {
   addText(at?: number): string | null
   updateText(id: string, patch: Partial<TextOverlay>, record?: boolean): void
   removeText(id: string): void
+  addBlur(at?: number): string | null
+  updateBlur(id: string, patch: Partial<BlurRegion>, record?: boolean): void
+  removeBlur(id: string): void
+  beginBlurEdit(id: string): void
   updateCursor(patch: Partial<CursorSettings>, record?: boolean): void
   setCrop(crop: CropRect, record?: boolean): void
   updateFrame(patch: Partial<FrameStyle>, record?: boolean): void
@@ -116,6 +128,7 @@ export const useStore = create<EditorState>((set, get) => ({
   notice: null,
   project: null,
   scenario: null,
+  composition: null,
   playheadMs: 0,
   playing: false,
   seekSeq: 0,
@@ -153,11 +166,27 @@ export const useStore = create<EditorState>((set, get) => ({
     }),
 
   closeProject: () =>
-    set({ screen: 'home', project: null, playing: false, history: [], future: [], audioMuted: false, audioErrors: {} }),
+    set({
+      screen: get().composition ? 'composition' : 'home',
+      project: null,
+      playing: false,
+      history: [],
+      future: [],
+      audioMuted: false,
+      audioErrors: {}
+    }),
 
   openScenario: (scenario) => set({ screen: 'scenario', scenario }),
   closeScenario: () => set({ screen: 'home', scenario: null }),
   setScenario: (scenario) => set({ scenario }),
+  openComposition: (composition) => set({ screen: 'composition', composition, project: null, scenario: null }),
+  closeComposition: () => set({ screen: 'home', composition: null }),
+  setComposition: (fn) => {
+    const c = get().composition
+    if (!c) return
+    const next = fn(c)
+    if (next !== c) set({ composition: { ...next, updatedAt: Date.now() } })
+  },
 
   setPlayhead: (ms, seek = false) => {
     const p = get().project
@@ -172,7 +201,13 @@ export const useStore = create<EditorState>((set, get) => ({
     const start = firstKeptTime(keepSegments(p.recording.durationMs, p.cuts))
     set({ playheadMs: start, seekSeq: get().seekSeq + 1, playing: true, mode: 'normal' })
   },
-  select: (selection) => set({ selection, range: selection ? null : get().range }),
+  select: (selection) =>
+    set({
+      selection,
+      range: selection ? null : get().range,
+      // the blur editor edits the selected region: selecting anything else leaves it
+      ...(get().mode === 'blur' && selection?.kind !== 'blur' ? { mode: 'normal' as const } : {})
+    }),
   setRange: (range) => set({ range, selection: range ? null : get().selection }),
   setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false, pickRect: mode === 'pickTarget' ? get().pickRect : null }),
 
@@ -269,7 +304,8 @@ export const useStore = create<EditorState>((set, get) => ({
         ...p,
         cuts,
         zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200),
-        texts: clipRegionsToCuts(p.texts, cuts, duration, 100)
+        texts: clipRegionsToCuts(p.texts, cuts, duration, 100),
+        blurs: clipRegionsToCuts(p.blurs, cuts, duration, 100)
       }
     })
     set({ range: null, selection: null })
@@ -348,6 +384,55 @@ export const useStore = create<EditorState>((set, get) => ({
     set({ selection: null })
   },
 
+  addBlur: (at) => {
+    const p = get().project
+    if (!p) return null
+    const time = at ?? get().playheadMs
+    const duration = p.recording.durationMs
+    const start = Math.max(0, Math.min(time, duration - 200))
+    const id = uid('blur')
+    // centered in the current crop, so a new rectangle is always on screen
+    const c = p.crop
+    const region: BlurRegion = {
+      ...BLUR_DEFAULTS,
+      id,
+      x: c.x + BLUR_DEFAULTS.x * c.w,
+      y: c.y + BLUR_DEFAULTS.y * c.h,
+      w: BLUR_DEFAULTS.w * c.w,
+      h: BLUR_DEFAULTS.h * c.h,
+      start,
+      end: Math.min(duration, start + 3000)
+    }
+    get().mutate((proj) => ({ ...proj, blurs: [...proj.blurs, region] }))
+    set({ selection: { kind: 'blur', id }, range: null, mode: 'blur', playing: false, pickRect: null })
+    return id
+  },
+
+  updateBlur: (id, patch, record = true) =>
+    get().mutate((p) => ({ ...p, blurs: p.blurs.map((b) => (b.id === id ? { ...b, ...patch } : b)) }), record),
+
+  removeBlur: (id) => {
+    get().mutate((p) => ({ ...p, blurs: p.blurs.filter((b) => b.id !== id) }))
+    set({ selection: null, mode: get().mode === 'blur' ? 'normal' : get().mode })
+  },
+
+  beginBlurEdit: (id) => {
+    const p = get().project
+    const b = p?.blurs.find((x) => x.id === id)
+    if (!p || !b) return
+    const head = get().playheadMs
+    // the rectangle is drawn over a frame in which it is actually active
+    const inside = head >= b.start && head < b.end
+    set({
+      mode: 'blur',
+      selection: { kind: 'blur', id },
+      range: null,
+      playing: false,
+      pickRect: null,
+      ...(inside ? {} : { playheadMs: b.start, seekSeq: get().seekSeq + 1 })
+    })
+  },
+
   updateCursor: (patch, record = true) =>
     get().mutate((p) => ({ ...p, cursor: { ...p.cursor, ...patch } }), record),
 
@@ -365,6 +450,7 @@ export const useStore = create<EditorState>((set, get) => ({
     else if (selection?.kind === 'zoom') get().removeZoom(selection.id)
     else if (selection?.kind === 'text') get().removeText(selection.id)
     else if (selection?.kind === 'audio') get().removeAudioClip(selection.id)
+    else if (selection?.kind === 'blur') get().removeBlur(selection.id)
     else if (range && range.end - range.start > 10) get().addCut(range.start, range.end)
   },
 

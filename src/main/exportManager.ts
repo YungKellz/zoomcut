@@ -32,12 +32,12 @@ interface ExportSession {
 // characters Windows refuses in file names, plus control characters
 const INVALID_FILE_CHARS = new RegExp('[<>:"/' + String.fromCharCode(92, 92) + '|?*' + String.fromCharCode(0) + '-' + String.fromCharCode(31) + ']', 'g')
 
-function sanitizeFileName(name: string): string {
+export function sanitizeFileName(name: string): string {
   const cleaned = name.replace(INVALID_FILE_CHARS, '_').trim()
   return cleaned.length > 0 ? cleaned : 'zoomcut-export'
 }
 
-async function uniquePath(folder: string, base: string, ext: string): Promise<string> {
+export async function uniquePath(folder: string, base: string, ext: string): Promise<string> {
   let candidate = join(folder, `${base}.${ext}`)
   let n = 2
   while (await exists(candidate)) {

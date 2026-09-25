@@ -1,5 +1,6 @@
 import type {
   AudioCaptureOptions,
+  BlurRegion,
   CursorSettings,
   ExportSettings,
   FrameStyle,
@@ -72,6 +73,15 @@ export const ZOOM_DEFAULTS: Omit<ZoomSegment, 'id' | 'start' | 'end'> = {
   easeOutMs: 500
 }
 
+export const BLUR_DEFAULTS: Omit<BlurRegion, 'id' | 'start' | 'end'> = {
+  x: 0.35,
+  y: 0.4,
+  w: 0.3,
+  h: 0.2,
+  style: 'blur',
+  strength: 24
+}
+
 export const GRADIENT_PRESETS: Record<string, [string, string]> = {
   'gradient:dusk': ['#1f1c2c', '#928dab'],
   'gradient:ocean': ['#0f2027', '#2c5364'],
@@ -106,3 +116,14 @@ export const DEFAULT_AUDIO_CAPTURE: AudioCaptureOptions = {
 // ---- scenario ----
 /** longest a captured scenario (and therefore a replayed recording) may run. */
 export const SCENARIO_MAX_MS = 600_000
+
+// ---- composition ----
+export const COMPOSITION_BACKGROUND = '#000000'
+/** output frame presets offered in the composition settings (null = the first recording) */
+export const COMPOSITION_SIZES: Array<{ width: number; height: number } | null> = [
+  null,
+  { width: 1920, height: 1080 },
+  { width: 1280, height: 720 },
+  { width: 1080, height: 1080 },
+  { width: 1080, height: 1920 }
+]

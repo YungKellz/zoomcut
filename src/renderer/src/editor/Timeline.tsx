@@ -1,7 +1,7 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
+import { Droplet, Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
 import type { TextOverlay } from '@shared/types'
 import { audioClipPath, isRecordedClip } from '@shared/audio'
 import { useProject, useStore } from '../store'
@@ -138,6 +138,8 @@ export function Timeline(): JSX.Element {
   const addText = useStore((s) => s.addText)
   const updateZoom = useStore((s) => s.updateZoom)
   const updateText = useStore((s) => s.updateText)
+  const addBlur = useStore((s) => s.addBlur)
+  const updateBlur = useStore((s) => s.updateBlur)
   const updateAudioClip = useStore((s) => s.updateAudioClip)
   const checkpoint = useStore((s) => s.checkpoint)
   const { stepMs: thumbStep, thumbs } = useThumbnails(project)
@@ -190,6 +192,8 @@ export function Timeline(): JSX.Element {
 
   const textLanes = useMemo(() => assignLanes(project.texts), [project.texts])
   const laneCount = Math.max(1, ...Array.from(textLanes.values()).map((l) => l + 1))
+  const blurLanes = useMemo(() => assignLanes(project.blurs), [project.blurs])
+  const blurLaneCount = Math.max(1, ...Array.from(blurLanes.values()).map((l) => l + 1))
 
   // recorded clips (system/mic) are drawn spanning the whole output (they follow the video
   // through cuts, too fiddly to draw exactly - see the region.audio.recorded comment below);
@@ -305,6 +309,9 @@ export function Timeline(): JSX.Element {
         <button className="btn btn-small" onClick={() => addText()} title={t('timeline.textTitle')}>
           <Type size={14} /> {t('timeline.text')}
         </button>
+        <button className="btn btn-small" onClick={() => addBlur()} title={t('timeline.blurTitle')}>
+          <Droplet size={14} /> {t('timeline.blur')}
+        </button>
         <span className="muted timeline-hint">{t('timeline.hint')}</span>
         <div className="timeline-zoom">
           <button className="btn btn-ghost btn-small" onClick={fit} title={t('timeline.fit')}>
@@ -329,6 +336,9 @@ export function Timeline(): JSX.Element {
           <div className="track-label zoom-label">{t('timeline.trackZoom')}</div>
           <div className="track-label text-label" style={{ height: 30 * laneCount }}>
             {t('timeline.trackText')}
+          </div>
+          <div className="track-label blur-label" style={{ height: 30 * blurLaneCount }}>
+            {t('timeline.trackBlur')}
           </div>
           <div className="track-label audio-label" style={{ height: 30 * audioLaneCount }}>
             {t('timeline.trackAudio')}
@@ -426,6 +436,34 @@ export function Timeline(): JSX.Element {
                     onSelect={() => select({ kind: 'text', id: tx.id })}
                     onBegin={checkpoint}
                     onChange={(s, e) => updateText(tx.id, { start: toSrc(s), end: toSrc(e) }, false)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div
+              className="track track-blur"
+              style={{ height: 30 * blurLaneCount }}
+              onPointerDown={emptyTrackClick}
+              onDoubleClick={(e) => {
+                if ((e.target as HTMLElement).closest('.region')) return
+                addBlur(toSrc(outFromEvent(e, e.currentTarget)))
+              }}
+            >
+              {project.blurs.map((b) => (
+                <div key={b.id} className="lane" style={{ top: (blurLanes.get(b.id) ?? 0) * 30 }}>
+                  <Region
+                    start={toOut(b.start)}
+                    end={toOut(b.end)}
+                    pxPerMs={pxPerMs}
+                    maxEnd={outDur}
+                    minLength={100}
+                    className="blur"
+                    label={b.style === 'pixelate' ? t('blur.style.pixelate') : t('blur.style.blur')}
+                    selected={selection?.kind === 'blur' && selection.id === b.id}
+                    onSelect={() => select({ kind: 'blur', id: b.id })}
+                    onBegin={checkpoint}
+                    onChange={(s, e) => updateBlur(b.id, { start: toSrc(s), end: toSrc(e) }, false)}
                   />
                 </div>
               ))}

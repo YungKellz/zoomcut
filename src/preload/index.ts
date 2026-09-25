@@ -85,6 +85,19 @@ const api: ZcApi = {
     onEffect: (cb) => subscribe('overlay:effect', cb),
     onReplayState: (cb) => subscribe('recording:replay-state', cb)
   },
+  compositions: {
+    list: () => ipcRenderer.invoke('compositions:list'),
+    create: (name) => ipcRenderer.invoke('compositions:create', name),
+    load: (id) => ipcRenderer.invoke('compositions:load', id),
+    save: (composition) => ipcRenderer.invoke('compositions:save', composition),
+    remove: (id) => ipcRenderer.invoke('compositions:delete', id)
+  },
+  converter: {
+    chooseVideo: () => ipcRenderer.invoke('converter:choose-video'),
+    toGif: (req) => ipcRenderer.invoke('converter:to-gif', req),
+    cancel: () => ipcRenderer.invoke('converter:cancel'),
+    onProgress: (cb) => subscribe('converter:progress', cb)
+  },
   e2e: {
     openTarget: (bounds) => ipcRenderer.invoke('e2e:open-target', bounds),
     injectSteps: (steps) => ipcRenderer.invoke('e2e:inject-steps', steps)

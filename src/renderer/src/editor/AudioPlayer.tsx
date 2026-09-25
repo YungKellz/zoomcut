@@ -15,14 +15,14 @@ interface ActiveInfo {
 }
 
 /** Recorded clips (system/mic) follow SOURCE time, like the video itself: cut pieces silence them too. */
-function recordedActive(clip: AudioClip, playheadMs: number, segments: Segment[]): ActiveInfo {
+export function recordedActive(clip: AudioClip, playheadMs: number, segments: Segment[]): ActiveInfo {
   const fileTime = playheadMs - clip.start
   const insideKeptSegment = segmentAt(playheadMs, segments) !== null
   return { active: insideKeptSegment && fileTime >= 0 && fileTime < clip.durationMs, fileTime }
 }
 
 /** Overlay clips (voiceover/music/file, added in A2) follow OUTPUT time; cuts do not move them. */
-function overlayActive(clip: AudioClip, playheadMs: number, segments: Segment[], outDurationMs: number): ActiveInfo {
+export function overlayActive(clip: AudioClip, playheadMs: number, segments: Segment[], outDurationMs: number): ActiveInfo {
   const outT = srcToOut(playheadMs, segments)
   const raw = outT - clip.start
   const looped = clip.loop && clip.durationMs > 0

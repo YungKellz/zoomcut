@@ -319,6 +319,13 @@ function ditherExpression(gif: GifSettings): string {
  * palette computed over every pixel of every frame. With `alpha` one palette entry is
  * reserved for transparency (transparent frame background).
  */
+export interface GifSourceOptions {
+  /** input options placed before `-i` (e.g. a trim) */
+  inputArgs?: string[]
+  /** filters applied to the input before palettegen/paletteuse (e.g. fps + scale) */
+  prefilter?: string
+}
+
 export async function encodeGif(
   input: string,
   palettePath: string,
@@ -327,15 +334,19 @@ export async function encodeGif(
   alpha: boolean,
   durationMs: number,
   onProgress: (phase: 'palette' | 'quantize', percent: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  source: GifSourceOptions = {}
 ): Promise<void> {
   const statsMode = gif.paletteMode === 'global' ? 'full' : gif.paletteMode === 'diff' ? 'diff' : 'single'
   const perFrame = gif.paletteMode === 'perframe'
+  const inputArgs = source.inputArgs ?? []
+  const pre = source.prefilter ? `${source.prefilter},` : ''
 
   await runFfmpeg({
     args: [
+      ...inputArgs,
       '-i', input,
-      '-vf', `palettegen=max_colors=${gif.colors}:stats_mode=${statsMode}:reserve_transparent=${alpha ? 1 : 0}`,
+      '-vf', `${pre}palettegen=max_colors=${gif.colors}:stats_mode=${statsMode}:reserve_transparent=${alpha ? 1 : 0}`,
       ...(perFrame ? ['-c:v', 'rawvideo', '-f', 'nut'] : ['-frames:v', '1']),
       palettePath
     ],
@@ -348,11 +359,13 @@ export async function encodeGif(
     `paletteuse=dither=${ditherExpression(gif)}:diff_mode=rectangle` +
     (perFrame ? ':new=1' : '') +
     (alpha ? ':alpha_threshold=128' : '')
+  const lavfi = source.prefilter ? `[0:v]${source.prefilter}[src];[src][1:v]${paletteuse}` : `[0:v][1:v]${paletteuse}`
   await runFfmpeg({
     args: [
+      ...inputArgs,
       '-i', input,
       '-i', palettePath,
-      '-lavfi', `[0:v][1:v]${paletteuse}`,
+      '-lavfi', lavfi,
       '-loop', gif.loop ? '0' : '-1',
       output
     ],
@@ -360,4 +373,22 @@ export async function encodeGif(
     onProgress: (p) => onProgress('quantize', p),
     signal
   })
+}
+
+// ---- gif converter ----
+/** fps + lanczos scale for converting an arbitrary video into a GIF (height keeps the aspect). */
+export function gifConvertPrefilter(fps: number, width: number): string {
+  const f = Math.max(1, Math.min(50, Math.round(fps)))
+  const w = Math.max(16, Math.round(width / 2) * 2)
+  return `fps=${f},scale=${w}:-2:flags=lanczos`
+}
+
+/** Input-side trim (fast seek before -i); empty when the whole file is used. */
+export function gifConvertInputArgs(startMs: number, endMs: number, durationMs: number): string[] {
+  const start = Math.max(0, Math.min(startMs, durationMs))
+  const end = Math.max(start, Math.min(endMs, durationMs))
+  const args: string[] = []
+  if (start > 0) args.push('-ss', (start / 1000).toFixed(3))
+  if (end < durationMs) args.push('-t', ((end - start) / 1000).toFixed(3))
+  return args
 }

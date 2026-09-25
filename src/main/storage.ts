@@ -6,6 +6,7 @@ import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, 
 import { allowMediaRoot } from './mediaProtocol'
 import { scenariosRoot } from './scenario/storage'
 import { musicDir } from './audio/musicLibrary'
+import { compositionsRoot } from './composition/storage'
 // recordingsRoot/projectDir/exists live in the leaf module media/projectPaths.ts (not defined
 // here) so audio/musicLibrary.ts and media/audioImport.ts can both depend on them without
 // recreating storage.ts -> musicLibrary.ts -> audioImport.ts -> storage.ts. Re-exported below so
@@ -35,6 +36,7 @@ export async function ensureDirs(): Promise<void> {
   await fsp.mkdir(recordingsRoot(), { recursive: true })
   await fsp.mkdir(exportTempDir(), { recursive: true })
   await fsp.mkdir(scenariosRoot(), { recursive: true })
+  await fsp.mkdir(compositionsRoot(), { recursive: true })
   allowMediaRoot(recordingsRoot())
   // registered explicitly (not just via the userData root below): ZOOMCUT_SCENARIOS_DIR can
   // point scenariosRoot() outside userData entirely, same reasoning as recordingsRoot() above
@@ -127,6 +129,7 @@ export async function loadProject(id: string): Promise<Project> {
     cuts: raw.cuts ?? [],
     texts: raw.texts ?? [],
     zooms: raw.zooms ?? [],
+    blurs: raw.blurs ?? [],
     audio: raw.audio ?? [],
     cursor: { ...DEFAULT_CURSOR_SETTINGS, ...(raw.cursor ?? {}) },
     crop: raw.crop ?? { x: 0, y: 0, w: 1, h: 1 },

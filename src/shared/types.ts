@@ -89,6 +89,23 @@ export interface TextOverlay {
   animationMs: number
 }
 
+export type BlurStyle = 'blur' | 'pixelate'
+
+/** A rectangle hidden by a blur or pixelation while [start, end) of source time plays. */
+export interface BlurRegion {
+  id: string
+  start: number
+  end: number
+  /** rectangle in source-normalized coordinates (the whole recording, not the crop) */
+  x: number
+  y: number
+  w: number
+  h: number
+  style: BlurStyle
+  /** blur radius / pixel block size in px at 1080p content height */
+  strength: number
+}
+
 export type ZoomMode = 'follow' | 'fixed'
 
 export interface ZoomSegment {
@@ -192,6 +209,7 @@ export interface Project {
   cuts: CutRange[]
   texts: TextOverlay[]
   zooms: ZoomSegment[]
+  blurs: BlurRegion[]
   audio: AudioClip[]
   cursor: CursorSettings
   crop: CropRect
@@ -491,4 +509,64 @@ export interface OverlayEffect {
 export interface RecordOptions {
   audio?: AudioCaptureOptions
   scenario?: Scenario
+}
+
+// ---- composition ----
+/** One recording placed in a composition; the project is referenced, not copied, so the
+ * composition always plays the recording with its current edits. */
+export interface CompositionItem {
+  id: string
+  projectId: string
+}
+
+export interface Composition {
+  version: 1
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  items: CompositionItem[]
+  /** output frame at 100 % scale; null = the first recording's own output size */
+  size: { width: number; height: number } | null
+  /** fills the frame around a recording whose aspect ratio differs from the output */
+  background: string
+  export: ExportSettings
+}
+
+export interface CompositionSummary {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  items: number
+}
+
+// ---- gif converter ----
+export interface VideoFileInfo {
+  path: string
+  /** file name without the extension */
+  name: string
+  width: number
+  height: number
+  durationMs: number
+  fps: number
+}
+
+export interface GifConvertRequest {
+  input: string
+  folder: string
+  fileName: string
+  fps: number
+  /** output width in px; the height follows the aspect ratio */
+  width: number
+  /** trimmed span of the input, ms */
+  startMs: number
+  endMs: number
+  gif: GifSettings
+}
+
+export interface GifConvertProgress {
+  phase: 'palette' | 'quantize' | 'done' | 'error'
+  percent: number
+  message?: string
 }

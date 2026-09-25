@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Circle, FolderOpen, Mic, Monitor, MousePointerClick, RefreshCw, Trash2, Volume2 } from 'lucide-react'
-import type { AppInfo, AudioCaptureOptions, DisplayInfo, Language, ProjectSummary, ScenarioSummary } from '@shared/types'
+import { Circle, Clapperboard, FileImage, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
+import type { AppInfo, AudioCaptureOptions, CompositionSummary, DisplayInfo, Language, ProjectSummary, ScenarioSummary } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
@@ -10,12 +10,17 @@ import { formatDuration } from '../util/format'
 import { changeLanguage, useI18n, useT } from '../i18n'
 import { Logo } from '../components/Logo'
 import { UpdateStatus } from '../components/UpdateStatus'
+import { GifConverterDialog } from '../converter/GifConverterDialog'
 
 export function Home(): JSX.Element {
   const t = useT()
   const lang = useI18n((s) => s.lang)
   const openProject = useStore((s) => s.openProject)
   const openScenario = useStore((s) => s.openScenario)
+  const openComposition = useStore((s) => s.openComposition)
+  const [compositions, setCompositions] = useState<CompositionSummary[]>([])
+  const [compositionBusy, setCompositionBusy] = useState(false)
+  const [converterOpen, setConverterOpen] = useState(false)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -92,12 +97,17 @@ export function Home(): JSX.Element {
     setScenarios(await window.zc.scenario.list())
   }, [])
 
+  const refreshCompositions = useCallback(async () => {
+    setCompositions(await window.zc.compositions.list())
+  }, [])
+
   useEffect(() => {
     void refreshDisplays()
     void refreshProjects()
     void refreshScenarios()
+    void refreshCompositions()
     void window.zc.app.info().then(setInfo)
-  }, [refreshDisplays, refreshProjects, refreshScenarios])
+  }, [refreshDisplays, refreshProjects, refreshScenarios, refreshCompositions])
 
   useEffect(() => {
     if (recorder.phase === 'idle') void refreshProjects()
@@ -127,6 +137,38 @@ export function Home(): JSX.Element {
     if (!confirm(t('home.deleteConfirm', { name: p.name }))) return
     await window.zc.projects.remove(p.id)
     await refreshProjects()
+  }
+
+  const newComposition = async (): Promise<void> => {
+    setCompositionBusy(true)
+    try {
+      openComposition(await window.zc.compositions.create(t('composition.defaultName', { date: new Date().toLocaleString() })))
+    } catch (err) {
+      alert(t('composition.openFailed', { error: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setCompositionBusy(false)
+    }
+  }
+
+  const openSavedComposition = async (id: string): Promise<void> => {
+    setCompositionBusy(true)
+    try {
+      openComposition(await window.zc.compositions.load(id))
+    } catch (err) {
+      alert(t('composition.openFailed', { error: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setCompositionBusy(false)
+    }
+  }
+
+  const removeComposition = async (c: CompositionSummary): Promise<void> => {
+    if (!confirm(t('composition.deleteConfirm', { name: c.name }))) return
+    try {
+      await window.zc.compositions.remove(c.id)
+    } catch (err) {
+      console.error('failed to delete composition', err)
+    }
+    await refreshCompositions()
   }
 
   const openSavedScenario = async (id: string): Promise<void> => {
@@ -161,6 +203,9 @@ export function Home(): JSX.Element {
           </div>
         </div>
         <div className="home-meta">
+          <button className="btn btn-small" onClick={() => setConverterOpen(true)} disabled={recording || capturing} title={t('converter.buttonTitle')}>
+            <FileImage size={14} /> {t('converter.button')}
+          </button>
           <label className="lang-select">
             <span>{t('common.language')}</span>
             <select value={lang} onChange={(e) => void changeLanguage(e.target.value as Language)}>
@@ -312,6 +357,31 @@ export function Home(): JSX.Element {
         <section className="card">
           <div className="card-head">
             <h2>
+              <Clapperboard size={18} /> {t('composition.title')}
+            </h2>
+            <button className="btn btn-small" onClick={() => void newComposition()} disabled={compositionBusy || recording || capturing}>
+              <Plus size={14} /> {t('composition.new')}
+            </button>
+          </div>
+          {compositions.length === 0 && <p className="muted small">{t('composition.homeHint')}</p>}
+          <ul className="scenario-list">
+            {compositions.map((c) => (
+              <li key={c.id} className="scenario-row">
+                <button className="scenario-open" onClick={() => void openSavedComposition(c.id)} disabled={compositionBusy || recording || capturing}>
+                  <span className="project-name">{c.name}</span>
+                  <span className="muted">{t('composition.summary', { n: c.items, date: new Date(c.updatedAt).toLocaleString() })}</span>
+                </button>
+                <button className="btn btn-ghost danger scenario-delete" title={t('common.delete')} disabled={compositionBusy || recording || capturing} onClick={() => void removeComposition(c)}>
+                  <Trash2 size={15} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>
               <FolderOpen size={18} /> {t('home.recent')}
             </h2>
           </div>
@@ -365,6 +435,8 @@ export function Home(): JSX.Element {
           </div>
         </div>
       )}
+
+      {converterOpen && <GifConverterDialog onClose={() => setConverterOpen(false)} />}
 
       {capturing && (
         <div className="overlay">

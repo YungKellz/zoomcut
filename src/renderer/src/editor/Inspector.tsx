@@ -7,6 +7,7 @@ import {
   AudioLines,
   Crosshair,
   Crop,
+  Droplet,
   Loader2,
   Mic,
   MousePointer2,
@@ -24,7 +25,7 @@ import {
   X,
   ZoomIn
 } from 'lucide-react'
-import type { AudioClip, MusicTrack, TextOverlay, ZoomSegment } from '@shared/types'
+import type { AudioClip, BlurRegion, MusicTrack, TextOverlay, ZoomSegment } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE, GRADIENT_PRESETS } from '@shared/defaults'
 import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
@@ -38,7 +39,7 @@ import { clipIcon, clipLabel } from '../audio/clipLabel'
 import { formatElapsed, formatTimecode } from '../util/format'
 import { useT, type Translate, type TKey } from '../i18n'
 
-type Tab = 'clip' | 'zoom' | 'text' | 'audio' | 'cursor' | 'style'
+type Tab = 'clip' | 'zoom' | 'text' | 'blur' | 'audio' | 'cursor' | 'style'
 
 export function Inspector(): JSX.Element {
   const t = useT()
@@ -49,6 +50,7 @@ export function Inspector(): JSX.Element {
     if (selection?.kind === 'zoom') setTab('zoom')
     else if (selection?.kind === 'text') setTab('text')
     else if (selection?.kind === 'audio') setTab('audio')
+    else if (selection?.kind === 'blur') setTab('blur')
     else if (selection?.kind === 'cut') setTab('clip')
   }, [selection])
 
@@ -56,6 +58,7 @@ export function Inspector(): JSX.Element {
     { id: 'clip', label: t('tab.clip'), icon: <Scissors size={14} /> },
     { id: 'zoom', label: t('tab.zoom'), icon: <ZoomIn size={14} /> },
     { id: 'text', label: t('tab.text'), icon: <Type size={14} /> },
+    { id: 'blur', label: t('tab.blur'), icon: <Droplet size={14} /> },
     { id: 'audio', label: t('tab.audio'), icon: <AudioLines size={14} /> },
     { id: 'cursor', label: t('tab.cursor'), icon: <MousePointer2 size={14} /> },
     { id: 'style', label: t('tab.style'), icon: <Sparkles size={14} /> }
@@ -74,6 +77,7 @@ export function Inspector(): JSX.Element {
         {tab === 'clip' && <ClipPanel t={t} />}
         {tab === 'zoom' && <ZoomPanel t={t} />}
         {tab === 'text' && <TextPanel t={t} />}
+        {tab === 'blur' && <BlurPanel t={t} />}
         {tab === 'audio' && <AudioPanel t={t} />}
         {tab === 'cursor' && <CursorPanel t={t} />}
         {tab === 'style' && <StylePanel t={t} />}
@@ -435,6 +439,100 @@ function TextPanel({ t }: PanelProps): JSX.Element {
           </ul>
         </>
       )}
+    </>
+  )
+}
+
+function BlurPanel({ t }: PanelProps): JSX.Element {
+  const project = useProject()
+  const selection = useStore((s) => s.selection)
+  const mode = useStore((s) => s.mode)
+  const select = useStore((s) => s.select)
+  const setMode = useStore((s) => s.setMode)
+  const addBlur = useStore((s) => s.addBlur)
+  const updateBlur = useStore((s) => s.updateBlur)
+  const removeBlur = useStore((s) => s.removeBlur)
+  const beginBlurEdit = useStore((s) => s.beginBlurEdit)
+  const setPlayhead = useStore((s) => s.setPlayhead)
+  const checkpoint = useStore((s) => s.checkpoint)
+  const duration = project.recording.durationMs
+  const blur: BlurRegion | undefined = selection?.kind === 'blur' ? project.blurs.find((b) => b.id === selection.id) : undefined
+  const editing = mode === 'blur' && blur !== undefined
+
+  return (
+    <>
+      <button className="btn btn-small" onClick={() => addBlur()}>
+        <Droplet size={14} /> {t('blur.add')}
+      </button>
+      {blur ? (
+        <>
+          <h3>{t('blur.selected')}</h3>
+          <div className="btn-row">
+            <button className={'btn btn-small' + (editing ? ' active' : '')} onClick={() => (editing ? setMode('normal') : beginBlurEdit(blur.id))}>
+              <Crop size={14} /> {editing ? t('common.done') : t('blur.editArea')}
+            </button>
+          </div>
+          <Field label={t('blur.style')}>
+            <div className="seg">
+              <button className={'seg-btn' + (blur.style === 'blur' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'blur' })}>
+                {t('blur.style.blur')}
+              </button>
+              <button className={'seg-btn' + (blur.style === 'pixelate' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'pixelate' })}>
+                {t('blur.style.pixelate')}
+              </button>
+            </div>
+          </Field>
+          <Slider
+            label={blur.style === 'pixelate' ? t('blur.blockSize') : t('blur.strength')}
+            value={blur.strength}
+            min={4}
+            max={80}
+            step={1}
+            format={(v) => `${v} px @1080p`}
+            onBegin={checkpoint}
+            onChange={(v) => updateBlur(blur.id, { strength: v }, false)}
+          />
+          <div className="row2">
+            <TimeInput label={t('zoom.start')} value={blur.start} max={duration} onChange={(v) => updateBlur(blur.id, { start: Math.min(v, blur.end - 100) })} />
+            <TimeInput label={t('zoom.end')} value={blur.end} max={duration} onChange={(v) => updateBlur(blur.id, { end: Math.max(v, blur.start + 100) })} />
+          </div>
+          <div className="btn-row">
+            <button className="btn btn-small" onClick={() => updateBlur(blur.id, { start: 0, end: duration })}>
+              {t('blur.wholeRecording')}
+            </button>
+          </div>
+          <p className="muted small">{t('blur.editHelp')}</p>
+          <button className="btn btn-small danger" onClick={() => removeBlur(blur.id)}>
+            <Trash2 size={14} /> {t('blur.delete')}
+          </button>
+        </>
+      ) : (
+        <p className="muted small">{t('blur.empty')}</p>
+      )}
+      {project.blurs.length > 0 && (
+        <>
+          <h3>{t('blur.all')}</h3>
+          <ul className="list">
+            {project.blurs.map((b) => (
+              <li key={b.id} className={'list-item' + (blur?.id === b.id ? ' active' : '')}>
+                <button
+                  className="list-main"
+                  onClick={() => {
+                    select({ kind: 'blur', id: b.id })
+                    setPlayhead(b.start + 50, true)
+                  }}
+                >
+                  {formatTimecode(b.start)} – {formatTimecode(b.end)} · {b.style === 'pixelate' ? t('blur.style.pixelate') : t('blur.style.blur')}
+                </button>
+                <button className="btn btn-ghost danger" onClick={() => removeBlur(b.id)} title={t('blur.delete')}>
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="muted small">{t('blur.help')}</p>
     </>
   )
 }

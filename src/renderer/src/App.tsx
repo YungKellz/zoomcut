@@ -5,6 +5,7 @@ import { Editor } from './screens/Editor'
 import { E2eTarget } from './screens/E2eTarget'
 import { ScenarioReview } from './screens/ScenarioReview'
 import { ReplayOverlay } from './screens/ReplayOverlay'
+import { CompositionScreen } from './screens/Composition'
 import { UpdateToast } from './components/UpdateToast'
 import { NoticeBar } from './components/NoticeBar'
 import { useStore } from './store'
@@ -17,7 +18,15 @@ export function App(): JSX.Element {
   if (hash === 'overlay') return <ReplayOverlay />
   return (
     <>
-      {screen === 'editor' ? <Editor /> : screen === 'scenario' ? <ScenarioReview /> : <Home />}
+      {screen === 'editor' ? (
+        <Editor />
+      ) : screen === 'scenario' ? (
+        <ScenarioReview />
+      ) : screen === 'composition' ? (
+        <CompositionScreen />
+      ) : (
+        <Home />
+      )}
       <NoticeBar />
       <UpdateToast />
     </>

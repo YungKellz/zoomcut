@@ -454,6 +454,7 @@ export class RecordingController {
         cuts: [],
         texts: [],
         zooms: [],
+        blurs: [],
         audio: [],
         // last used cursor / frame settings become the defaults of a new project
         cursor: { ...DEFAULT_CURSOR_SETTINGS, ...(settings.cursorDefaults ?? {}), offsetMs: 0 },

@@ -4,12 +4,16 @@ import type {
   AudioClipKind,
   AudioExportPlan,
   AudioTrackKind,
+  Composition,
+  CompositionSummary,
   DisplayInfo,
   ExportBeginRequest,
   ExportBeginResult,
   ExportFinishResult,
   ExportProgress,
   ExportSettings,
+  GifConvertProgress,
+  GifConvertRequest,
   MusicTrack,
   OverlayEffect,
   Project,
@@ -24,7 +28,8 @@ import type {
   Scenario,
   ScenarioCaptureState,
   ScenarioSummary,
-  UpdateState
+  UpdateState,
+  VideoFileInfo
 } from './types'
 import type { ReplayStep } from './scenario'
 
@@ -138,6 +143,24 @@ export interface ZcApi {
   overlay: {
     onEffect(cb: (e: OverlayEffect) => void): Unsubscribe
     onReplayState(cb: (s: ReplayState) => void): Unsubscribe
+  }
+  // ---- composition ----
+  compositions: {
+    list(): Promise<CompositionSummary[]>
+    /** creates and saves an empty composition */
+    create(name: string): Promise<Composition>
+    load(id: string): Promise<Composition>
+    save(composition: Composition): Promise<void>
+    remove(id: string): Promise<void>
+  }
+  // ---- gif converter ----
+  converter: {
+    /** native file picker for a video; probes the chosen file. null when cancelled. */
+    chooseVideo(): Promise<VideoFileInfo | null>
+    /** converts a video file into a GIF with ffmpeg's two-pass palette (one conversion at a time) */
+    toGif(req: GifConvertRequest): Promise<ExportFinishResult>
+    cancel(): Promise<void>
+    onProgress(cb: (p: GifConvertProgress) => void): Unsubscribe
   }
   /** Only functional under ZOOMCUT_E2E=1; rejects otherwise (no handler registered). */
   e2e: {

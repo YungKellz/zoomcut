@@ -64,6 +64,8 @@ export function Editor(): JSX.Element {
         s.addZoom()
       } else if (key === 't' && !ctrl) {
         s.addText()
+      } else if (key === 'b' && !ctrl) {
+        s.addBlur()
       } else if (key === 'c' && !ctrl) {
         if (s.range) s.addCut(s.range.start, s.range.end)
       } else if (key === 'i' && !ctrl) {

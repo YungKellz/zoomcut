@@ -2217,3 +2217,156 @@ input.scenario-action-gap {
     opacity: 0;
   }
 }
+
+/* ---- blur ---- */
+
+.blur-label {
+  min-height: 30px;
+}
+
+.track-blur {
+  min-height: 30px;
+}
+
+.region.blur {
+  background: rgba(191, 90, 242, 0.42);
+  color: #f3e1ff;
+}
+
+.crop-rect.blur-rect {
+  border: 1.5px dashed #bf5af2;
+  background: rgba(191, 90, 242, 0.08);
+}
+
+.blur-outline {
+  position: absolute;
+  border: 1px dashed rgba(191, 90, 242, 0.8);
+  box-sizing: border-box;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.blur-outline:hover {
+  background: rgba(191, 90, 242, 0.15);
+}
+
+/* ---- composition ---- */
+
+.comp-main {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.comp-side .panel {
+  overflow-y: auto;
+}
+
+.comp-scrub {
+  position: relative;
+  height: 26px;
+  margin: 6px 12px 0;
+  background: #15171a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.comp-scrub-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  border-right: 1px solid #08090b;
+  background: rgba(79, 140, 255, 0.28);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 11px;
+  color: #dce9ff;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.comp-scrub-span:nth-child(even) {
+  background: rgba(79, 140, 255, 0.16);
+}
+
+.comp-scrub-span.active {
+  background: rgba(79, 140, 255, 0.45);
+}
+
+.comp-scrub-span span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comp-scrub-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  pointer-events: none;
+}
+
+.comp-items {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.comp-item {
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.comp-item.missing {
+  opacity: 0.75;
+}
+
+.comp-index {
+  width: 20px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.comp-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.comp-item-main .project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- gif converter ---- */
+
+.converter-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.converter-file-info {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.converter-preview {
+  width: 100%;
+  max-height: 240px;
+  background: #000;
+  border-radius: 8px;
+}

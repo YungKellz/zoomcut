@@ -1,4 +1,4 @@
-import type { Project, TextOverlay } from '@shared/types'
+import type { BlurRegion, Project, TextOverlay } from '@shared/types'
 import { GRADIENT_PRESETS } from '@shared/defaults'
 import { cameraAt, viewportOf, type Camera } from './camera'
 import { activeClicks, cursorAt, type FollowPath } from './cursor'
@@ -46,6 +46,7 @@ export interface ComposeOptions {
   disableFrame?: boolean
   disableCursor?: boolean
   disableTexts?: boolean
+  disableBlurs?: boolean
   camera?: Camera
 }
 
@@ -93,6 +94,87 @@ function fillBackground(ctx: CanvasRenderingContext2D, background: string, w: nu
 
 export function textIsActive(overlay: TextOverlay, t: number): boolean {
   return t >= overlay.start && t < overlay.end
+}
+
+export function blurIsActive(region: BlurRegion, t: number): boolean {
+  return t >= region.start && t < region.end
+}
+
+let pixelCanvas: OffscreenCanvas | HTMLCanvasElement | null = null
+function scratchCanvas(w: number, h: number): OffscreenCanvas | HTMLCanvasElement {
+  if (!pixelCanvas) pixelCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : document.createElement('canvas')
+  if (pixelCanvas.width < w) pixelCanvas.width = w
+  if (pixelCanvas.height < h) pixelCanvas.height = h
+  return pixelCanvas
+}
+
+interface ContentMap {
+  /** source px rectangle currently shown in the content area */
+  sx: number
+  sy: number
+  sw: number
+  sh: number
+  pad: number
+  contentW: number
+  contentH: number
+  /** source-normalized point → canvas px */
+  toContent(x: number, y: number): { x: number; y: number }
+  /** zoom factor of the current viewport (1 = no zoom) */
+  zoom: number
+}
+
+/**
+ * Hides a rectangle of the source: a Gaussian blur, or a mosaic of `strength`-sized blocks.
+ * The blur samples a margin around the rectangle and is clipped back to it, so its edges stay
+ * sharp and opaque instead of fading into the untouched picture.
+ */
+function drawBlurRegion(ctx: CanvasRenderingContext2D, source: CanvasImageSource, region: BlurRegion, m: ContentMap): void {
+  const a = m.toContent(region.x, region.y)
+  const b = m.toContent(region.x + region.w, region.y + region.h)
+  const left = Math.max(m.pad, Math.min(a.x, b.x))
+  const top = Math.max(m.pad, Math.min(a.y, b.y))
+  const right = Math.min(m.pad + m.contentW, Math.max(a.x, b.x))
+  const bottom = Math.min(m.pad + m.contentH, Math.max(a.y, b.y))
+  const dw = right - left
+  const dh = bottom - top
+  if (dw < 1 || dh < 1) return
+  const px = Math.max(1, region.strength * (m.contentH / 1080) * m.zoom)
+  // canvas px → source px for the content area
+  const toSrcX = (x: number): number => m.sx + ((x - m.pad) / m.contentW) * m.sw
+  const toSrcY = (y: number): number => m.sy + ((y - m.pad) / m.contentH) * m.sh
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(left, top, dw, dh)
+  ctx.clip()
+  if (region.style === 'pixelate') {
+    const cw = Math.max(1, Math.round(dw / px))
+    const ch = Math.max(1, Math.round(dh / px))
+    const tiny = scratchCanvas(cw, ch)
+    const tctx = tiny.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+    if (tctx) {
+      tctx.imageSmoothingEnabled = true
+      tctx.imageSmoothingQuality = 'high'
+      tctx.clearRect(0, 0, cw, ch)
+      tctx.drawImage(source, toSrcX(left), toSrcY(top), toSrcX(right) - toSrcX(left), toSrcY(bottom) - toSrcY(top), 0, 0, cw, ch)
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(tiny, 0, 0, cw, ch, left, top, dw, dh)
+    }
+  } else {
+    const margin = px * 2
+    const el = Math.max(m.pad, left - margin)
+    const et = Math.max(m.pad, top - margin)
+    const er = Math.min(m.pad + m.contentW, right + margin)
+    const eb = Math.min(m.pad + m.contentH, bottom + margin)
+    // an opaque base first: where the margin is cut off by the frame edge the blur fades out,
+    // and that must not let the unblurred picture show through
+    ctx.fillStyle = '#808080'
+    ctx.fillRect(left, top, dw, dh)
+    ctx.filter = `blur(${px.toFixed(1)}px)`
+    ctx.drawImage(source, toSrcX(el), toSrcY(et), toSrcX(er) - toSrcX(el), toSrcY(eb) - toSrcY(et), el, et, er - el, eb - et)
+    ctx.filter = 'none'
+  }
+  ctx.restore()
 }
 
 export interface TextLayout {
@@ -243,14 +325,22 @@ export function composeFrame(
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, sx, sy, sw, sh, pad, pad, contentW, contentH)
 
+  const toContent = (px: number, py: number): { x: number; y: number } => ({
+    x: pad + (((px - crop.x) / crop.w - vp.x) / vp.w) * contentW,
+    y: pad + (((py - crop.y) / crop.h - vp.y) / vp.h) * contentH
+  })
+
+  if (!opts.disableBlurs && project.blurs?.length) {
+    const map: ContentMap = { sx, sy, sw, sh, pad, contentW, contentH, toContent, zoom: 1 / vp.w }
+    for (const region of project.blurs) {
+      if (blurIsActive(region, tSrc)) drawBlurRegion(ctx, source, region, map)
+    }
+  }
+
   if (!opts.disableCursor) {
     const cs = project.cursor
     const data = project.cursorData
     const tCursor = tSrc + cs.offsetMs
-    const toContent = (px: number, py: number): { x: number; y: number } => ({
-      x: pad + (((px - crop.x) / crop.w - vp.x) / vp.w) * contentW,
-      y: pad + (((py - crop.y) / crop.h - vp.y) / vp.h) * contentH
-    })
     const unit = contentH / 1080
     if (cs.clicks && data.clicks.length) {
       for (const { click, progress } of activeClicks(data.clicks, tCursor, cs.clickDurationMs)) {

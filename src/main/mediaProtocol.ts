@@ -17,7 +17,11 @@ const MIME: Record<string, string> = {
   '.m4a': 'audio/mp4',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg'
+  '.ogg': 'audio/ogg',
+  // ---- gif converter ---- (preview of the chosen input video)
+  '.m4v': 'video/mp4',
+  '.mov': 'video/mp4',
+  '.mkv': 'video/webm'
 }
 
 export function allowMediaRoot(dir: string): void {

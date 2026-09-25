@@ -24,6 +24,9 @@ pick the file name and folder.
 - **Zoom**: segments from 1.2× to 5× with eased transitions. *Follow cursor* pans smoothly after the recorded
   mouse with a dead zone and smoothing; *Fixed* zooms into an area you place on the frame ("Pick area": drag and resize the
   rectangle, then Apply). "Auto-zoom from clicks" builds zooms around click clusters.
+- **Blur**: hide passwords, e-mails or other private details with blurred or pixelated rectangles (`B` or the Blur
+  button), each with its own start/end on the timeline. While a rectangle is edited the preview shows the whole
+  cropped frame without zoom; in the video the area sticks to the picture and follows zooms.
 - **Cursor**: persistent highlight circle (colour, radius, opacity, outline) and click ripples (left/right colours),
   plus a sync offset slider for fine tuning.
 - **Crop & style**: crop to a region, optional padding with a colour/gradient background, rounded corners,
@@ -32,6 +35,12 @@ pick the file name and folder.
   globally / on changing pixels / per frame, dithering none / Sierra / Floyd–Steinberg / Bayer, loop on/off),
   at 100/75/50 % size, with a rough size estimate before you start. The "Crisp UI" preset keeps thin grey UI
   elements sharp. Choose the file name and the folder; the last folder is remembered.
+- **Compositions**: join several recordings into one video. A composition references the recordings, so each one
+  plays with its current edits (cuts, zooms, texts, blurs, audio); reorder them, jump into the editor for one and
+  back, pick the output frame (like the first recording, 1080p, 720p, square, vertical) and the background around
+  recordings of a different shape, then export MP4 or GIF with the usual dialog.
+- **MP4 → GIF**: a separate converter on the home screen turns any video file (MP4, MOV, WebM, MKV, AVI) into a GIF
+  with trim, width, frame rate and the same palette / dithering presets as the export.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
 - **Updates**: the installed app checks GitHub Releases on start and every six hours, downloads a new version in the
   background and offers "Restart and update"; the portable exe is updated by hand.
@@ -142,6 +151,10 @@ for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CH
    **Записать сценарий** на главном экране: покликайте по своему продукту, остановите панелью – откроется экран
    со списком действий и таймлайном (удаление, тайминги, лимит 10 минут); «Записать и воспроизвести» запишет
    экран, пока приложение само повторит действия (Esc прерывает, Стоп сохраняет запись).
+   `B` или кнопка **Размытие** добавляет прямоугольник размытия/пикселизации: пока он редактируется, превью
+   показывает весь кадр кропа без зума; в видео область привязана к картинке и следует за зумом.
+   **Композиции** на главном экране склеивают несколько записей (каждую с её текущей обработкой) в одно видео.
+   Кнопка **MP4 → GIF** в шапке главного экрана конвертирует любой видеофайл в GIF.
 4. **Экспорт** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Чёткий UI**;
    для градиентов – **Плавные градиенты**. Диалог показывает ориентировочный вес файла. Имя файла и папка
    задаются там же. Прозрачный фон (вкладка **Стиль**) экспортируется в GIF.

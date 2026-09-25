@@ -1,3 +1,4 @@
+import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, X } from 'lucide-react'
@@ -14,6 +15,26 @@ import { useT, type TKey } from '../i18n'
 
 interface Props {
   followPath: FollowPath | null
+}
+
+/** What the dialog needs to know about the thing being exported (a project or a composition). */
+export interface ExportDialogViewProps {
+  /** settings the dialog starts from (fileName already filled in) */
+  initial: ExportSettings
+  /** output frame at the given scale */
+  frameSize(scale: number): { outW: number; outH: number }
+  outMs: number
+  /** transparent frame background (GIF keeps the alpha, MP4 cannot) */
+  transparent: boolean
+  /** changes whenever the estimate has to be recomputed */
+  estimateKey: string
+  estimate(settings: ExportSettings, signal: AbortSignal): Promise<SizeEstimate>
+  run(settings: ExportSettings, onProgress: (p: RenderProgress) => void, signal: AbortSignal): Promise<ExportFinishResult>
+  /** remembers the settings of a started export */
+  onStart(settings: ExportSettings): void
+  onClose(): void
+  /** extra hidden elements (e.g. a probe <video> for the estimate) */
+  children?: React.ReactNode
 }
 
 const GIF_PRESETS: Array<{ id: string; label: TKey; hint: TKey; apply: (s: ExportSettings) => ExportSettings }> = [
@@ -37,15 +58,59 @@ const GIF_PRESETS: Array<{ id: string; label: TKey; hint: TKey; apply: (s: Expor
   }
 ]
 
+/** The project editor's export dialog. */
 export function ExportDialog({ followPath }: Props): JSX.Element {
-  const t = useT()
   const project = useProject()
   const setExportOpen = useStore((s) => s.setExportOpen)
   const updateExport = useStore((s) => s.updateExport)
-  const [settings, setSettings] = useState<ExportSettings>(() => ({
-    ...project.export,
-    fileName: project.export.fileName || project.name.replace(/[^\w\- ]+/g, '').trim() || 'recording'
-  }))
+  const probeVideo = useRef<HTMLVideoElement>(null)
+  const segments = useMemo(() => keepSegments(project.recording.durationMs, project.cuts), [project.recording.durationMs, project.cuts])
+  const initial = useMemo(
+    () => ({ ...project.export, fileName: project.export.fileName || project.name.replace(/[^\w\- ]+/g, '').trim() || 'recording' }),
+    // the dialog keeps its own copy once open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
+
+  return (
+    <ExportDialogView
+      initial={initial}
+      frameSize={(scale) => outputSize(project, scale)}
+      outMs={outputDuration(segments)}
+      transparent={project.frame.background === TRANSPARENT_BACKGROUND}
+      estimateKey={JSON.stringify([project.cuts, project.zooms.length, project.blurs.length, project.crop, project.frame])}
+      estimate={async (settings, signal) => {
+        const video = probeVideo.current
+        if (!video) throw new Error('no probe video')
+        if (video.readyState < 1) {
+          await new Promise<void>((resolve) => {
+            video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+            video.load()
+          })
+        }
+        return estimateExportSize(project, settings, followPath, video, signal)
+      }}
+      run={(settings, onProgress, signal) => runExport({ project, settings, followPath, onProgress, signal })}
+      onStart={updateExport}
+      onClose={() => setExportOpen(false)}
+    >
+      <video
+        ref={probeVideo}
+        className="hidden-video"
+        muted
+        playsInline
+        preload="auto"
+        crossOrigin="anonymous"
+        src={window.zc.media.url(project.recording.videoPath)}
+      />
+    </ExportDialogView>
+  )
+}
+
+export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
+  const { initial, frameSize, outMs, transparent, estimateKey: sourceKey, onStart, onClose, children } = props
+  const t = useT()
+  const [settings, setSettings] = useState<ExportSettings>(initial)
   const [running, setRunning] = useState(false)
   const [render, setRender] = useState<RenderProgress | null>(null)
   const [ffmpeg, setFfmpeg] = useState<ExportProgress | null>(null)
@@ -54,7 +119,8 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
   const [estimate, setEstimate] = useState<SizeEstimate | null>(null)
   const [estimating, setEstimating] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const probeVideo = useRef<HTMLVideoElement>(null)
+  const latestProps = useRef(props)
+  latestProps.current = props
 
   useEffect(() => {
     if (!settings.folder) {
@@ -72,35 +138,25 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
       if (e.key !== 'Escape') return
       e.preventDefault()
       abortRef.current?.abort()
-      setExportOpen(false)
+      latestProps.current.onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setExportOpen])
+  }, [])
 
-  const segments = useMemo(() => keepSegments(project.recording.durationMs, project.cuts), [project.recording.durationMs, project.cuts])
-  const outMs = outputDuration(segments)
-  const size = outputSize(project, settings.scale)
+  const size = frameSize(settings.scale)
   const frames = Math.round((outMs / 1000) * settings.fps)
   const fpsOptions = settings.format === 'gif' ? GIF_FPS_OPTIONS : MP4_FPS_OPTIONS
-  const transparent = project.frame.background === TRANSPARENT_BACKGROUND
 
   // rough size estimate, recomputed (debounced) when anything relevant changes
-  const estimateKey = JSON.stringify([settings.format, settings.scale, settings.fps, settings.mp4Quality, settings.gif, project.cuts, project.zooms.length, project.crop, project.frame])
+  const estimateKey = JSON.stringify([settings.format, settings.scale, settings.fps, settings.mp4Quality, settings.gif, sourceKey])
   useEffect(() => {
-    const video = probeVideo.current
-    if (!video || running) return
+    if (running) return
     const abort = new AbortController()
     setEstimating(true)
     const timer = window.setTimeout(async () => {
       try {
-        if (video.readyState < 1) {
-          await new Promise<void>((resolve) => {
-            video.addEventListener('loadedmetadata', () => resolve(), { once: true })
-            video.load()
-          })
-        }
-        const est = await estimateExportSize(project, settings, followPath, video, abort.signal)
+        const est = await latestProps.current.estimate(settings, abort.signal)
         if (!abort.signal.aborted) setEstimate(est)
       } catch (err) {
         console.error('size estimate failed', err)
@@ -130,7 +186,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
       return
     }
     const effective: ExportSettings = { ...settings, fps: fpsOptions.includes(settings.fps) ? settings.fps : fpsOptions[0] }
-    updateExport(effective)
+    onStart(effective)
     setRunning(true)
     setError(null)
     setResult(null)
@@ -139,7 +195,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
     const abort = new AbortController()
     abortRef.current = abort
     try {
-      const res = await runExport({ project, settings: effective, followPath, onProgress: setRender, signal: abort.signal })
+      const res = await latestProps.current.run(effective, setRender, abort.signal)
       setResult(res)
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
@@ -155,7 +211,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
 
   const close = (): void => {
     if (running) cancel()
-    setExportOpen(false)
+    onClose()
   }
 
   const ffmpegLabel =
@@ -188,7 +244,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
                   format: 'gif',
                   fps: GIF_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 15,
                   // big GIFs get huge fast: default to half size for large recordings
-                  scale: settings.scale === 1 && outputSize(project, 1).outW > 1400 ? 0.5 : settings.scale
+                  scale: settings.scale === 1 && frameSize(1).outW > 1400 ? 0.5 : settings.scale
                 })
               }
             >
@@ -370,15 +426,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
             </>
           )}
         </div>
-        <video
-          ref={probeVideo}
-          className="hidden-video"
-          muted
-          playsInline
-          preload="auto"
-          crossOrigin="anonymous"
-          src={window.zc.media.url(project.recording.videoPath)}
-        />
+        {children}
       </div>
     </div>
   )

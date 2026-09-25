@@ -4,8 +4,10 @@ import type {
   AppSettings,
   AudioExportPlan,
   AudioTrackKind,
+  Composition,
   ExportBeginRequest,
   ExportSettings,
+  GifConvertRequest,
   Project,
   Rect,
   RecordingStartMeta,
@@ -15,6 +17,15 @@ import type {
 import type { RecordingController } from './recorder/controller'
 import type { ExportManager } from './exportManager'
 import type { Updater } from './updater'
+import type { GifConverter } from './media/gifConvert'
+import {
+  assertValidCompositionId,
+  createComposition,
+  deleteComposition,
+  listCompositions,
+  loadComposition,
+  saveComposition
+} from './composition/storage'
 import { importAudioClip, importAudioFile, sweepAudioFiles, type AudioImportClipInput } from './media/audioImport'
 import { importMusicTrack, listMusic } from './audio/musicLibrary'
 import type { ScenarioCapture } from './scenario/capture'
@@ -39,6 +50,7 @@ interface Deps {
   scenarioCapture: ScenarioCapture
   exporter: ExportManager
   updater: Updater
+  converter: GifConverter
 }
 
 // scenario ids come from newScenarioId() (a timestamp, optionally "-N" deduplicated) - never
@@ -49,7 +61,7 @@ function assertValidScenarioId(id: string): void {
   if (typeof id !== 'string' || !SCENARIO_ID_RE.test(id)) throw new Error('Invalid scenario id')
 }
 
-export function registerIpc({ recorder, scenarioCapture, exporter, updater }: Deps): void {
+export function registerIpc({ recorder, scenarioCapture, exporter, updater, converter }: Deps): void {
   // ---- app ----
   ipcMain.handle('app:info', (): AppInfo => ({
     version: app.getVersion(),
@@ -136,6 +148,30 @@ export function registerIpc({ recorder, scenarioCapture, exporter, updater }: De
     assertValidScenarioId(id)
     return deleteScenario(id)
   })
+
+  // ---- composition ----
+  ipcMain.handle('compositions:list', () => listCompositions())
+  ipcMain.handle('compositions:create', async (_e, name: string) => {
+    const settings = await getSettings()
+    return createComposition(String(name ?? ''), settings.lastExportFolder ?? app.getPath('videos'))
+  })
+  ipcMain.handle('compositions:load', (_e, id: string) => {
+    assertValidCompositionId(id)
+    return loadComposition(id)
+  })
+  ipcMain.handle('compositions:save', (_e, composition: Composition) => {
+    assertValidCompositionId(composition.id)
+    return saveComposition(composition)
+  })
+  ipcMain.handle('compositions:delete', (_e, id: string) => {
+    assertValidCompositionId(id)
+    return deleteComposition(id)
+  })
+
+  // ---- gif converter ----
+  ipcMain.handle('converter:choose-video', () => converter.chooseVideo())
+  ipcMain.handle('converter:to-gif', (e, req: GifConvertRequest) => converter.toGif(req, e.sender))
+  ipcMain.handle('converter:cancel', () => converter.cancel())
 
   // Test-only: exists only under ZOOMCUT_E2E, so the e2e suite can open a page with known
   // coordinates and drive it through the real capture/replay path with real input.

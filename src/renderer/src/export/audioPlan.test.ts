@@ -25,6 +25,7 @@ function makeProject(audio: AudioClip[], durationMs: number): Project {
     cuts: [],
     texts: [],
     zooms: [],
+    blurs: [],
     audio,
     cursor: DEFAULT_CURSOR_SETTINGS,
     crop: { x: 0, y: 0, w: 1, h: 1 },

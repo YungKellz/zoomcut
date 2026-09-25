@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rawAudioInputArgs } from './ffmpeg'
+import { gifConvertInputArgs, gifConvertPrefilter, rawAudioInputArgs } from './ffmpeg'
 
 describe('rawAudioInputArgs', () => {
   it('maps a float-tagged format (WAVE_FORMAT_EXTENSIBLE/IEEE_FLOAT) to f32le with its rate/channel count', () => {
@@ -45,5 +45,20 @@ describe('rawAudioInputArgs', () => {
     expect(rawAudioInputArgs({ isFloat: true, rate: 44100, channels: 8 })).toEqual([
       '-f', 'f32le', '-ar', '44100', '-ac', '8'
     ])
+  })
+})
+
+describe('gif converter arguments', () => {
+  it('builds an fps + even-width lanczos scale prefilter', () => {
+    expect(gifConvertPrefilter(15, 961)).toBe('fps=15,scale=962:-2:flags=lanczos')
+    expect(gifConvertPrefilter(0, 4)).toBe('fps=1,scale=16:-2:flags=lanczos')
+  })
+
+  it('trims only what is actually trimmed', () => {
+    expect(gifConvertInputArgs(0, 10_000, 10_000)).toEqual([])
+    expect(gifConvertInputArgs(1500, 10_000, 10_000)).toEqual(['-ss', '1.500'])
+    expect(gifConvertInputArgs(0, 4000, 10_000)).toEqual(['-t', '4.000'])
+    expect(gifConvertInputArgs(2000, 5000, 10_000)).toEqual(['-ss', '2.000', '-t', '3.000'])
+    expect(gifConvertInputArgs(-5, 99_000, 10_000)).toEqual([])
   })
 })

@@ -1,48 +1,40 @@
 import type React from 'react'
 import type { JSX } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Pause, Play, RotateCcw, SkipBack, X } from 'lucide-react'
-import type { CropRect, Project, WindowRect } from '@shared/types'
+import type { BlurRegion, CropRect, Project, WindowRect } from '@shared/types'
 import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
 import type { FollowPath } from '../engine/cursor'
-import { composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
+import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
 import { useT } from '../i18n'
+import { useElementSize } from '../hooks/useElementSize'
 
 interface Props {
   followPath: FollowPath | null
 }
 
-interface Size {
-  w: number
-  h: number
-}
-
-function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, Size] {
-  const ref = useRef<T | null>(null)
-  const [size, setSize] = useState<Size>({ w: 0, h: 0 })
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      const r = entries[0].contentRect
-      setSize({ w: Math.floor(r.width), h: Math.floor(r.height) })
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-  return [ref, size]
-}
-
-/** Crop mode shows the whole source; pick mode shows the cropped source without the frame. */
+/**
+ * Crop mode shows the whole source; pick and blur mode show the whole cropped source without
+ * the frame and without any zoom, so rectangles are placed on the picture itself rather than
+ * on whatever the camera happens to show at the playhead.
+ */
 function stageProject(project: Project, mode: string): Project {
   const flatFrame = { ...project.frame, padding: 0, cornerRadius: 0 }
   if (mode === 'crop') return { ...project, crop: { x: 0, y: 0, w: 1, h: 1 }, frame: flatFrame }
-  if (mode === 'pickTarget') return { ...project, frame: flatFrame }
+  if (mode === 'pickTarget' || mode === 'blur') return { ...project, frame: flatFrame }
   return project
+}
+
+/** Blur region (source-normalized) ↔ stage coordinates (normalized to the crop). */
+function blurToStage(b: BlurRegion, crop: CropRect): CropRect {
+  return { x: (b.x - crop.x) / crop.w, y: (b.y - crop.y) / crop.h, w: b.w / crop.w, h: b.h / crop.h }
+}
+function stageToBlur(r: CropRect, crop: CropRect): Pick<BlurRegion, 'x' | 'y' | 'w' | 'h'> {
+  return { x: crop.x + r.x * crop.w, y: crop.y + r.y * crop.h, w: r.w * crop.w, h: r.h * crop.h }
 }
 
 interface PxRect {
@@ -86,6 +78,8 @@ export function Preview({ followPath }: Props): JSX.Element {
   const setCrop = useStore((s) => s.setCrop)
   const checkpoint = useStore((s) => s.checkpoint)
   const setMode = useStore((s) => s.setMode)
+  const updateBlur = useStore((s) => s.updateBlur)
+  const select = useStore((s) => s.select)
 
   const [viewportRef, viewport] = useElementSize<HTMLDivElement>()
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -112,8 +106,8 @@ export function Preview({ followPath }: Props): JSX.Element {
   const windows = useMemo(() => uniqueWindows(project.windows), [project.windows])
 
   // keep the latest values in refs for the render loop
-  const latest = useRef({ project: viewProject, size, followPath, playing, segments, editRaw })
-  latest.current = { project: viewProject, size, followPath, playing, segments, editRaw }
+  const latest = useRef({ project: viewProject, size, followPath, playing, segments, editRaw, mode })
+  latest.current = { project: viewProject, size, followPath, playing, segments, editRaw, mode }
 
   const prepareStandby = useCallback(
     (segIndex: number) => {
@@ -196,7 +190,7 @@ export function Preview({ followPath }: Props): JSX.Element {
       const canvas = canvasRef.current
       const active = activeVideo()
       if (!active || !canvas || !ready) return
-      const { project: p, size: sz, followPath: fp, playing: isPlaying, segments: segs, editRaw: raw } = latest.current
+      const { project: p, size: sz, followPath: fp, playing: isPlaying, segments: segs, editRaw: raw, mode: m } = latest.current
       if (canvas.width !== sz.outW || canvas.height !== sz.outH) {
         canvas.width = sz.outW
         canvas.height = sz.outH
@@ -244,7 +238,9 @@ export function Preview({ followPath }: Props): JSX.Element {
         disableZoom: raw,
         disableFrame: raw,
         disableTexts: raw,
-        disableCursor: raw
+        disableCursor: raw,
+        // the blur editor shows the blurs being edited; crop / zoom-pick show the raw source
+        disableBlurs: raw && m !== 'blur'
       })
     }
     raf = requestAnimationFrame(tick)
@@ -353,8 +349,43 @@ export function Preview({ followPath }: Props): JSX.Element {
     el.addEventListener('pointerup', up)
   }
 
+  // ---- blur regions ----
+  const selectedBlur = selection?.kind === 'blur' ? project.blurs.find((b) => b.id === selection.id) : undefined
+  const blurMode = mode === 'blur'
+  const otherBlurs = blurMode ? project.blurs.filter((b) => b.id !== selectedBlur?.id && blurIsActive(b, playheadMs)) : []
+
+  /** In blur mode dragging on the frame draws the selected region's rectangle anew. */
+  const startBlurDraw = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    if (!selectedBlur) return
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const rect = el.getBoundingClientRect()
+    const ax = clamp((e.clientX - rect.left) / rect.width, 0, 1)
+    const ay = clamp((e.clientY - rect.top) / rect.height, 0, 1)
+    const id = selectedBlur.id
+    checkpoint()
+    const move = (ev: PointerEvent): void => {
+      const bx = clamp((ev.clientX - rect.left) / rect.width, 0, 1)
+      const by = clamp((ev.clientY - rect.top) / rect.height, 0, 1)
+      if (Math.abs(bx - ax) < 0.01 || Math.abs(by - ay) < 0.01) return
+      const r = { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) }
+      updateBlur(id, stageToBlur(r, project.crop), false)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+  }
+
   /** In pick mode a click on the frame recenters the rectangle there. */
   const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    if (blurMode) {
+      startBlurDraw(e)
+      return
+    }
     if (mode !== 'pickTarget' || !pickRect) return
     const rect = e.currentTarget.getBoundingClientRect()
     setPickRect(clampCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
@@ -373,7 +404,7 @@ export function Preview({ followPath }: Props): JSX.Element {
         <div className={'preview-stage' + (transparent ? ' checker' : '')} style={{ width: size.outW, height: size.outH }}>
           <canvas
             ref={canvasRef}
-            className={'preview-canvas' + (mode === 'pickTarget' ? ' picking' : '')}
+            className={'preview-canvas' + (mode === 'pickTarget' || blurMode ? ' picking' : '')}
             width={size.outW}
             height={size.outH}
             onPointerDown={onCanvasPointerDown}
@@ -395,6 +426,33 @@ export function Preview({ followPath }: Props): JSX.Element {
                 <div key={c} className={`pick-handle pick-${c}`} onPointerDown={startPickResize(c)} />
               ))}
             </div>
+          )}
+
+          {blurMode &&
+            otherBlurs.map((b) => {
+              const r = blurToStage(b, project.crop)
+              return (
+                <div
+                  key={b.id}
+                  className="blur-outline"
+                  style={{ left: r.x * size.outW, top: r.y * size.outH, width: r.w * size.outW, height: r.h * size.outH }}
+                  title={t('blur.selectHint')}
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    select({ kind: 'blur', id: b.id })
+                  }}
+                />
+              )
+            })}
+          {blurMode && selectedBlur && (
+            <CropEditor
+              crop={blurToStage(selectedBlur, project.crop)}
+              size={size}
+              min={0.01}
+              className="crop-rect blur-rect"
+              onBegin={checkpoint}
+              onChange={(r) => updateBlur(selectedBlur.id, stageToBlur(r, project.crop), false)}
+            />
           )}
 
           {mode === 'crop' && <CropShade crop={cropPx} stage={size} />}
@@ -450,6 +508,15 @@ export function Preview({ followPath }: Props): JSX.Element {
             </button>
           </span>
         )}
+        {blurMode && (
+          <span className="hint">
+            {selectedBlur && !blurIsActive(selectedBlur, playheadMs) ? t('blur.inactiveHint') + ' ' : ''}
+            {t('blur.editHint')}{' '}
+            <button className="link" onClick={() => setMode('normal')}>
+              {t('common.done')}
+            </button>
+          </span>
+        )}
         {mode === 'crop' && (
           <span className="hint">
             {windows.length > 0 ? t('preview.cropWindowHint') + ' ' : ''}
@@ -485,14 +552,17 @@ interface CropEditorProps {
   size: OutputSize
   onChange: (crop: CropRect, commit: boolean) => void
   onBegin: () => void
+  /** smallest width/height, normalized to the stage */
+  min?: number
+  className?: string
 }
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
-function CropEditor({ crop, size, onChange, onBegin }: CropEditorProps): JSX.Element {
+function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'crop-rect' }: CropEditorProps): JSX.Element {
   const W = size.outW
   const H = size.outH
-  const MIN = 0.05
+  const MIN = min
 
   const start = (handle: Handle) => (e: React.PointerEvent) => {
     e.preventDefault()
@@ -540,7 +610,7 @@ function CropEditor({ crop, size, onChange, onBegin }: CropEditorProps): JSX.Ele
   const height = crop.h * H
   const handles: Handle[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
   return (
-    <div className="crop-rect" style={{ left, top, width, height }} onPointerDown={start('move')}>
+    <div className={className} style={{ left, top, width, height }} onPointerDown={start('move')}>
       {handles.map((h) => (
         <div key={h} className={`crop-handle crop-${h}`} onPointerDown={start(h)} />
       ))}

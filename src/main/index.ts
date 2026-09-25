@@ -4,6 +4,7 @@ import { createMainWindow, getMainWindow } from './windows'
 import { registerIpc } from './ipc'
 import { RecordingController } from './recorder/controller'
 import { ExportManager } from './exportManager'
+import { GifConverter } from './media/gifConvert'
 import { Updater } from './updater'
 import { ensureDirs } from './storage'
 import { ScenarioCapture } from './scenario/capture'
@@ -53,7 +54,7 @@ if (!gotLock) {
     scenarioCapture.setOtherBusyCheck(() => recorder!.isActive())
     const exporter = new ExportManager()
     updater = new Updater()
-    registerIpc({ recorder, scenarioCapture, exporter, updater })
+    registerIpc({ recorder, scenarioCapture, exporter, updater, converter: new GifConverter() })
 
     createMainWindow()
     updater.start()
