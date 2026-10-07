@@ -2,9 +2,10 @@ import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Droplet, Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { TextOverlay } from '@shared/types'
+import type { TextOverlay, ZoomSegment } from '@shared/types'
 import { audioClipPath, isRecordedClip } from '@shared/audio'
 import { useProject, useStore } from '../store'
+import { zoomAreas, type ZoomArea } from '../engine/camera'
 import { keepSegments, outToSrc, outputDuration, srcToOut } from '../engine/timeline'
 import { useThumbnails } from '../hooks/useThumbnails'
 import { clipIcon, clipLabel } from '../audio/clipLabel'
@@ -42,13 +43,15 @@ interface RegionProps {
   /** extra content painted behind the label, filling the region - the selected audio clip's
    * waveform (AudioWaveform); undefined for every other region kind. */
   overlay?: React.ReactNode
+  /** extra elements positioned inside the region, painted under the label - the zoom part dividers */
+  children?: React.ReactNode
   onSelect: () => void
   onBegin: () => void
   onChange: (start: number, end: number) => void
 }
 
 function Region(props: RegionProps): JSX.Element {
-  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, resizable = true, moveMax, icon, overlay, onSelect, onBegin, onChange } = props
+  const { start, end, pxPerMs, maxEnd, className, label, selected, minLength = 150, resizable = true, moveMax, icon, overlay, children, onSelect, onBegin, onChange } = props
 
   const begin = (kind: 'move' | 'l' | 'r') => (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -89,6 +92,7 @@ function Region(props: RegionProps): JSX.Element {
     >
       {resizable && <div className="region-handle l" onPointerDown={begin('l')} />}
       {overlay}
+      {children}
       {/* chip background only when a waveform is actually painted underneath (`overlay` set) -
           an unselected/plain region keeps its current look, nothing extra to read through */}
       <span className={'region-label' + (overlay ? ' chip' : '')}>
@@ -137,6 +141,7 @@ export function Timeline(): JSX.Element {
   const addZoom = useStore((s) => s.addZoom)
   const addText = useStore((s) => s.addText)
   const updateZoom = useStore((s) => s.updateZoom)
+  const updateZoomPart = useStore((s) => s.updateZoomPart)
   const updateText = useStore((s) => s.updateText)
   const addBlur = useStore((s) => s.addBlur)
   const updateBlur = useStore((s) => s.updateBlur)
@@ -260,6 +265,28 @@ export function Timeline(): JSX.Element {
         select(null)
         seekTo(startOut)
       }
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+  }
+
+  /** Drags the boundary in front of zoom area `area` (a part); the store keeps it clear of its neighbours. */
+  const startPartDrag = (z: ZoomSegment, area: ZoomArea) => (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.stopPropagation() // the zoom region underneath must not start a move
+    e.preventDefault()
+    select({ kind: 'zoom', id: z.id })
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    checkpoint()
+    const sx = e.clientX
+    const originOut = toOut(area.start)
+    const move = (ev: PointerEvent): void => {
+      const out = clamp(originOut + (ev.clientX - sx) / pxPerMs, 0, outDur)
+      updateZoomPart(z.id, area.index, { start: Math.round(toSrc(out)) }, false)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
@@ -397,21 +424,35 @@ export function Timeline(): JSX.Element {
                 addZoom(toSrc(outFromEvent(e, e.currentTarget)))
               }}
             >
-              {project.zooms.map((z) => (
-                <Region
-                  key={z.id}
-                  start={toOut(z.start)}
-                  end={toOut(z.end)}
-                  pxPerMs={pxPerMs}
-                  maxEnd={outDur}
-                  className="zoom"
-                  label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}`}
-                  selected={selection?.kind === 'zoom' && selection.id === z.id}
-                  onSelect={() => select({ kind: 'zoom', id: z.id })}
-                  onBegin={checkpoint}
-                  onChange={(s, e) => updateZoom(z.id, { start: toSrc(s), end: toSrc(e) }, false)}
-                />
-              ))}
+              {project.zooms.map((z) => {
+                const areas = zoomAreas(z)
+                const zoomOut = toOut(z.start)
+                return (
+                  <Region
+                    key={z.id}
+                    start={zoomOut}
+                    end={toOut(z.end)}
+                    pxPerMs={pxPerMs}
+                    maxEnd={outDur}
+                    className="zoom"
+                    label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}${areas.length > 1 ? ` · ${t('timeline.parts', { n: areas.length })}` : ''}`}
+                    selected={selection?.kind === 'zoom' && selection.id === z.id}
+                    onSelect={() => select({ kind: 'zoom', id: z.id })}
+                    onBegin={checkpoint}
+                    onChange={(s, e) => updateZoom(z.id, { start: toSrc(s), end: toSrc(e) }, false)}
+                  >
+                    {areas.slice(1).map((area) => (
+                      <div
+                        key={area.id}
+                        className="zoom-part-divider"
+                        style={{ left: (toOut(area.start) - zoomOut) * pxPerMs - 4 }}
+                        title={t('timeline.partTitle', { n: area.index + 1, time: formatTimecode(toOut(area.start)) })}
+                        onPointerDown={startPartDrag(z, area)}
+                      />
+                    ))}
+                  </Region>
+                )
+              })}
             </div>
 
             <div

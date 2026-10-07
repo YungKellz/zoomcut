@@ -16,7 +16,18 @@ import type {
 import { BLUR_DEFAULTS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
 import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts } from './engine/timeline'
-import { findZoom, resolveZoomOverlaps } from './engine/camera'
+import {
+  findZoom,
+  insertZoomPart,
+  normalizeZoomParts,
+  patchZoomArea,
+  removeZoomPart,
+  resolveZoomOverlaps,
+  shiftZoomParts,
+  zoomAreaFocusMs,
+  zoomAreas,
+  type ZoomAreaPatch
+} from './engine/camera'
 import { clamp } from './util/format'
 import { t } from './i18n'
 
@@ -59,6 +70,8 @@ export interface EditorState {
   range: RangeSelection | null
   mode: EditorMode
   pickRect: PickRect | null
+  /** which area pickTarget mode edits: 0 = the zoom's own target/scale, k = parts[k - 1] */
+  pickArea: number
   pxPerMs: number
   history: Project[]
   future: Project[]
@@ -84,7 +97,7 @@ export interface EditorState {
   select(selection: Selection): void
   setRange(range: RangeSelection | null): void
   setMode(mode: EditorMode): void
-  beginPick(zoomId: string): void
+  beginPick(zoomId: string, area?: number): void
   setPickRect(rect: PickRect): void
   applyPick(): void
   setPxPerMs(value: number): void
@@ -101,6 +114,10 @@ export interface EditorState {
   updateZoom(id: string, patch: Partial<ZoomSegment>, record?: boolean): void
   removeZoom(id: string): void
   setZooms(zooms: ZoomSegment[]): void
+  /** adds a part at source time `at`; returns its area index, or null when there is no room */
+  addZoomPart(zoomId: string, at: number): number | null
+  removeZoomPart(zoomId: string, area: number): void
+  updateZoomPart(zoomId: string, area: number, patch: ZoomAreaPatch, record?: boolean): void
   addText(at?: number): string | null
   updateText(id: string, patch: Partial<TextOverlay>, record?: boolean): void
   removeText(id: string): void
@@ -136,6 +153,7 @@ export const useStore = create<EditorState>((set, get) => ({
   range: null,
   mode: 'normal',
   pickRect: null,
+  pickArea: 0,
   pxPerMs: 0.08,
   history: [],
   future: [],
@@ -211,28 +229,31 @@ export const useStore = create<EditorState>((set, get) => ({
   setRange: (range) => set({ range, selection: range ? null : get().selection }),
   setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false, pickRect: mode === 'pickTarget' ? get().pickRect : null }),
 
-  beginPick: (zoomId) => {
+  beginPick: (zoomId, area = 0) => {
     const p = get().project
     const z = p?.zooms.find((x) => x.id === zoomId)
     if (!p || !z) return
+    const areas = zoomAreas(z)
+    const index = clamp(area, 0, areas.length - 1)
+    const picked = areas[index]
     const crop = p.crop
-    const size = clamp(1 / z.scale, PICK_MIN_SIZE, PICK_MAX_SIZE)
+    const size = clamp(1 / picked.scale, PICK_MIN_SIZE, PICK_MAX_SIZE)
     let cx = 0.5
     let cy = 0.5
     if (z.mode === 'fixed') {
-      cx = (z.target.x - crop.x) / crop.w
-      cy = (z.target.y - crop.y) / crop.h
+      cx = (picked.target.x - crop.x) / crop.w
+      cy = (picked.target.y - crop.y) / crop.h
     }
     cx = clamp(cx, size / 2, 1 - size / 2)
     cy = clamp(cy, size / 2, 1 - size / 2)
-    const playhead = clamp(z.start + Math.min(z.easeInMs, (z.end - z.start) / 2) + 50, z.start, Math.max(z.start, z.end - 1))
     set({
       mode: 'pickTarget',
       pickRect: { cx, cy, size },
+      pickArea: index,
       selection: { kind: 'zoom', id: zoomId },
       range: null,
       playing: false,
-      playheadMs: playhead,
+      playheadMs: zoomAreaFocusMs(z, index),
       seekSeq: get().seekSeq + 1
     })
   },
@@ -245,7 +266,10 @@ export const useStore = create<EditorState>((set, get) => ({
     const crop = p.crop
     const target = { x: crop.x + r.cx * crop.w, y: crop.y + r.cy * crop.h }
     const scale = clamp(Math.round((1 / r.size) * 10) / 10, 1.2, 5)
-    get().updateZoom(selection.id, { mode: 'fixed', target, scale })
+    const area = get().pickArea
+    // a part that vanished while picking (undo) is a no-op rather than a write into area 0
+    if (area > 0) get().updateZoomPart(selection.id, area, { target, scale })
+    else get().updateZoom(selection.id, { mode: 'fixed', target, scale })
     set({ mode: 'normal', pickRect: null })
   },
   setPxPerMs: (value) => set({ pxPerMs: Math.max(0.005, Math.min(2, value)) }),
@@ -303,7 +327,8 @@ export const useStore = create<EditorState>((set, get) => ({
       return {
         ...p,
         cuts,
-        zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200),
+        // a shortened zoom may no longer have room for all its parts
+        zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200).map(normalizeZoomParts),
         texts: clipRegionsToCuts(p.texts, cuts, duration, 100),
         blurs: clipRegionsToCuts(p.blurs, cuts, duration, 100)
       }
@@ -340,7 +365,14 @@ export const useStore = create<EditorState>((set, get) => ({
 
   updateZoom: (id, patch, record = true) => {
     get().mutate((p) => {
-      const zooms = p.zooms.map((z) => (z.id === id ? { ...z, ...patch } : z))
+      const zooms = p.zooms.map((z) => {
+        if (z.id !== id) return z
+        const next = { ...z, ...patch }
+        // dragging the whole region (both edges move alike) carries its parts along; any other
+        // change is normalized by resolveZoomOverlaps, which drops the parts that no longer fit
+        const ds = next.start - z.start
+        return Math.abs(ds - (next.end - z.end)) < 0.5 ? shiftZoomParts(next, ds) : next
+      })
       return { ...p, zooms: resolveZoomOverlaps(zooms, id, p.recording.durationMs) }
     }, record)
   },
@@ -349,6 +381,28 @@ export const useStore = create<EditorState>((set, get) => ({
     get().mutate((p) => ({ ...p, zooms: p.zooms.filter((z) => z.id !== id) }))
     set({ selection: null })
   },
+
+  addZoomPart: (zoomId, at) => {
+    const z = get().project?.zooms.find((x) => x.id === zoomId)
+    const res = z ? insertZoomPart(z, at, uid('part')) : null
+    if (!res) return null
+    get().mutate((p) => ({ ...p, zooms: p.zooms.map((x) => (x.id === zoomId ? res.zoom : x)) }))
+    return res.index
+  },
+
+  removeZoomPart: (zoomId, area) =>
+    get().mutate((p) => {
+      const z = p.zooms.find((x) => x.id === zoomId)
+      const next = z && removeZoomPart(z, area)
+      return z && next !== z ? { ...p, zooms: p.zooms.map((x) => (x === z ? next! : x)) } : p
+    }),
+
+  updateZoomPart: (zoomId, area, patch, record = true) =>
+    get().mutate((p) => {
+      const z = p.zooms.find((x) => x.id === zoomId)
+      const next = z && patchZoomArea(z, area, patch)
+      return z && next !== z ? { ...p, zooms: p.zooms.map((x) => (x === z ? next! : x)) } : p
+    }, record),
 
   setZooms: (zooms) => get().mutate((p) => ({ ...p, zooms: [...zooms].sort((a, b) => a.start - b.start) })),
 

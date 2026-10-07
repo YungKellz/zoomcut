@@ -13,6 +13,7 @@ import {
   MousePointer2,
   Music,
   Play,
+  Plus,
   Scissors,
   Sparkles,
   Square,
@@ -31,7 +32,7 @@ import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
 import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
-import { findZoom } from '../engine/camera'
+import { findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
@@ -256,10 +257,20 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
   const setZooms = useStore((s) => s.setZooms)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const beginPick = useStore((s) => s.beginPick)
+  const addZoomPart = useStore((s) => s.addZoomPart)
+  const removeZoomPart = useStore((s) => s.removeZoomPart)
+  const updateZoomPart = useStore((s) => s.updateZoomPart)
   const checkpoint = useStore((s) => s.checkpoint)
   const duration = project.recording.durationMs
   const zoom: ZoomSegment | undefined = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const playheadMs = useStore((s) => s.playheadMs)
+  // the part last clicked in the list; only matters while the playhead is outside the zoom
+  const [clicked, setClicked] = useState<{ id: string; area: number } | null>(null)
+  const areas = zoom ? zoomAreas(zoom) : []
+  const playheadInZoom = zoom !== undefined && playheadMs >= zoom.start && playheadMs < zoom.end
+  // the scale slider and the single Pick button act on the part under the playhead
+  const activeArea = !zoom ? 0 : playheadInZoom ? zoomAreaIndexAt(zoom, playheadMs) : Math.min(clicked?.id === zoom.id ? clicked.area : 0, areas.length - 1)
+  const canAddPart = zoom !== undefined && insertZoomPart(zoom, playheadMs, '') !== null
   const zoomAtPlayhead = findZoom(project.zooms, playheadMs)
   // no point in an "edit" button when the zoom under the playhead is the one being edited
   const showAddEdit = !(zoomAtPlayhead && zoom && zoomAtPlayhead.id === zoom.id)
@@ -290,7 +301,16 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
       {zoom ? (
         <>
           <h3>{t('zoom.selected')}</h3>
-          <Slider label={t('zoom.scale')} value={zoom.scale} min={1.2} max={5} step={0.1} format={(v) => `${v.toFixed(1)}×`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { scale: v }, false)} />
+          <Slider
+            label={areas.length > 1 ? t('zoom.scalePart', { n: activeArea + 1 }) : t('zoom.scale')}
+            value={areas[activeArea].scale}
+            min={1.2}
+            max={5}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)}×`}
+            onBegin={checkpoint}
+            onChange={(v) => (activeArea === 0 ? updateZoom(zoom.id, { scale: v }, false) : updateZoomPart(zoom.id, activeArea, { scale: v }, false))}
+          />
           <Field label={t('zoom.focus')}>
             <div className="seg">
               <button className={'seg-btn' + (zoom.mode === 'follow' ? ' active' : '')} onClick={() => updateZoom(zoom.id, { mode: 'follow' })}>
@@ -303,10 +323,46 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
           </Field>
           {zoom.mode === 'fixed' && (
             <>
-              <button className="btn btn-small" onClick={() => beginPick(zoom.id)}>
-                <Crosshair size={14} /> {t('zoom.pick')}
+              <button className="btn btn-small" onClick={() => beginPick(zoom.id, activeArea)}>
+                <Crosshair size={14} /> {areas.length > 1 ? t('zoom.pickPart', { n: activeArea + 1 }) : t('zoom.pick')}
               </button>
               <p className="muted small">{t('zoom.pickHelp')}</p>
+              <h3>{t('zoom.parts')}</h3>
+              <ul className="list zoom-parts">
+                {areas.map((a) => (
+                  <li key={a.index} className={'list-item' + (a.index === activeArea ? ' active' : '')}>
+                    <button
+                      className="list-main"
+                      onClick={() => {
+                        setClicked({ id: zoom.id, area: a.index })
+                        setPlayhead(zoomAreaFocusMs(zoom, a.index), true)
+                      }}
+                    >
+                      {t('zoom.partRow', { n: a.index + 1, start: formatTimecode(a.start), end: formatTimecode(a.end), scale: a.scale.toFixed(1) })}
+                    </button>
+                    <button className="btn btn-ghost" onClick={() => beginPick(zoom.id, a.index)} title={t('zoom.pickPart', { n: a.index + 1 })}>
+                      <Crosshair size={14} />
+                    </button>
+                    {a.index >= 1 && (
+                      <button className="btn btn-ghost danger" onClick={() => removeZoomPart(zoom.id, a.index)} title={t('zoom.removePart')}>
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn btn-small"
+                disabled={!canAddPart}
+                title={canAddPart ? t('zoom.addPartTitle') : t('zoom.addPartDisabled')}
+                onClick={() => {
+                  const index = addZoomPart(zoom.id, playheadMs)
+                  if (index !== null) beginPick(zoom.id, index)
+                }}
+              >
+                <Plus size={14} /> {t('zoom.addPart')}
+              </button>
+              <p className="muted small">{t('zoom.partsHelp')}</p>
             </>
           )}
           <div className="row2">
