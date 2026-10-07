@@ -3,6 +3,41 @@
 Notable changes per version, English first, Russian below. The section of a version becomes the body of its
 GitHub release (`node scripts/release-notes.cjs <version>`, run by `.github/workflows/release.yml`).
 
+## 0.4.0 (2026-10-08)
+
+- **Scenario editor, new timing**: every action is followed by its own pause – a separate row in the action list
+  (1.5 s by default, also after the last action; 1 s / 1.5 s / 2 s presets, "All pauses" sets them at once) – and
+  every action has its own duration, i.e. how long the mouse takes to get there (1 s / 1.5 s / 2 s presets; typed
+  text gets Fast / Normal / Slow typing speed). Typed text can be edited. Older scenarios open with these defaults.
+- **Fix**: a replay no longer ends with a right-click – the context menu that used to pop up at the end of every
+  recording made from a scenario is gone (the replay helper now releases only the buttons and keys it pressed).
+- **Delete and Record again** in the header of the video editor and of the scenario editor. "Record again" deletes
+  the item and starts over with the same display, audio and scenario.
+- **One list on the home screen**: recordings and scenarios together; the recordings made from a scenario are
+  nested under it. Deleting a scenario keeps its recordings.
+- **Zoom parts**: a fixed-area zoom can hold several areas – the camera glides from one to the next and returns to
+  1× at the end; thin dividers on the zoom bar mark the parts and can be dragged.
+- **Compositions** (several recordings back to back with their edits, one export), an **MP4 → GIF converter** on
+  the home screen and **blur / pixelate regions** in the editor.
+
+**RU**
+
+- **Редактор сценария, новые тайминги**: после каждого действия идёт своя пауза – отдельный пункт списка (по
+  умолчанию 1,5 с, в том числе после последнего действия; пресеты 1 с / 1,5 с / 2 с, «Все паузы» задаёт их разом),
+  а у каждого действия своя длительность – за сколько мышка до него доезжает (пресеты 1 с / 1,5 с / 2 с, для
+  текста – скорость набора «Быстро / Обычно / Медленно»). Набранный текст можно редактировать. Старые сценарии
+  открываются с этими значениями по умолчанию.
+- **Исправление**: воспроизведение больше не заканчивается правым кликом – контекстное меню в конце каждой записи
+  по сценарию пропало (хелпер отпускает только те кнопки и клавиши, которые нажал сам).
+- **Удалить и Записать заново** в шапке редактора ролика и редактора сценария. «Записать заново» удаляет запись
+  и начинает съёмку на тех же условиях: тот же дисплей, звук и сценарий.
+- **Один список на главной**: записи и сценарии вместе, записи по сценарию вложены под ним. Удаление сценария
+  оставляет его записи.
+- **Части зума**: в зуме по области можно задать несколько областей – камера плавно переезжает от одной к другой и
+  в конце возвращается к 1×; части разделены на полосе зума тонкими линиями, их можно перетаскивать.
+- **Композиции** (несколько записей подряд со всеми правками, один экспорт), **конвертер MP4 → GIF** на главной и
+  **размытие / пикселизация областей** в редакторе.
+
 ## 0.3.0 (2026-09-21)
 
 - **Audio in recordings**: the home screen has "Microphone" (with a device picker) and "System audio" checkboxes.
