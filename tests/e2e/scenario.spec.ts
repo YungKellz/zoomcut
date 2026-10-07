@@ -20,7 +20,7 @@ type ZcWindow = Window & {
       getState(): Promise<{ phase: string; actions: number }>
       stop(): Promise<void>
       list(): Promise<Array<{ id: string; actions: number; durationMs: number }>>
-      load(id: string): Promise<{ id: string; actions: Array<{ kind: string; at: number; text?: string }> }>
+      load(id: string): Promise<{ id: string; actions: Array<{ kind: string; at: number; text?: string; durationMs: number; pauseMs: number }> }>
     }
     displays: { list(): Promise<Array<{ id: number; primary: boolean }>> }
   }
@@ -126,6 +126,10 @@ test('captures clicks, typing and scrolling into a reviewable scenario', async (
   }
   expect(kinds).toEqual(expected)
   await expect(h.win.locator('.scenario-marker')).toHaveCount(5)
+  // one pause after every action (the last one too), 1.5 s by default
+  await expect(h.win.locator('.scenario-pause')).toHaveCount(5)
+  const pauseValues = await h.win.locator('.scenario-pause-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))
+  expect(pauseValues).toEqual(['1.5', '1.5', '1.5', '1.5', '1.5'])
   expect(await h.win.locator('.scenario-action img').count()).toBeGreaterThanOrEqual(3)
   await expect(h.win.locator('.scenario-total')).not.toHaveClass(/over/)
 
@@ -137,24 +141,52 @@ test('captures clicks, typing and scrolling into a reviewable scenario', async (
   expect(list).toHaveLength(1)
   const saved = await h.win.evaluate((id) => (window as unknown as ZcWindow).zc.scenario.load(id), list[0].id)
   expect(saved.actions.find((a) => a.kind === 'type')?.text).toBe(capturedText)
+  // regression: the replay helper used to send a stray right-button-up, which opened a context menu
+  expect(await target.textContent('#last')).toBe('')
   await h.win.screenshot({ path: join(h.shotsDir, 'scenario-review.png') })
 })
 
-test('actions can be deleted and retimed within the limit', async () => {
-  const gaps = h.win.locator('.scenario-action-gap')
-  await gaps.nth(1).fill('2.5')
-  await gaps.nth(1).press('Enter')
-  const times = await h.win.locator('.scenario-action-time').evaluateAll((els) => els.map((e) => Number((e as HTMLInputElement).value)))
-  console.log('[retime] times after gap edit:', JSON.stringify(times))
-  expect(times[1] - times[0]).toBeGreaterThanOrEqual(2.4)
-  for (let i = 1; i < times.length; i++) expect(times[i]).toBeGreaterThan(times[i - 1])
+test('pauses, durations and text can be edited; actions can be deleted', async () => {
+  // first pause: typed value, committed with Enter
+  const pauses = h.win.locator('.scenario-pause-input')
+  await pauses.nth(0).fill('2.5')
+  await pauses.nth(0).press('Enter')
+  await expect(pauses.nth(0)).toHaveValue('2.5')
 
-  await h.win.locator('.scenario-action').last().locator('.scenario-action-delete').click()
-  await expect(h.win.locator('.scenario-action')).toHaveCount(4)
-  await expect(h.win.locator('.scenario-marker')).toHaveCount(4)
+  // a duration preset on the first action
+  const firstAction = h.win.locator('.scenario-action').first()
+  await firstAction.locator('button.scenario-preset', { hasText: /^2 s$/ }).click()
+  await expect(firstAction.locator('input.scenario-action-duration')).toHaveValue('2')
+
+  // "All pauses" sets every pause (the last one included) and closes its popover
+  await h.win.click('.scenario-allpauses-btn')
+  await h.win.locator('.scenario-allpauses-pop button.scenario-preset', { hasText: /^1 s$/ }).click()
+  await expect(h.win.locator('.scenario-allpauses-pop')).toHaveCount(0)
+  const values = await h.win.locator('.scenario-pause-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))
+  expect(values).toEqual(['1', '1', '1', '1', '1'])
+
+  // the typed text is editable
+  const text = h.win.locator('.scenario-action[data-kind="type"] input.scenario-action-text')
+  await text.fill('ok')
+  await text.press('Enter')
+  await expect(text).toHaveValue('ok')
+  capturedText = 'ok'
+
   await sleep(800)
   const list = await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())
-  expect(list[0].actions).toBe(4)
+  const saved = await h.win.evaluate((id) => (window as unknown as ZcWindow).zc.scenario.load(id), list[0].id)
+  expect(saved.actions.map((a) => a.pauseMs)).toEqual([1000, 1000, 1000, 1000, 1000])
+  expect(saved.actions[0].durationMs).toBe(2000)
+  expect(saved.actions.find((a) => a.kind === 'type')?.text).toBe('ok')
+
+  // deleting an action takes its pause and its marker with it
+  await h.win.locator('.scenario-action').last().locator('.scenario-action-delete').click()
+  await expect(h.win.locator('.scenario-action')).toHaveCount(4)
+  await expect(h.win.locator('.scenario-pause')).toHaveCount(4)
+  await expect(h.win.locator('.scenario-marker')).toHaveCount(4)
+  await sleep(800)
+  const after = await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())
+  expect(after[0].actions).toBe(4)
 })
 
 test('replaying the scenario records a project and drives the target window', async () => {
@@ -167,9 +199,12 @@ test('replaying the scenario records a project and drives the target window', as
   await expect(bar.locator('.bar-label')).toContainText(/Replay/i, { timeout: 15_000 })
   await h.win.waitForSelector('.editor', { timeout: 180_000 })
   await h.win.waitForSelector('.preview-loading', { state: 'detached', timeout: 60_000 })
+  await sleep(1500)
 
   expect(await target.textContent('#count')).toBe('2')
   expect(await target.inputValue('#text')).toBe(capturedText)
+  // regression: no stray right-button-up at the end of the replay (it opened a context menu)
+  expect(await target.textContent('#last')).toBe('')
   const ids = projectIds(h.recordingsDir)
   expect(ids).toHaveLength(1)
   const project = readProject(h.recordingsDir, ids[0]) as unknown as { cursorData: { clicks: unknown[] }; recording: { durationMs: number } }

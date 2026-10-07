@@ -1,16 +1,35 @@
 import type { JSX } from 'react'
-import type React from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Play, Trash2 } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Hourglass, Play, Trash2 } from 'lucide-react'
 import type { AudioCaptureOptions, DisplayInfo, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE, SCENARIO_MAX_MS } from '@shared/defaults'
-import { actionDuration, deleteAction, describeAction, retimeAction, scenarioEnd, validateScenario } from '@shared/scenario'
+import {
+  DURATION_PRESETS_MS,
+  PAUSE_PRESETS_MS,
+  TYPE_SPEED_MS,
+  actionDurationMs,
+  actionPauseMs,
+  deleteAction,
+  describeAction,
+  moveActionStart,
+  scenarioEnd,
+  scenarioSchedule,
+  setActionDuration,
+  setActionPause,
+  setActionText,
+  setAllPauses,
+  typeDurationForSpeed,
+  validateScenario
+} from '@shared/scenario'
+import type { TypeSpeed } from '@shared/scenario'
 import { useScenario, useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
 import { ScenarioTimeline } from '../components/ScenarioTimeline'
 import { KIND_ICON, KIND_LABEL_KEY } from '../scenario/kindMeta'
-import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt } from '../scenario/format'
-import { useT } from '../i18n'
+import { audioHintKey, dotPositionPercent, formatMinSec, formatSecondsValue, formatStartTime } from '../scenario/format'
+import { PresetButtons, SecondsInput, useSecondsPresets } from '../scenario/fields'
+import type { Preset } from '../scenario/fields'
+import { useI18n, useT } from '../i18n'
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -129,14 +148,16 @@ export function ScenarioReview(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, scenario.actions, busy])
 
-  const retime = (id: string, atMs: number, ripple: boolean): void => {
-    const next = retimeAction(scenario.actions, id, Math.round(atMs), ripple)
+  // every edit goes through the engine, which returns the same array when nothing changed
+  const edit = (next: ScenarioAction[]): void => {
     if (next === scenario.actions) return
     setScenario({ ...scenario, actions: next })
   }
-  const commitTime = (id: string, secs: number): void => retime(id, secs * 1000, false)
-  const commitGap = (id: string, index: number, secs: number): void =>
-    retime(id, gapToAt(scenario.actions, index, Math.round(secs * 1000)), true)
+  const moveStart = (id: string, startMs: number, ripple: boolean): void => edit(moveActionStart(scenario.actions, id, startMs, ripple))
+  const commitDuration = (id: string, ms: number): void => edit(setActionDuration(scenario.actions, id, ms))
+  const commitPause = (id: string, ms: number): void => edit(setActionPause(scenario.actions, id, ms))
+  const commitText = (id: string, text: string): void => edit(setActionText(scenario.actions, id, text))
+  const commitAllPauses = (ms: number): void => edit(setAllPauses(scenario.actions, ms))
 
   const endMs = useMemo(() => scenarioEnd(scenario.actions), [scenario.actions])
   const over = endMs > SCENARIO_MAX_MS
@@ -150,6 +171,7 @@ export function ScenarioReview(): JSX.Element {
   const sizeLabel = `${Math.round(scenario.displayBounds.width * scenario.scaleFactor)}×${Math.round(scenario.displayBounds.height * scenario.scaleFactor)}`
 
   const selected = scenario.actions.find((a) => a.id === selectedId) ?? null
+  const schedule = useMemo(() => scenarioSchedule(scenario.actions), [scenario.actions])
 
   const startReplay = async (): Promise<void> => {
     setNotice(null)
@@ -189,22 +211,29 @@ export function ScenarioReview(): JSX.Element {
       {displayMissing && <div className="scenario-display-warning">{t('scenario.displayMissingWarning')}</div>}
 
       <div className="scenario-body">
-        <ul className="scenario-actions">
-          {scenario.actions.map((a, i) => (
-            <ScenarioActionRow
-              key={a.id}
-              action={a}
-              index={i}
-              scenarioDir={scenario.dir}
-              selected={a.id === selectedId}
-              gapMs={gapBeforeIndex(scenario.actions, i)}
-              onSelect={setSelectedId}
-              onCommitTime={commitTime}
-              onCommitGap={commitGap}
-              onDelete={removeAction}
-            />
-          ))}
-        </ul>
+        <div className="scenario-list-col">
+          <div className="scenario-list-toolbar">
+            <AllPausesControl actions={scenario.actions} disabled={busy} onCommit={commitAllPauses} />
+          </div>
+          <ul className="scenario-actions">
+            {scenario.actions.map((a, i) => (
+              <Fragment key={a.id}>
+                <ScenarioActionRow
+                  action={a}
+                  index={i}
+                  startMs={schedule[i].start}
+                  scenarioDir={scenario.dir}
+                  selected={a.id === selectedId}
+                  onSelect={setSelectedId}
+                  onCommitDuration={commitDuration}
+                  onCommitText={commitText}
+                  onDelete={removeAction}
+                />
+                <ScenarioPauseRow action={a} onCommit={commitPause} />
+              </Fragment>
+            ))}
+          </ul>
+        </div>
 
         <div className="scenario-preview">
           {selected ? (
@@ -215,7 +244,7 @@ export function ScenarioReview(): JSX.Element {
         </div>
       </div>
 
-      <ScenarioTimeline actions={scenario.actions} selectedId={selectedId} onSelect={setSelectedId} onRetime={retime} />
+      <ScenarioTimeline actions={scenario.actions} selectedId={selectedId} onSelect={setSelectedId} onMove={moveStart} />
 
       <footer className="scenario-footer">
         {notice && (
@@ -273,47 +302,46 @@ export function ScenarioReview(): JSX.Element {
 interface ActionRowProps {
   action: ScenarioAction
   index: number
+  /** where the action starts in the replay, from scenarioSchedule - read-only */
+  startMs: number
   scenarioDir: string
   selected: boolean
-  /** ms since the previous action ended - precomputed by the parent in O(1) per row (gapBeforeIndex from an index it already has while mapping), never re-derived here */
-  gapMs: number
   onSelect: (id: string) => void
-  onCommitTime: (id: string, secs: number) => void
-  onCommitGap: (id: string, index: number, secs: number) => void
+  onCommitDuration: (id: string, ms: number) => void
+  onCommitText: (id: string, text: string) => void
   onDelete: (id: string) => void
 }
 
+const TYPE_SPEEDS: TypeSpeed[] = ['fast', 'normal', 'slow']
+const TYPE_SPEED_KEY = { fast: 'scenario.speed.fast', normal: 'scenario.speed.normal', slow: 'scenario.speed.slow' } as const
+
+/** Duration presets of an action: 1 / 1.5 / 2 s, or Fast / Normal / Slow typing for typed text. */
+function useDurationPresets(action: ScenarioAction): Preset[] {
+  const t = useT()
+  const seconds = useSecondsPresets(DURATION_PRESETS_MS)
+  if (action.kind !== 'type') return seconds
+  return TYPE_SPEEDS.map((speed) => ({
+    ms: typeDurationForSpeed(action.text, speed),
+    label: t(TYPE_SPEED_KEY[speed]),
+    title: t('scenario.msPerChar', { ms: TYPE_SPEED_MS[speed] })
+  }))
+}
+
 /**
- * One row of the action list. Time/gap inputs keep a local "draft" string while being edited
- * (value = draft ?? the formatted number) and only commit - i.e. call back into retimeAction -
- * on blur or Enter, and only when the draft parses to a finite number: a fully-controlled input
- * that recomputes `Number(value)` on every keystroke turns a half-typed "1." or a momentarily
- * empty field into `Number('') === 0`, which would retime the action to 0 (and, for the gap
- * field, ripple every following action) while the user is still typing.
+ * One action of the list: thumbnail, kind + start time, the typed text (editable) or key label,
+ * and how long the action takes. Text and numbers keep a local draft and commit on blur / Enter
+ * only (see SecondsInput) - the text field the same way, Escape reverts, an empty text reverts.
  */
 function ScenarioActionRow(props: ActionRowProps): JSX.Element {
-  const { action, index, scenarioDir, selected, gapMs, onSelect, onCommitTime, onCommitGap, onDelete } = props
+  const { action, index, startMs, scenarioDir, selected, onSelect, onCommitDuration, onCommitText, onDelete } = props
   const t = useT()
   const Icon = KIND_ICON[action.kind]
   const desc = describeAction(action)
-  const [timeDraft, setTimeDraft] = useState<string | null>(null)
-  const [gapDraft, setGapDraft] = useState<string | null>(null)
   const [shotFailed, setShotFailed] = useState(false)
-
-  const timeValue = timeDraft ?? (action.at / 1000).toFixed(2)
-  const gapValue = gapDraft ?? (gapMs / 1000).toFixed(2)
-
-  const commitTimeDraft = (raw: string): void => {
-    const secs = Number(raw)
-    if (raw !== '' && Number.isFinite(secs)) onCommitTime(action.id, secs)
-  }
-  const commitGapDraft = (raw: string): void => {
-    const secs = Number(raw)
-    if (raw !== '' && Number.isFinite(secs)) onCommitGap(action.id, index, secs)
-  }
-  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter') e.currentTarget.blur()
-  }
+  const [textDraft, setTextDraft] = useState<string | null>(null)
+  const revertText = useRef(false)
+  const presets = useDurationPresets(action)
+  const duration = actionDurationMs(action)
 
   return (
     <li
@@ -334,60 +362,142 @@ function ScenarioActionRow(props: ActionRowProps): JSX.Element {
           </span>
         )}
       </div>
-      <div className="scenario-action-info">
-        <span className="scenario-action-label">
-          <Icon size={13} /> {t(KIND_LABEL_KEY[action.kind])}
-        </span>
-        {desc.detail && <span className="scenario-action-detail">{desc.detail}</span>}
-      </div>
-      <div className="scenario-action-controls" onClick={(e) => e.stopPropagation()}>
-        <label className="scenario-action-field">
-          <span>{t('scenario.timeLabel')}</span>
-          <input
-            type="number"
-            className="scenario-action-time"
-            step="0.01"
-            min={0}
-            lang="en"
-            inputMode="decimal"
-            value={timeValue}
-            onChange={(e) => setTimeDraft(e.target.value)}
-            onBlur={(e) => {
-              commitTimeDraft(e.target.value)
-              setTimeDraft(null)
+      <div className="scenario-action-main">
+        <div className="scenario-action-head">
+          <span className="scenario-action-label">
+            <Icon size={13} /> {t(KIND_LABEL_KEY[action.kind])} <span className="muted">#{index + 1}</span>
+          </span>
+          <span className="scenario-action-start muted" title={t('scenario.startsAt')}>
+            {formatStartTime(startMs)}
+          </span>
+          <button
+            className="btn btn-ghost danger scenario-action-delete"
+            title={t('scenario.deleteAction')}
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(action.id)
             }}
-            onKeyDown={blurOnEnter}
-          />
-        </label>
-        <label className="scenario-action-field">
-          <span>{t('scenario.gapLabel')}</span>
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+        {action.kind === 'type' && (
           <input
-            type="number"
-            className="scenario-action-gap"
-            step="0.01"
-            min={0}
-            lang="en"
-            inputMode="decimal"
-            value={gapValue}
-            onChange={(e) => setGapDraft(e.target.value)}
+            type="text"
+            className="scenario-action-text"
+            value={textDraft ?? action.text}
+            aria-label={t('scenario.textLabel')}
+            spellCheck={false}
+            onChange={(e) => setTextDraft(e.target.value)}
             onBlur={(e) => {
-              commitGapDraft(e.target.value)
-              setGapDraft(null)
+              const value = revertText.current ? null : e.target.value
+              revertText.current = false
+              setTextDraft(null)
+              if (value !== null && value !== action.text) onCommitText(action.id, value)
             }}
-            onKeyDown={blurOnEnter}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              else if (e.key === 'Escape') {
+                revertText.current = true
+                e.currentTarget.blur()
+              }
+            }}
           />
-        </label>
-        <button className="btn btn-ghost danger scenario-action-delete" title={t('scenario.deleteAction')} onClick={() => onDelete(action.id)}>
-          <Trash2 size={14} />
-        </button>
+        )}
+        {action.kind === 'key' && <span className="scenario-action-detail">{desc.detail}</span>}
+        <div className="scenario-action-controls">
+          <span className="scenario-field-label">{t('scenario.durationLabel')}</span>
+          <SecondsInput
+            className="scenario-action-duration"
+            value={duration}
+            ariaLabel={t('scenario.durationLabel')}
+            onCommit={(ms) => onCommitDuration(action.id, ms)}
+          />
+          <PresetButtons presets={presets} current={duration} onPick={(ms) => onCommitDuration(action.id, ms)} />
+        </div>
       </div>
     </li>
+  )
+}
+
+/** The pause that follows an action: always there, never deletable, not selectable. */
+function ScenarioPauseRow({ action, onCommit }: { action: ScenarioAction; onCommit: (id: string, ms: number) => void }): JSX.Element {
+  const t = useT()
+  const presets = useSecondsPresets(PAUSE_PRESETS_MS)
+  const pause = actionPauseMs(action)
+  return (
+    <li className="scenario-pause" data-id={action.id}>
+      <span className="scenario-pause-label">
+        <Hourglass size={13} /> {t('scenario.pause')}
+      </span>
+      <SecondsInput className="scenario-pause-input" value={pause} ariaLabel={t('scenario.pause')} onCommit={(ms) => onCommit(action.id, ms)} />
+      <PresetButtons presets={presets} current={pause} onPick={(ms) => onCommit(action.id, ms)} />
+    </li>
+  )
+}
+
+/** Toolbar button + popover that sets the same length for every pause. Closes on a pick, Escape or an outside click. */
+function AllPausesControl(props: { actions: ScenarioAction[]; disabled: boolean; onCommit: (ms: number) => void }): JSX.Element {
+  const { actions, disabled, onCommit } = props
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const presets = useSecondsPresets(PAUSE_PRESETS_MS)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    // capture phase + stopPropagation: the review screen's own Escape handler (clear the selection) must not also fire
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+
+  // the shared value while every pause is the same, otherwise nothing is highlighted and the field stays empty
+  const pauses = actions.map(actionPauseMs)
+  const common = pauses.length > 0 && pauses.every((p) => p === pauses[0]) ? pauses[0] : null
+  const pick = (ms: number): void => {
+    onCommit(ms)
+    setOpen(false)
+  }
+
+  return (
+    <div className="scenario-allpauses" ref={rootRef}>
+      <button
+        type="button"
+        className="btn btn-ghost scenario-allpauses-btn"
+        disabled={disabled || actions.length === 0}
+        title={t('scenario.allPausesTitle')}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Hourglass size={14} /> {t('scenario.allPauses')}
+      </button>
+      {open && (
+        <div className="scenario-allpauses-pop">
+          <div className="scenario-allpauses-presets">
+            <PresetButtons presets={presets} current={common} onPick={pick} />
+          </div>
+          <SecondsInput className="scenario-pause-input scenario-allpauses-input" value={common} ariaLabel={t('scenario.allPauses')} onCommit={pick} />
+        </div>
+      )}
+    </div>
   )
 }
 
 function ActionPreview({ action, dir }: { action: ScenarioAction; dir: string }): JSX.Element {
   const t = useT()
   const desc = describeAction(action)
+  const lang = useI18n((st) => st.lang)
   const [shotFailed, setShotFailed] = useState(false)
   const activeMods: string[] = []
   if (action.modifiers.ctrl) activeMods.push('Ctrl')
@@ -431,7 +541,7 @@ function ActionPreview({ action, dir }: { action: ScenarioAction; dir: string })
         </div>
         <div>
           <dt>{t('scenario.detailDuration')}</dt>
-          <dd>{t('scenario.detailDurationValue', { ms: actionDuration(action) })}</dd>
+          <dd>{t('scenario.detailDurationValue', { s: formatSecondsValue(actionDurationMs(action), lang) })}</dd>
         </div>
       </dl>
     </>

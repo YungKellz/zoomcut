@@ -3,16 +3,13 @@
  * Kept free of React and Electron so they are plain-unit-testable (format.test.ts).
  */
 import type { AudioCaptureOptions, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
-import { actionEnd, effectiveDuration, graphemes } from '@shared/scenario'
+import { graphemes } from '@shared/scenario'
 import { clamp } from '../util/format'
-import type { TKey } from '../i18n'
+import type { Lang, TKey } from '../i18n'
 
-/** Below this, a type/drag/scroll action is short enough to stay a point marker on the scenario
- * review timeline. */
-const SPAN_MIN_DURATION_MS = 100
-/** Minimum visual width of a span marker, px - wide enough that its 12px kind icon (plus the
- * span's own padding) is never clipped. */
-const SPAN_MIN_WIDTH_PX = 20
+/** Minimum visual width of an action span on the scenario timeline, px - wide enough that its
+ * 12px kind icon (plus the span's own padding) is never clipped. */
+const SPAN_MIN_WIDTH_PX = 24
 
 /** "m:ss" (no leading zero on minutes, no fractional seconds) - the scenario total, e.g. "1:23 / 10:00". */
 export function formatMinSec(ms: number): string {
@@ -20,29 +17,6 @@ export function formatMinSec(ms: number): string {
   const m = Math.floor(total / 60)
   const s = total % 60
   return `${m}:${String(s).padStart(2, '0')}`
-}
-
-/**
- * Gap (ms) between the end of the previous action and the start of the action at `index` -
- * the action's own `at` for the first action, 0 for an out-of-range index. O(1): the caller
- * already has the index from iterating the array, so this never re-scans it (kept that way on
- * purpose - the review screen must stay usable with hundreds of actions).
- */
-export function gapBeforeIndex(actions: ScenarioAction[], index: number): number {
-  const action = actions[index]
-  if (!action) return 0
-  const prev = actions[index - 1]
-  return action.at - (prev ? actionEnd(prev) : 0)
-}
-
-/**
- * Inverse of gapBeforeIndex: the `at` (ms) an action at `index` needs so the gap since the
- * previous action's end equals `gapMs` - the action's own `at` becomes exactly `gapMs` when it
- * is the first action (no previous end to add to). Hand the result to retimeAction(..., true).
- */
-export function gapToAt(actions: ScenarioAction[], index: number, gapMs: number): number {
-  const prev = actions[index - 1]
-  return (prev ? actionEnd(prev) : 0) + gapMs
 }
 
 /** Position of a point inside a shot's cropped rect, as 0..100 percentages (left, top), clamped
@@ -77,22 +51,38 @@ export function truncateCaption(text: string, max = 40): string {
   return chars.slice(0, max).join('').trimEnd() + '…'
 }
 
-/** type/drag/scroll actions with a real duration are drawn as a span (from `at` to `actionEnd`)
- * on the scenario review timeline instead of a point marker; clicks/doubleClick/key keep their
- * fixed, near-instant duration and always stay points. Uses effectiveDuration (not the raw,
- * recorded durationMs) so a fast drag/scroll that gets floor-clamped at replay still shows the
- * span width it will actually occupy - see effectiveDuration's doc comment in shared/scenario.ts. */
-export function isSpanAction(a: ScenarioAction): boolean {
-  return (a.kind === 'type' || a.kind === 'drag' || a.kind === 'scroll') && effectiveDuration(a) > SPAN_MIN_DURATION_MS
+/** "m:ss.t" with one decimal (truncated, so it never runs ahead of the real start) - the read-only
+ * start time of an action row, e.g. "0:03.5". */
+export function formatStartTime(ms: number): string {
+  const tenths = Math.floor(Math.max(0, ms) / 100)
+  const total = Math.floor(tenths / 10)
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}.${tenths % 10}`
 }
 
-/** Subtle label inside a span: the typed text (truncated) for `type`, nothing for drag/scroll. */
+/** Milliseconds as seconds for an input: at most 2 decimals, trailing zeros trimmed, a decimal
+ * comma in Russian ("1,5") and a dot otherwise ("1.5"). */
+export function formatSecondsValue(ms: number, lang: Lang): string {
+  const text = (Math.max(0, ms) / 1000).toFixed(2).replace(/\.?0+$/, '')
+  return lang === 'ru' ? text.replace('.', ',') : text
+}
+
+/** Parses what the user typed into a seconds field ("1,5", "1.5", ".5", "2") into whole
+ * milliseconds; null for anything that is not a plain non-negative number, so a half-typed or
+ * empty draft is never committed. */
+export function parseSecondsInput(raw: string): number | null {
+  const text = raw.trim().replace(',', '.')
+  if (!/^(\d+\.?\d*|\.\d+)$/.test(text)) return null
+  const secs = Number(text)
+  return Number.isFinite(secs) ? Math.round(secs * 1000) : null
+}
+
+/** Subtle label inside a span: the typed text (truncated) for `type`, nothing for the others. */
 export function spanLabel(a: ScenarioAction): string | null {
   return a.kind === 'type' ? truncateCaption(a.text, 24) : null
 }
 
-/** Pixel width of a span marker at the timeline's current scale, floored so a span that barely
- * qualifies (or a narrow timeline) never shrinks below SPAN_MIN_WIDTH_PX. */
-export function spanWidthPx(a: ScenarioAction, pxPerMs: number): number {
-  return Math.max(SPAN_MIN_WIDTH_PX, effectiveDuration(a) * pxPerMs)
+/** Pixel width of an action's span at the timeline's current scale, floored so a short action
+ * (or a narrow timeline) never shrinks below SPAN_MIN_WIDTH_PX. */
+export function spanWidthPx(startMs: number, endMs: number, pxPerMs: number): number {
+  return Math.max(SPAN_MIN_WIDTH_PX, (endMs - startMs) * pxPerMs)
 }

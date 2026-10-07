@@ -1,27 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt, isSpanAction, spanLabel, spanWidthPx, truncateCaption } from './format'
-import type {
-  AudioCaptureOptions,
-  ScenarioClickAction,
-  ScenarioDragAction,
-  ScenarioModifiers,
-  ScenarioScrollAction,
-  ScenarioShot,
-  ScenarioTypeAction
-} from '@shared/types'
+import {
+  audioHintKey,
+  dotPositionPercent,
+  formatMinSec,
+  formatSecondsValue,
+  formatStartTime,
+  parseSecondsInput,
+  spanLabel,
+  spanWidthPx,
+  truncateCaption
+} from './format'
+import type { AudioCaptureOptions, ScenarioClickAction, ScenarioModifiers, ScenarioShot, ScenarioTypeAction } from '@shared/types'
 
 const NO_MODS: ScenarioModifiers = { ctrl: false, shift: false, alt: false, meta: false }
-function click(id: string, at: number): ScenarioClickAction {
-  return { id, kind: 'click', at, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null }
+function click(id: string): ScenarioClickAction {
+  return { id, kind: 'click', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, durationMs: 1000, pauseMs: 1500 }
 }
-function typeAction(text: string, durationMs: number): ScenarioTypeAction {
-  return { id: 't', kind: 'type', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, text, durationMs }
-}
-function dragAction(durationMs: number): ScenarioDragAction {
-  return { id: 'd', kind: 'drag', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, toX: 10, toY: 10, dragPath: [], durationMs }
-}
-function scrollAction(deltaY: number, durationMs: number): ScenarioScrollAction {
-  return { id: 's', kind: 'scroll', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, deltaY, deltaX: 0, durationMs }
+function typeAction(text: string): ScenarioTypeAction {
+  return { id: 't', kind: 'type', at: 0, x: 0, y: 0, path: [], modifiers: NO_MODS, shot: null, text, durationMs: 1000, pauseMs: 1500 }
 }
 
 describe('formatMinSec', () => {
@@ -40,46 +36,6 @@ describe('formatMinSec', () => {
 
   it('clamps negative input to zero', () => {
     expect(formatMinSec(-500)).toBe('0:00')
-  })
-})
-
-describe('gapBeforeIndex', () => {
-  it("is the action's own `at` for the first action", () => {
-    expect(gapBeforeIndex([click('a', 1000)], 0)).toBe(1000)
-  })
-
-  it('is the time since the previous action ended (click lasts 70ms)', () => {
-    const actions = [click('a', 1000), click('b', 1500)]
-    expect(gapBeforeIndex(actions, 1)).toBe(1500 - (1000 + 70))
-  })
-
-  it('is 0 when the previous action ends exactly where this one starts', () => {
-    const actions = [click('a', 1000), click('b', 1070)]
-    expect(gapBeforeIndex(actions, 1)).toBe(0)
-  })
-
-  it('returns 0 for an out-of-range index', () => {
-    expect(gapBeforeIndex([click('a', 1000)], 5)).toBe(0)
-    expect(gapBeforeIndex([], 0)).toBe(0)
-  })
-})
-
-describe('gapToAt (inverse of gapBeforeIndex)', () => {
-  it('is exactly the gap for the first action - no previous end to add', () => {
-    expect(gapToAt([click('a', 1000)], 0, 250)).toBe(250)
-  })
-
-  it('adds the gap to the previous action end (click lasts 70ms)', () => {
-    const actions = [click('a', 1000), click('b', 2000)]
-    expect(gapToAt(actions, 1, 300)).toBe(1000 + 70 + 300)
-  })
-
-  it('round-trips with gapBeforeIndex', () => {
-    const actions = [click('a', 1000), click('b', 1500), click('c', 3000)]
-    for (let i = 0; i < actions.length; i++) {
-      const gap = gapBeforeIndex(actions, i)
-      expect(gapToAt(actions, i, gap)).toBe(actions[i].at)
-    }
   })
 })
 
@@ -159,54 +115,71 @@ describe('truncateCaption', () => {
   })
 })
 
-describe('isSpanAction', () => {
-  it('is true for type/drag/scroll actions with a duration over 100ms', () => {
-    expect(isSpanAction(typeAction('hi', 150))).toBe(true)
-    expect(isSpanAction(dragAction(150))).toBe(true)
-    expect(isSpanAction(scrollAction(1, 150))).toBe(true)
+describe('formatStartTime', () => {
+  it('shows one decimal, truncated', () => {
+    expect(formatStartTime(0)).toBe('0:00.0')
+    expect(formatStartTime(3500)).toBe('0:03.5')
+    expect(formatStartTime(3599)).toBe('0:03.5')
+    expect(formatStartTime(83_400)).toBe('1:23.4')
+  })
+})
+
+describe('formatSecondsValue', () => {
+  it('trims trailing zeros and keeps up to two decimals', () => {
+    expect(formatSecondsValue(1000, 'en')).toBe('1')
+    expect(formatSecondsValue(1500, 'en')).toBe('1.5')
+    expect(formatSecondsValue(1250, 'en')).toBe('1.25')
+    expect(formatSecondsValue(10_000, 'en')).toBe('10')
+    expect(formatSecondsValue(0, 'en')).toBe('0')
   })
 
-  it('is false for a type/drag/scroll action at or under the 100ms threshold', () => {
-    expect(isSpanAction(typeAction('h', 100))).toBe(false)
+  it('uses a decimal comma in Russian', () => {
+    expect(formatSecondsValue(1500, 'ru')).toBe('1,5')
+    expect(formatSecondsValue(2000, 'ru')).toBe('2')
+  })
+})
+
+describe('parseSecondsInput', () => {
+  it('accepts a dot or a comma', () => {
+    expect(parseSecondsInput('1.5')).toBe(1500)
+    expect(parseSecondsInput('1,5')).toBe(1500)
+    expect(parseSecondsInput(' 2 ')).toBe(2000)
+    expect(parseSecondsInput('.5')).toBe(500)
+    expect(parseSecondsInput('0')).toBe(0)
   })
 
-  it('is always false for click/doubleClick/rightClick/middleClick/key, whatever their nominal duration', () => {
-    expect(isSpanAction(click('a', 0))).toBe(false) // 70ms, under the threshold anyway
-    expect(isSpanAction({ ...click('a', 0), kind: 'doubleClick' })).toBe(false) // 250ms, but not a span kind
+  it('rounds to whole milliseconds', () => {
+    expect(parseSecondsInput('1.2346')).toBe(1235)
   })
 
-  it('uses the effective (floor-clamped) duration for a drag/scroll, not the raw recorded one', () => {
-    // raw durationMs (10ms) is under the threshold, but effectiveDuration floors a drag to 200ms
-    expect(isSpanAction(dragAction(10))).toBe(true)
-    // 5 notches floor a scroll to (5-1)*40 = 160ms, over the threshold despite a 0ms recording
-    expect(isSpanAction(scrollAction(5, 0))).toBe(true)
+  it('rejects empty, negative and non-numeric drafts', () => {
+    expect(parseSecondsInput('')).toBeNull()
+    expect(parseSecondsInput('   ')).toBeNull()
+    expect(parseSecondsInput('-1')).toBeNull()
+    expect(parseSecondsInput('abc')).toBeNull()
+    expect(parseSecondsInput('1.2.3')).toBeNull()
+    expect(parseSecondsInput('1e3')).toBeNull()
+    expect(parseSecondsInput('.')).toBeNull()
   })
 })
 
 describe('spanLabel', () => {
   it('is the truncated typed text for a type action', () => {
     const text = 'x'.repeat(40)
-    expect(spanLabel(typeAction(text, 1000))).toBe(truncateCaption(text, 24))
+    expect(spanLabel(typeAction(text))).toBe(truncateCaption(text, 24))
   })
 
-  it('is null for drag/scroll and any point-marker kind', () => {
-    expect(spanLabel(dragAction(300))).toBeNull()
-    expect(spanLabel(scrollAction(3, 300))).toBeNull()
-    expect(spanLabel(click('a', 0))).toBeNull()
+  it('is null for every other kind', () => {
+    expect(spanLabel(click('a'))).toBeNull()
   })
 })
 
 describe('spanWidthPx', () => {
-  it("scales with the action's effective duration and the timeline's scale", () => {
-    expect(spanWidthPx(typeAction('hi', 1000), 0.1)).toBe(100) // 1000ms * 0.1px/ms
+  it("scales with the action's length and the timeline's scale", () => {
+    expect(spanWidthPx(1000, 2000, 0.1)).toBe(100)
   })
 
-  it('never goes below the minimum visual width, even for a barely-qualifying span at a tiny scale', () => {
-    expect(spanWidthPx(typeAction('hi', 101), 0.01)).toBe(20) // 101*0.01=1.01px, floored to 20
-  })
-
-  it("uses effectiveDuration, so a fast drag's span is as wide as it will actually replay", () => {
-    // effectiveDuration floors this drag to 200ms, not its recorded 10ms
-    expect(spanWidthPx(dragAction(10), 1)).toBe(200)
+  it('never goes below the minimum visual width', () => {
+    expect(spanWidthPx(0, 200, 0.01)).toBe(24)
   })
 })

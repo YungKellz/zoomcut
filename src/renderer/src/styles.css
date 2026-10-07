@@ -1787,8 +1787,54 @@ input.scenario-name:focus {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: 440px minmax(0, 1fr);
   overflow: hidden;
+}
+
+.scenario-list-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.scenario-list-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.scenario-allpauses {
+  position: relative;
+}
+
+.scenario-allpauses-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scenario-allpauses-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.scenario-allpauses-presets {
+  display: flex;
+  gap: 4px;
 }
 
 .scenario-actions {
@@ -1796,15 +1842,15 @@ input.scenario-name:focus {
   margin: 0;
   padding: 0;
   overflow-y: auto;
-  border-right: 1px solid var(--border);
+  flex: 1;
   min-height: 0;
 }
 
 .scenario-action {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
@@ -1851,12 +1897,18 @@ input.scenario-name:focus {
   pointer-events: none;
 }
 
-.scenario-action-info {
+.scenario-action-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
+}
+
+.scenario-action-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .scenario-action-label {
@@ -1867,37 +1919,89 @@ input.scenario-name:focus {
   font-weight: 600;
 }
 
+.scenario-action-start {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scenario-action-delete {
+  margin-left: auto;
+  padding: 2px 6px;
+}
+
 .scenario-action-detail {
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 160px;
+}
+
+input.scenario-action-text {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
 }
 
 .scenario-action-controls {
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: none;
+  flex-wrap: wrap;
 }
 
-.scenario-action-field {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  font-size: 9px;
+.scenario-field-label {
+  font-size: 10px;
   color: var(--muted);
+  margin-right: 2px;
 }
 
-input.scenario-action-time,
-input.scenario-action-gap {
-  width: 54px;
-  padding: 3px 4px;
+input.scenario-action-duration,
+input.scenario-pause-input {
+  width: 50px;
+  padding: 2px 4px;
   font-size: 11px;
   text-align: right;
+}
+
+.scenario-preset {
+  padding: 2px 7px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.scenario-preset:hover {
+  background: var(--panel-2);
+}
+
+.scenario-preset.active {
+  background: rgba(79, 140, 255, 0.25);
+  border-color: var(--accent, #4f8cff);
+}
+
+/* the pause after an action: lower, inset and striped so it never reads as an action */
+.scenario-pause {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px 0 82px;
+  border-bottom: 1px solid var(--border);
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 6px, transparent 6px 12px), rgba(255, 176, 32, 0.06);
+  cursor: default;
+}
+
+.scenario-pause-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 56px;
 }
 
 .scenario-preview {
@@ -2045,24 +2149,29 @@ input.scenario-action-gap {
 .scenario-marker {
   position: absolute;
   top: 22px;
-  width: 22px;
   height: 22px;
-  margin-left: -11px;
-  border-radius: 50%;
+  border-radius: 5px;
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 3px;
+  padding: 0 4px;
+  overflow: hidden;
   cursor: grab;
-  padding: 0;
+}
+
+/* the first action is pinned at 0 and cannot be dragged */
+.scenario-marker.pinned {
+  cursor: default;
 }
 
 .scenario-marker.selected {
   border-color: #fff;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
-  /* spans can sit close enough to overlap their neighbour - the selected one must win */
+  /* neighbouring spans can nearly touch - the selected one must win */
   z-index: 2;
 }
 
@@ -2071,18 +2180,7 @@ input.scenario-action-gap {
   color: var(--record);
 }
 
-/* type/drag/scroll actions long enough to matter (see scenario/format.ts's isSpanAction) are
-   drawn as a span from `at` to `actionEnd` instead of a centered point marker. */
-.scenario-marker-span {
-  margin-left: 0;
-  border-radius: 5px;
-  justify-content: flex-start;
-  gap: 3px;
-  padding: 0 4px;
-  overflow: hidden;
-}
-
-.scenario-marker-span svg {
+.scenario-marker svg {
   flex: none;
 }
 

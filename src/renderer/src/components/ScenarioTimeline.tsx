@@ -3,9 +3,10 @@ import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ScenarioAction } from '@shared/types'
 import { SCENARIO_MAX_MS } from '@shared/defaults'
-import { actionEnd, scenarioEnd } from '@shared/scenario'
+import { scenarioEnd, scenarioSchedule } from '@shared/scenario'
+import type { ScheduledAction } from '@shared/scenario'
 import { KIND_ICON } from '../scenario/kindMeta'
-import { formatMinSec, isSpanAction, spanLabel, spanWidthPx } from '../scenario/format'
+import { formatStartTime, formatMinSec, spanLabel, spanWidthPx } from '../scenario/format'
 import { useT } from '../i18n'
 
 // Same small "pick the coarsest step whose pixel spacing clears a threshold" pattern as
@@ -18,11 +19,13 @@ interface ScenarioTimelineProps {
   actions: ScenarioAction[]
   selectedId: string | null
   onSelect: (id: string) => void
-  onRetime: (id: string, at: number, ripple: boolean) => void
+  /** drag: the action should start at `startMs`; `ripple` (Shift) also moves everything after it */
+  onMove: (id: string, startMs: number, ripple: boolean) => void
 }
 
 /**
- * Ruler + one draggable marker per action, below the action list on the scenario review
+ * Ruler + one span per action (from its scheduled start to its end; the pauses between them are
+ * just the gaps, they live in the action list), draggable except the first, which is pinned at 0, below the action list on the scenario review
  * screen. The track is fit to the current content (scenarioEnd(actions) - the current,
  * possibly-edited end, not the frozen recorded Scenario.durationMs) rather than to the full
  * 10-minute cap, so short scenarios stay editable at a usable pixel-per-ms scale; pxPerMs is
@@ -30,7 +33,7 @@ interface ScenarioTimelineProps {
  * `overflow: hidden` (there is no horizontal scroll here, unlike the main editor timeline).
  */
 export function ScenarioTimeline(props: ScenarioTimelineProps): JSX.Element {
-  const { actions, selectedId, onSelect, onRetime } = props
+  const { actions, selectedId, onSelect, onMove } = props
   const t = useT()
   const trackRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(800)
@@ -44,6 +47,7 @@ export function ScenarioTimeline(props: ScenarioTimelineProps): JSX.Element {
     return () => ro.disconnect()
   }, [])
 
+  const schedule = useMemo(() => scenarioSchedule(actions), [actions])
   const contentEnd = Math.max(scenarioEnd(actions), 1000)
   // guard only the degenerate case (no real width measured yet) - never clamp the natural fit,
   // or a long scenario would overflow a narrow window with nowhere to scroll to see the rest
@@ -72,15 +76,17 @@ export function ScenarioTimeline(props: ScenarioTimelineProps): JSX.Element {
             <span>{formatMinSec(tm)}</span>
           </div>
         ))}
-        {actions.map((a) => (
+        {actions.map((a, i) => (
           <ScenarioMarker
             key={a.id}
             action={a}
+            slot={schedule[i]}
+            pinned={i === 0}
             pxPerMs={pxPerMs}
             pxPerMsRef={pxPerMsRef}
             selected={a.id === selectedId}
             onSelect={onSelect}
-            onRetime={onRetime}
+            onMove={onMove}
           />
         ))}
       </div>
@@ -90,31 +96,37 @@ export function ScenarioTimeline(props: ScenarioTimelineProps): JSX.Element {
 
 interface MarkerProps {
   action: ScenarioAction
+  slot: ScheduledAction
+  /** the first action always starts at 0 */
+  pinned: boolean
   pxPerMs: number
   pxPerMsRef: React.RefObject<number>
   selected: boolean
   onSelect: (id: string) => void
-  onRetime: (id: string, at: number, ripple: boolean) => void
+  onMove: (id: string, startMs: number, ripple: boolean) => void
 }
 
 function ScenarioMarker(props: MarkerProps): JSX.Element {
-  const { action, pxPerMs, pxPerMsRef, selected, onSelect, onRetime } = props
+  const { action, slot, pinned, pxPerMs, pxPerMsRef, selected, onSelect, onMove } = props
   const Icon = KIND_ICON[action.kind]
-  const over = actionEnd(action) > SCENARIO_MAX_MS
-  const span = isSpanAction(action)
-  const label = span ? spanLabel(action) : null
+  const over = slot.end > SCENARIO_MAX_MS
+  const label = spanLabel(action)
 
   const down = (e: React.PointerEvent<HTMLButtonElement>): void => {
     e.stopPropagation()
+    if (pinned) {
+      onSelect(action.id)
+      return
+    }
     const el = e.currentTarget
     const track = el.closest('.scenario-timeline-track')
     if (!track) return
     el.setPointerCapture(e.pointerId)
     const startX = e.clientX
-    // how far past the marker/span's own `left` (action.at * pxPerMs) the pointer grabbed it, in
+    // how far past the span's own `left` (its start * pxPerMs) the pointer grabbed it, in
     // px - subtracted on every move so a wide span tracks the cursor from wherever it was
     // grabbed instead of snapping its left edge to the pointer the instant the drag starts
-    const grabOffsetPx = startX - track.getBoundingClientRect().left - action.at * pxPerMs
+    const grabOffsetPx = startX - track.getBoundingClientRect().left - slot.start * pxPerMs
     let moved = false
 
     const move = (ev: PointerEvent): void => {
@@ -122,12 +134,12 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
       moved = true
       const rect = track.getBoundingClientRect()
       // read the LATEST scale, not the one captured when the drag began (see pxPerMsRef above)
-      const at = (ev.clientX - rect.left - grabOffsetPx) / pxPerMsRef.current
-      onRetime(action.id, at, ev.shiftKey)
+      const startMs = (ev.clientX - rect.left - grabOffsetPx) / pxPerMsRef.current
+      onMove(action.id, startMs, ev.shiftKey)
     }
     // pointerup ends a normal drag; pointercancel/lostpointercapture cover the OS taking the
     // gesture away mid-drag (e.g. a window switch) - all three must stop the drag the same way,
-    // or `move` keeps retiming the action from a pointer nothing is updating any more
+    // or `move` keeps moving the action from a pointer nothing is updating any more
     const end = (ev: PointerEvent): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', end)
@@ -141,9 +153,9 @@ function ScenarioMarker(props: MarkerProps): JSX.Element {
     el.addEventListener('lostpointercapture', end, { once: true })
   }
 
-  const className = 'scenario-marker' + (span ? ' scenario-marker-span' : '') + (selected ? ' selected' : '') + (over ? ' over' : '')
-  const style = span ? { left: action.at * pxPerMs, width: spanWidthPx(action, pxPerMs) } : { left: action.at * pxPerMs }
-  const title = span ? `${formatMinSec(action.at)} – ${formatMinSec(actionEnd(action))}` : formatMinSec(action.at)
+  const className = 'scenario-marker' + (pinned ? ' pinned' : '') + (selected ? ' selected' : '') + (over ? ' over' : '')
+  const style = { left: slot.start * pxPerMs, width: spanWidthPx(slot.start, slot.end, pxPerMs) }
+  const title = `${formatStartTime(slot.start)} – ${formatStartTime(slot.end)}`
 
   return (
     <button type="button" className={className} data-id={action.id} style={style} onPointerDown={down} title={title}>
