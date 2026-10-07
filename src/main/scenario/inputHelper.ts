@@ -118,17 +118,24 @@ exit 0
 // Replays a compiled step schedule (physical pixels) against the real desktop. Blocks on
 // stdin for `PRE <x> <y>` (pre-position the cursor during the countdown) then `GO <epochMs>`,
 // runs the schedule on a Stopwatch anchored to that epoch, and checks the abort file before
-// every step so an abort lands within a couple of milliseconds. `-Release` alone (a fresh,
-// separate invocation, used after a hard kill of a previous instance) just releases every
-// modifier key and mouse button and exits – it does not know what an earlier process pressed,
-// so it releases everything unconditionally, which is also what the normal `finally` below
-// does: simpler and safer than tracking exactly what this run pressed.
+// every step so an abort lands within a couple of milliseconds. The schedule's last step is
+// `end` (after the final pause); once it is reached the script prints `D`, or `A` after an abort.
+//
+// Releasing is NOT unconditional: an up event for something that is not down is not harmless
+// (a button-up with no button-down reaches the window under the cursor as a real click - a
+// right-button-up opens a context menu, which used to show up at the end of every replay - and a
+// lone Alt-up activates a menu bar). So the C# side remembers every key and mouse button THIS
+// process pressed, and the normal `finally` below releases exactly those (ReleasePressed).
+// `-Release` alone (a fresh, separate invocation, used after a hard kill of a previous instance)
+// cannot know what the dead process pressed; it asks Windows which modifier keys and mouse
+// buttons are down right now and releases only those (ReleaseHeld).
 export const REPLAY_SCRIPT = String.raw`
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 
 Add-Type -TypeDefinition @"
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 
@@ -146,6 +153,7 @@ struct INPUT { public uint type; public InputUnion u; }
 public static class ZcReplay {
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);
   [DllImport("user32.dll")] static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint uPeriod);
@@ -197,11 +205,27 @@ public static class ZcReplay {
     SendOne(input);
   }
 
+  // What THIS process has pressed and not released yet, so ReleasePressed() can let go of
+  // exactly that and nothing else (see the note at the top of this script for why an up event
+  // for something that is not down must never be sent).
+  struct HeldKey { public int Vk; public int Scan; public bool Extended; }
+  static List<HeldKey> heldKeys = new List<HeldKey>();
+  static bool leftDown;
+  static bool rightDown;
+  static bool middleDown;
+
+  static void MarkButton(string button, bool down) {
+    if (button == "right") rightDown = down;
+    else if (button == "middle") middleDown = down;
+    else leftDown = down;
+  }
   public static void ButtonDown(string button) {
     SendMouseFlag(button == "right" ? MOUSEEVENTF_RIGHTDOWN : button == "middle" ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_LEFTDOWN, 0);
+    MarkButton(button, true);
   }
   public static void ButtonUp(string button) {
     SendMouseFlag(button == "right" ? MOUSEEVENTF_RIGHTUP : button == "middle" ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_LEFTUP, 0);
+    MarkButton(button, false);
   }
   public static void Wheel(int dy, int dx) {
     if (dy != 0) SendMouseFlag(MOUSEEVENTF_WHEEL, dy);
@@ -221,8 +245,22 @@ public static class ZcReplay {
     input.u.ki.dwExtraInfo = IntPtr.Zero;
     SendOne(input);
   }
-  public static void KeyDown(int vk, int scan, bool extended) { SendKey(vk, scan, extended, false); }
-  public static void KeyUp(int vk, int scan, bool extended) { SendKey(vk, scan, extended, true); }
+  static int FindHeld(int vk, int scan, bool extended) {
+    for (int i = heldKeys.Count - 1; i >= 0; i--) {
+      HeldKey k = heldKeys[i];
+      if (k.Vk == vk && k.Scan == scan && k.Extended == extended) return i;
+    }
+    return -1;
+  }
+  public static void KeyDown(int vk, int scan, bool extended) {
+    SendKey(vk, scan, extended, false);
+    if (FindHeld(vk, scan, extended) < 0) heldKeys.Add(new HeldKey { Vk = vk, Scan = scan, Extended = extended });
+  }
+  public static void KeyUp(int vk, int scan, bool extended) {
+    SendKey(vk, scan, extended, true);
+    int i = FindHeld(vk, scan, extended);
+    if (i >= 0) heldKeys.RemoveAt(i);
+  }
 
   static INPUT MakeUnicodeInput(char c, bool up) {
     INPUT input = new INPUT();
@@ -264,30 +302,54 @@ public static class ZcReplay {
     }
   }
 
-  // Unconditional: releases every modifier (both sides) and every mouse button, regardless
-  // of whether this process pressed them. Safe to call any number of times.
-  public static void Release() {
-    KeyUp(0xA0, 42, false);  // VK_LSHIFT
-    KeyUp(0xA1, 54, false);  // VK_RSHIFT
-    KeyUp(0xA2, 29, false);  // VK_LCONTROL
-    KeyUp(0xA3, 29, true);   // VK_RCONTROL
-    KeyUp(0xA4, 56, false);  // VK_LMENU
-    KeyUp(0xA5, 56, true);   // VK_RMENU
-    KeyUp(0x5B, 91, true);   // VK_LWIN
-    KeyUp(0x5C, 92, true);   // VK_RWIN
-    ButtonUp("left");
-    ButtonUp("right");
-    ButtonUp("middle");
+  // Lets go of exactly what THIS process still holds: keys newest first, then buttons. It
+  // sends nothing for a key or button that is already up, so it is safe to call any number of
+  // times - a second call (or a run that finished cleanly) is a no-op.
+  public static void ReleasePressed() {
+    for (int i = heldKeys.Count - 1; i >= 0; i--) {
+      HeldKey k = heldKeys[i];
+      SendKey(k.Vk, k.Scan, k.Extended, true);
+    }
+    heldKeys.Clear();
+    if (leftDown) ButtonUp("left");
+    if (rightDown) ButtonUp("right");
+    if (middleDown) ButtonUp("middle");
+  }
+
+  static bool IsDown(int vk) {
+    return (GetAsyncKeyState(vk) & 0x8000) != 0;
+  }
+
+  // For a fresh process after a hard kill: it cannot know what the dead one pressed, so it asks
+  // Windows which modifier keys (either side) and mouse buttons are down right now and releases
+  // only those. Never an up event for something that is up.
+  public static void ReleaseHeld() {
+    if (IsDown(0xA0)) KeyUp(0xA0, 42, false);  // VK_LSHIFT
+    if (IsDown(0xA1)) KeyUp(0xA1, 54, false);  // VK_RSHIFT
+    if (IsDown(0xA2)) KeyUp(0xA2, 29, false);  // VK_LCONTROL
+    if (IsDown(0xA3)) KeyUp(0xA3, 29, true);   // VK_RCONTROL
+    if (IsDown(0xA4)) KeyUp(0xA4, 56, false);  // VK_LMENU
+    if (IsDown(0xA5)) KeyUp(0xA5, 56, true);   // VK_RMENU
+    if (IsDown(0x5B)) KeyUp(0x5B, 91, true);   // VK_LWIN
+    if (IsDown(0x5C)) KeyUp(0x5C, 92, true);   // VK_RWIN
+    if (IsDown(0x01)) ButtonUp("left");        // VK_LBUTTON
+    if (IsDown(0x02)) ButtonUp("right");       // VK_RBUTTON
+    if (IsDown(0x04)) ButtonUp("middle");      // VK_MBUTTON
   }
 }
 "@
 
-function Release-Everything {
-  try { [ZcReplay]::Release() } catch { }
+# The normal exit path (done, aborted, failed): lets go of exactly what this process pressed.
+function Release-Pressed {
+  try { [ZcReplay]::ReleasePressed() } catch { }
+}
+# -Release, after a hard kill: lets go of whatever modifier or button Windows reports as down.
+function Release-Held {
+  try { [ZcReplay]::ReleaseHeld() } catch { }
 }
 
 if ($args.Count -ge 1 -and $args[0] -eq '-Release') {
-  Release-Everything
+  Release-Held
   exit 0
 }
 
@@ -376,6 +438,8 @@ try {
         $stdout.WriteLine("P $($step.index)")
         $stdout.Flush()
       }
+      # the closing step: reaching it (after the final pause) is all it is for
+      'end' { }
       default { }
     }
   }
@@ -388,7 +452,7 @@ try {
   $stdout.WriteLine("E $($_.Exception.Message)")
   $stdout.Flush()
 } finally {
-  Release-Everything
+  Release-Pressed
   [ZcReplay]::Shutdown()
 }
 exit 0
@@ -417,7 +481,13 @@ export async function startReplayHelper(stepsPath: string, abortPath: string): P
   return spawnPowerShell(path, [stepsPath, abortPath])
 }
 
-/** Fire-and-forget release of every modifier key and mouse button, for use after a hard kill. */
+/**
+ * Release pass for after a hard kill (or a crash / timeout) of a replay helper: a fresh
+ * `replay.ps1 -Release` that lets go of the modifier keys and mouse buttons Windows reports as
+ * held right now. It cannot know what the dead helper pressed, so it looks - and sends nothing
+ * for keys and buttons that are up, because a stray up event is not harmless (a lone
+ * right-button-up opens a context menu). Resolves once that process has exited.
+ */
 export async function releaseAllInputs(): Promise<void> {
   const path = await writeScript(replayScriptName(), REPLAY_SCRIPT)
   const proc = spawnPowerShell(path, ['-Release'])

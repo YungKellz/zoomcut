@@ -6,7 +6,7 @@ import type { ChildProcess } from 'node:child_process'
 import type { UiohookKeyboardEvent, UiohookMouseEvent, UiohookWheelEvent } from 'uiohook-napi'
 import type { RecorderBarState, Scenario, ScenarioCaptureState, ScenarioModifiers, ScenarioPoint, ScenarioShot } from '@shared/types'
 import { SCENARIO_MAX_MS } from '@shared/defaults'
-import { groupRawEvents, isModifierKey, normalizeLeadIn, scenarioEnd, type RawDownEvent, type RawInputEvent, type RawKeyEvent, type RawUpEvent, type RawWheelEvent } from '@shared/scenario'
+import { SCENARIO_VERSION, groupRawEvents, isModifierKey, type RawDownEvent, type RawInputEvent, type RawKeyEvent, type RawUpEvent, type RawWheelEvent } from '@shared/scenario'
 import { createBarWindow, getMainWindow } from '../windows'
 import { acquireHook, releaseHook, type UioHook } from './hook'
 import { startKeytextHelper } from './inputHelper'
@@ -242,10 +242,12 @@ export class ScenarioCapture {
       await Promise.all(this.pending)
       this.stopKeytext()
       const cutoffMs = this.stopRequestedAt !== null ? this.stopRequestedAt - startedAt - 80 : undefined
-      const actions = normalizeLeadIn(groupRawEvents(this.raw, { cutoffMs }))
+      // already default-timed (durationMs / pauseMs): the replay is sequential, so the long dead
+      // time before the first action - or between actions - is not carried over from the capture
+      const actions = groupRawEvents(this.raw, { cutoffMs })
       if (actions.length > 0 && this.display && this.id && this.dir) {
         const candidate: Scenario = {
-          version: 1,
+          version: SCENARIO_VERSION,
           id: this.id,
           name: defaultScenarioName(startedAt),
           createdAt: startedAt,
@@ -254,7 +256,8 @@ export class ScenarioCapture {
           scaleFactor: this.display.scaleFactor,
           actions,
           startPoint: this.startPoint ?? undefined,
-          durationMs: Math.max(scenarioEnd(actions), Date.now() - startedAt),
+          // the recorded capture length, kept for the record only - the replay length is scenarioEnd(actions)
+          durationMs: Date.now() - startedAt,
           dir: this.dir
         }
         try {

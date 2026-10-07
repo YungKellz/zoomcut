@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { promises as fsp, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { Scenario, ScenarioSummary } from '@shared/types'
-import { scenarioEnd } from '@shared/scenario'
+import { migrateScenario, scenarioEnd } from '@shared/scenario'
 
 /** ZOOMCUT_SCENARIOS_DIR lets tests keep scenario captures (scenario.json + shot PNGs) out of
  * the developer's real userData folder - same pattern as ZOOMCUT_RECORDINGS_DIR in ../storage.ts.
@@ -52,12 +52,23 @@ const saveQueues = new Map<string, Promise<void>>()
  * path points) is nowhere near this. */
 const MAX_SCENARIO_JSON_BYTES = 20 * 1024 * 1024
 
+/** Runs `task` after everything already queued for this scenario id has settled (a failed
+ * predecessor does not block it). Saves and the delete share this one queue per id. */
+function enqueue(id: string, task: () => Promise<void>): Promise<void> {
+  const previous = saveQueues.get(id) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(task)
+  saveQueues.set(id, next)
+  // a settled tail is dropped so the map does not collect every id ever touched; a newer tail stays
+  const drop = (): void => {
+    if (saveQueues.get(id) === next) saveQueues.delete(id)
+  }
+  next.then(drop, drop)
+  return next
+}
+
 /** Writes are serialized per scenario id, same reasoning as project autosave (storage.ts). */
 export function saveScenario(scenario: Scenario): Promise<void> {
-  const previous = saveQueues.get(scenario.id) ?? Promise.resolve()
-  const next = previous.catch(() => undefined).then(() => saveScenarioNow(scenario))
-  saveQueues.set(scenario.id, next)
-  return next
+  return enqueue(scenario.id, () => saveScenarioNow(scenario))
 }
 
 async function saveScenarioNow(scenario: Scenario): Promise<void> {
@@ -67,7 +78,8 @@ async function saveScenarioNow(scenario: Scenario): Promise<void> {
   // a scenario whose folder is gone was deleted: a late autosave must not resurrect it
   // (same rule as saveProjectNow in ../storage.ts)
   if (!(await exists(dir))) return
-  const toSave: Scenario = { ...scenario, dir }
+  // always written in the current format, with unusable timing replaced by defaults
+  const toSave: Scenario = { ...migrateScenario(scenario), dir }
   const json = JSON.stringify(toSave)
   if (Buffer.byteLength(json, 'utf8') > MAX_SCENARIO_JSON_BYTES) {
     throw new Error('Scenario is too large to save')
@@ -80,8 +92,9 @@ async function saveScenarioNow(scenario: Scenario): Promise<void> {
 }
 
 export async function loadScenario(id: string): Promise<Scenario> {
-  const raw = JSON.parse(await fsp.readFile(scenarioFile(id), 'utf8')) as Scenario
-  return { ...raw, dir: scenarioDir(id) }
+  // an older file (version 1, absolute timing) comes back already migrated to the sequential model
+  const migrated = migrateScenario(JSON.parse(await fsp.readFile(scenarioFile(id), 'utf8')))
+  return { ...migrated, dir: scenarioDir(id) }
 }
 
 export async function listScenarios(): Promise<ScenarioSummary[]> {
@@ -95,11 +108,12 @@ export async function listScenarios(): Promise<ScenarioSummary[]> {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     try {
-      const raw = JSON.parse(await fsp.readFile(join(scenariosRoot(), entry.name, 'scenario.json'), 'utf8')) as Scenario
+      const raw = migrateScenario(JSON.parse(await fsp.readFile(join(scenariosRoot(), entry.name, 'scenario.json'), 'utf8')))
       // the folder name is the source of truth for the id, not whatever the JSON says inside -
-      // a renamed folder must still load by its new name. durationMs here is the CURRENT end
-      // of the (possibly edited) actions, not the frozen recorded capture length - matches what
-      // the review screen itself shows for "length" (see Scenario.durationMs's own doc comment).
+      // a renamed folder must still load by its new name. durationMs here is the replay length
+      // of the (migrated, possibly edited) actions, not the frozen recorded capture length -
+      // matches what the review screen itself shows for "length" (see Scenario.durationMs's own
+      // doc comment).
       out.push({ id: entry.name, name: raw.name, createdAt: raw.createdAt, actions: raw.actions.length, durationMs: scenarioEnd(raw.actions) })
     } catch {
       // not a scenario folder, or one that never finished saving - skip
@@ -109,6 +123,8 @@ export async function listScenarios(): Promise<ScenarioSummary[]> {
   return out
 }
 
-export async function deleteScenario(id: string): Promise<void> {
-  await fsp.rm(scenarioDir(id), { recursive: true, force: true })
+/** Runs on the same per-id queue as the saves: a save already in flight finishes first, and one
+ * queued after the delete finds the folder gone and skips - no ENOENT, no resurrection. */
+export function deleteScenario(id: string): Promise<void> {
+  return enqueue(id, () => fsp.rm(scenarioDir(id), { recursive: true, force: true }))
 }

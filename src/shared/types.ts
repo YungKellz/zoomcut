@@ -426,7 +426,9 @@ export interface ScenarioShot { file: string; x: number; y: number; w: number; h
 export interface ScenarioActionBase {
   id: string
   kind: ScenarioActionKind
-  /** ms from the scenario start when the action happens (mouse down / first key) */
+  /** ms from the capture start when the action was recorded (mouse down / first key). Kept only
+   * for grouping order and debugging: since scenario v2 it is never used for timing or display,
+   * replay is purely sequential (see durationMs / pauseMs and scenarioSchedule in shared/scenario.ts) */
   at: number
   /** mouse position when the action happens, DIP */
   x: number
@@ -437,18 +439,29 @@ export interface ScenarioActionBase {
   path: ScenarioPathPoint[]
   modifiers: ScenarioModifiers
   shot: ScenarioShot | null
+  /** how long the action takes on replay, ms. A pointer action first travels from where the
+   * cursor was to (x, y), then happens: a click lands near the end of this window, a drag
+   * presses and a scroll starts turning 40% in and spend the rest of it moving, typed text is
+   * spread over all of it - see compileScenario. Read it through actionDurationMs(): that
+   * clamps it to the kind's minimum. */
+  durationMs: number
+  /** stillness after the action, ms: the next action starts when it is over (and the replay
+   * ends after the last one's). Read it through actionPauseMs(). */
+  pauseMs: number
 }
 export interface ScenarioClickAction extends ScenarioActionBase { kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick' }
-export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[]; durationMs: number }
-/** deltaY/deltaX in wheel notches (positive = down / right); replayed as `steps` wheel events over durationMs */
-export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number; durationMs: number }
-export interface ScenarioTypeAction extends ScenarioActionBase { kind: 'type'; text: string; durationMs: number }
+export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[] }
+/** deltaY/deltaX in wheel notches (positive = down / right); replayed as that many wheel events spread over the action's durationMs */
+export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number }
+export interface ScenarioTypeAction extends ScenarioActionBase { kind: 'type'; text: string }
 /** a non-text key or a chord: `key` is a display label ("Enter", "Ctrl+S"), vk = Windows virtual-key code, scan = set-1 scancode */
 export interface ScenarioKeyAction extends ScenarioActionBase { kind: 'key'; key: string; vk: number; scan: number; extended: boolean }
 export type ScenarioAction = ScenarioClickAction | ScenarioDragAction | ScenarioScrollAction | ScenarioTypeAction | ScenarioKeyAction
 
 export interface Scenario {
-  version: 1
+  /** 2 = sequential timing (durationMs / pauseMs per action). A version-1 file (absolute `at`
+   * timing) is migrated to default timing when it is loaded - see migrateScenario. */
+  version: 2
   id: string
   name: string
   createdAt: number
@@ -462,16 +475,16 @@ export interface Scenario {
    * on a scenario captured before this field existed (falls back to no initial move). */
   startPoint?: ScenarioPoint
   /**
-   * ms; the RECORDED capture length (when Stop was pressed, ≥ last action end at that time) -
-   * frozen at capture time, never updated by review-screen edits (retiming/deleting actions).
-   * UI code showing "how long is this scenario" should use scenarioEnd(actions) instead
-   * (src/shared/scenario.ts), which reflects the current, possibly-edited end.
+   * ms; the RECORDED capture length (when Stop was pressed) - frozen at capture time, never
+   * updated by review-screen edits (timing, text, deleting actions). UI code showing "how long
+   * is this scenario" should use scenarioEnd(actions) instead (src/shared/scenario.ts), which
+   * is the replay length of the current, possibly-edited actions.
    */
   durationMs: number
   /** absolute folder (userData/scenarios/<id>) holding scenario.json and shots/ */
   dir: string
 }
-/** durationMs here is scenarioEnd(actions) (see Scenario.durationMs), not the frozen recorded length. */
+/** durationMs here is scenarioEnd(actions): the replay length (see Scenario.durationMs), not the frozen recorded length. */
 export interface ScenarioSummary { id: string; name: string; createdAt: number; actions: number; durationMs: number }
 
 export interface ScenarioCaptureState {

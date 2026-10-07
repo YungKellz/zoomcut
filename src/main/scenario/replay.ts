@@ -13,7 +13,7 @@ import { releaseAllInputs, startReplayHelper } from './inputHelper'
 export interface ReplaySessionCallbacks {
   /** a `P i` marker arrived; the controller merges { replay: { index: index+1, total } } into the bar state */
   onProgress: (index: number, total: number) => void
-  /** the schedule finished (script printed `D`); the controller stops the recording 1200ms later */
+  /** the schedule finished (script printed `D`, i.e. the final pause is over); the controller stops the recording 300ms later */
   onDone: () => void
   /** Escape or the bar X aborted the replay; the controller discards the recording */
   onAbort: (reason: string) => void
@@ -109,8 +109,12 @@ export class ReplaySession {
    * plain "Stop and keep the recording"). */
   private releasing = false
   /** true once go() has sent GO to the helper: from that point on it may be mid-keystroke at
-   * any moment, so dispose() must release unconditionally, however the process ended. */
+   * any moment, so dispose() must release unless the helper provably finished on its own. */
   private goHappened = false
+  /** true once the helper printed its closing `D` (done) or `A` (aborted) line. It then runs its
+   * own `finally`, which releases exactly what it pressed, and exits - a clean exit after one of
+   * these leaves nothing held, so dispose() does not need a release pass of its own. */
+  private helperClosed = false
   private doneTimer: NodeJS.Timeout | null = null
   private readyResolve: (() => void) | null = null
   private readyReject: ((err: Error) => void) | null = null
@@ -229,6 +233,10 @@ export class ReplaySession {
     this.rl = null
     const proc = this.proc
     this.proc = null
+    // Did the helper finish on its own? Its closing `D` / `A` line arrived and the process has
+    // already exited normally: its `finally` let go of whatever it still held, so there is
+    // nothing to release. Read before the kill below, which changes the exit code.
+    const finishedOnItsOwn = this.helperClosed && proc !== null && proc.exitCode === 0
     if (proc && proc.exitCode === null && !proc.killed) {
       try {
         proc.kill()
@@ -238,10 +246,12 @@ export class ReplaySession {
     }
     // Once go() has sent GO, the helper may have been holding a key or mouse button down at any
     // point - including a crash we never observed an 'exit' for, where proc.exitCode is already
-    // non-null by the time we get here. Release unconditionally rather than only when this call
-    // is the one doing the killing, or a helper that died mid-keystroke leaves a modifier stuck
-    // held system-wide.
-    if (this.goHappened) void releaseAllInputs()
+    // non-null by the time we get here. Release unless the helper finished on its own, rather
+    // than only when this call is the one doing the killing, or a helper that died mid-keystroke
+    // leaves a modifier stuck held system-wide. The release pass only lets go of what Windows
+    // reports as held (see ZcReplay.ReleaseHeld); running it after a clean finish used to send
+    // an unmatched right-button-up, i.e. a context menu at the end of every replay.
+    if (this.goHappened && !finishedOnItsOwn) void releaseAllInputs()
     this.closeOverlay()
     if (this.hookInstance) {
       this.hookInstance.removeListener('keydown', this.onRealKeyDown)
@@ -304,12 +314,14 @@ export class ReplaySession {
       return
     }
     if (trimmed === 'D') {
+      this.helperClosed = true
       this.onScriptDone()
       return
     }
     if (trimmed === 'A') {
       // the script noticed the abort file on its own; abort()/stopReplay() already drives
-      // the JS-side state and cleanup, this line needs no separate handling
+      // the JS-side state and cleanup, this line only needs to be remembered (see helperClosed)
+      this.helperClosed = true
       return
     }
     if (trimmed.startsWith('E ')) {
@@ -344,10 +356,13 @@ export class ReplaySession {
   private onScriptDone(): void {
     if (this.state.phase === 'done' || this.state.phase === 'aborted' || this.state.phase === 'error') return
     this.setState({ phase: 'done', index: this.total, total: this.total })
+    // The helper only prints `D` once the final pause is over (the schedule's closing `end`
+    // step), so the recording needs no long tail of its own - just a moment for the last effect
+    // to reach the screen capture.
     this.doneTimer = setTimeout(() => {
       this.doneTimer = null
       this.callbacks.onDone()
-    }, 1200)
+    }, 300)
   }
 
   private onError(message: string): void {
