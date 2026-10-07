@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AudioCaptureOptions,
   AudioClip,
   BlurRegion,
   Composition,
@@ -46,6 +47,17 @@ export interface PickRect {
   size: number
 }
 
+/**
+ * What a screen starts by itself the moment it opens - how "Record again" hands the new attempt
+ * over: Home starts a plain recording ('record') or a scenario capture ('capture'), the scenario
+ * review replays its scenario with the original audio sources ('replay'). Consumed once, through
+ * takePendingStart().
+ */
+export type PendingStart =
+  | { kind: 'record'; displayId: number; audio: AudioCaptureOptions | null }
+  | { kind: 'replay'; scenarioId: string; audio: AudioCaptureOptions | null }
+  | { kind: 'capture'; displayId: number }
+
 export const PICK_MIN_SIZE = 1 / 5
 export const PICK_MAX_SIZE = 1 / 1.2
 
@@ -58,6 +70,8 @@ export interface EditorState {
   screen: 'home' | 'editor' | 'scenario' | 'composition'
   /** transient dismissible notice shown by NoticeBar (App.tsx); outlives Home unmounting */
   notice: string | null
+  /** set by "Record again", taken by the screen that starts it (see PendingStart) */
+  pendingStart: PendingStart | null
   project: Project | null
   scenario: Scenario | null
   /** open composition; stays set while one of its recordings is edited, so Back returns to it */
@@ -132,6 +146,11 @@ export interface EditorState {
   setName(name: string): void
   deleteSelected(): void
   setNotice(notice: string | null): void
+  setPendingStart(start: PendingStart | null): void
+  /** Returns the pending start and clears it in one step, but only when `accept` agrees: a
+   * StrictMode double-invoked mount effect can then never start twice, and a screen never
+   * swallows a start meant for another one. */
+  takePendingStart(accept: (start: PendingStart) => boolean): PendingStart | null
 
   addAudioClip(clip: AudioClip): void
   updateAudioClip(id: string, patch: Partial<AudioClip>, record?: boolean): void
@@ -143,6 +162,7 @@ export interface EditorState {
 export const useStore = create<EditorState>((set, get) => ({
   screen: 'home',
   notice: null,
+  pendingStart: null,
   project: null,
   scenario: null,
   composition: null,
@@ -534,7 +554,16 @@ export const useStore = create<EditorState>((set, get) => ({
       return { audioErrors: next }
     }),
 
-  setNotice: (notice) => set({ notice })
+  setNotice: (notice) => set({ notice }),
+
+  setPendingStart: (pendingStart) => set({ pendingStart }),
+
+  takePendingStart: (accept) => {
+    const pending = get().pendingStart
+    if (!pending || !accept(pending)) return null
+    set({ pendingStart: null })
+    return pending
+  }
 }))
 
 export function useProject(): Project {

@@ -122,6 +122,7 @@ export interface ProjectJson {
   crop: { x: number; y: number; w: number; h: number }
   frame: { padding: number; cornerRadius: number; background: string; shadow: boolean }
   export: { fileName: string; folder: string; format: string }
+  origin?: { displayId: number; audio: { mic: boolean; micDeviceId: string | null; system: boolean } | null; scenarioId: string | null }
 }
 
 export function readProject(recordingsDir: string, id: string): ProjectJson {

@@ -212,6 +212,16 @@ export interface WindowSnapshot {
   windows: WindowRect[]
 }
 
+/** How a recording was made – what "Record again" repeats, and the scenario it belongs to on the
+ * home screen. Absent on projects recorded before 0.4. */
+export interface RecordingOrigin {
+  /** the display that was actually captured (the requested one, or the fallback when it was gone) */
+  displayId: number
+  audio: AudioCaptureOptions | null
+  /** the scenario replayed into this recording; null for a plain recording */
+  scenarioId: string | null
+}
+
 export interface Project {
   version: 1
   id: string
@@ -229,6 +239,8 @@ export interface Project {
   crop: CropRect
   frame: FrameStyle
   export: ExportSettings
+  /** how it was recorded (display, audio, scenario); absent on projects recorded before 0.4 */
+  origin?: RecordingOrigin
   updatedAt: number
 }
 
@@ -241,6 +253,8 @@ export interface ProjectSummary {
   width: number
   height: number
   dir: string
+  /** the scenario this recording was replayed from, null for a plain (or pre-0.4) recording */
+  scenarioId: string | null
 }
 
 export interface RecordingStartMeta {
