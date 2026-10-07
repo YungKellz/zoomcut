@@ -384,12 +384,10 @@ export const useStore = create<EditorState>((set, get) => ({
     set({ selection: null })
   },
 
-  addBlur: (at) => {
+  addBlur: () => {
     const p = get().project
     if (!p) return null
-    const time = at ?? get().playheadMs
     const duration = p.recording.durationMs
-    const start = Math.max(0, Math.min(time, duration - 200))
     const id = uid('blur')
     // centered in the current crop, so a new rectangle is always on screen
     const c = p.crop
@@ -400,8 +398,9 @@ export const useStore = create<EditorState>((set, get) => ({
       y: c.y + BLUR_DEFAULTS.y * c.h,
       w: BLUR_DEFAULTS.w * c.w,
       h: BLUR_DEFAULTS.h * c.h,
-      start,
-      end: Math.min(duration, start + 3000)
+      // a new blur covers the whole recording by default
+      start: 0,
+      end: duration
     }
     get().mutate((proj) => ({ ...proj, blurs: [...proj.blurs, region] }))
     set({ selection: { kind: 'blur', id }, range: null, mode: 'blur', playing: false, pickRect: null })
