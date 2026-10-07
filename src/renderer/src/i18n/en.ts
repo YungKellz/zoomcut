@@ -81,6 +81,7 @@ export const en = {
   'preview.cropWindowHint': 'Click a window outline to crop to it ·',
   'preview.cropHint': 'Drag the edges of the crop rectangle ·',
   'preview.dragToMove': 'Drag to move',
+  'preview.pickPartHint': 'Part {n} · move and resize the rectangle, then press Apply · Enter applies, Esc cancels',
 
   // ---- timeline ----
   'timeline.cutSelection': 'Cut selection',
@@ -103,6 +104,8 @@ export const en = {
   'timeline.click': 'Click at {time}',
   'timeline.follow': 'follow',
   'timeline.fixed': 'fixed',
+  'timeline.parts': '{n} parts',
+  'timeline.partTitle': 'Part {n} · {time} · drag to change when it starts',
 
   // ---- inspector tabs ----
   'tab.clip': 'Clip',
@@ -150,6 +153,15 @@ export const en = {
   'zoom.empty': 'Select a zoom on the timeline to edit it, or double-click the zoom track to add one.',
   'zoom.all': 'All zooms',
   'zoom.help': 'Follow mode pans with the recorded mouse position; smoothing and dead zone are in the Cursor tab.',
+  'zoom.parts': 'Zoom parts',
+  'zoom.partRow': 'Part {n} · {start} – {end} · {scale}×',
+  'zoom.scalePart': 'Zoom · part {n}',
+  'zoom.pickPart': 'Pick area · part {n}',
+  'zoom.removePart': 'Remove this part',
+  'zoom.addPart': 'Add part at playhead',
+  'zoom.addPartTitle': 'Start another area at the playhead and pick it',
+  'zoom.addPartDisabled': 'Put the playhead inside this zoom, at least 0.3 s from its edges and from other parts',
+  'zoom.partsHelp': 'Parts send the camera to other areas during one zoom: it glides there smoothly and returns to 1× at the end as usual. Drag the thin lines in the zoom bar to change when a part starts.',
 
   // ---- text panel ----
   'text.add': 'Add text on the current frame',

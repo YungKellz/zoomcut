@@ -5,6 +5,7 @@ import { Check, Pause, Play, RotateCcw, SkipBack, X } from 'lucide-react'
 import type { BlurRegion, CropRect, Project, WindowRect } from '@shared/types'
 import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
 import type { FollowPath } from '../engine/cursor'
+import { zoomAreas } from '../engine/camera'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
@@ -68,6 +69,7 @@ export function Preview({ followPath }: Props): JSX.Element {
   const selection = useStore((s) => s.selection)
   const playheadMs = useStore((s) => s.playheadMs)
   const pickRect = useStore((s) => s.pickRect)
+  const pickArea = useStore((s) => s.pickArea)
   const setPickRect = useStore((s) => s.setPickRect)
   const applyPick = useStore((s) => s.applyPick)
   const setPlayhead = useStore((s) => s.setPlayhead)
@@ -284,6 +286,7 @@ export function Preview({ followPath }: Props): JSX.Element {
   }
 
   // ---- pick area (zoom target) ----
+  const pickedZoom = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const pickPx: PxRect | null = pickRect
     ? {
         x: (pickRect.cx - pickRect.size / 2) * size.outW,
@@ -499,7 +502,7 @@ export function Preview({ followPath }: Props): JSX.Element {
         <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>
         {mode === 'pickTarget' && (
           <span className="hint">
-            {t('preview.pickHint')}{' '}
+            {pickedZoom && zoomAreas(pickedZoom).length > 1 ? t('preview.pickPartHint', { n: pickArea + 1 }) : t('preview.pickHint')}{' '}
             <button className="btn btn-small btn-primary" onClick={applyPick}>
               <Check size={13} /> {t('common.apply')}
             </button>{' '}

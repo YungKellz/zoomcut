@@ -108,6 +108,17 @@ export interface BlurRegion {
 
 export type ZoomMode = 'follow' | 'fixed'
 
+/** One more area inside a fixed-area zoom: from `start` on the camera glides from the previous area to this one. */
+export interface ZoomPart {
+  id: string
+  /** source ms where the camera starts gliding from the previous area to this one (strictly inside the zoom) */
+  start: number
+  /** focus point, source-normalized (like ZoomSegment.target) */
+  target: { x: number; y: number }
+  /** 1.0 = no zoom */
+  scale: number
+}
+
 export interface ZoomSegment {
   id: string
   start: number
@@ -119,6 +130,9 @@ export interface ZoomSegment {
   target: { x: number; y: number }
   easeInMs: number
   easeOutMs: number
+  /** fixed mode only, sorted by start: further areas after the zoom's own target/scale, which is area 0
+   * (from `start` to parts[0].start). Ignored – but kept – in follow mode. Absent on older projects. */
+  parts?: ZoomPart[]
 }
 
 export interface CursorSettings {
