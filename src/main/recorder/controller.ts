@@ -8,6 +8,7 @@ import type {
   DisplayInfo,
   Project,
   RecorderBarState,
+  RecordingOrigin,
   RecordingProgress,
   RecordingStartMeta,
   RecordingWarning,
@@ -50,6 +51,8 @@ interface ActiveRecording {
   dir: string
   display: Electron.Display
   displayName: string
+  /** how this attempt was started; written to project.origin so "Record again" can repeat it */
+  origin: RecordingOrigin
   startedAt: number | null
   meta: RecordingStartMeta | null
   rawPath: string | null
@@ -206,6 +209,7 @@ export class RecordingController {
         dir,
         display,
         displayName: info.name,
+        origin: { displayId: info.id, audio: options?.audio ?? null, scenarioId: options?.scenario?.id ?? null },
         startedAt: null,
         meta: null,
         rawPath: null,
@@ -466,6 +470,7 @@ export class RecordingController {
           fileName: id,
           folder: settings.lastExportFolder ?? app.getPath('videos')
         },
+        origin: a.origin,
         updatedAt: Date.now()
       }
       const { clips, warnings } = await this.finishAudio(a, createdAt, estimatedDuration, progress)

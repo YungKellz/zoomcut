@@ -182,7 +182,9 @@ test('replaying the scenario records a project and drives the target window', as
 test('Escape aborts a replay and discards the recording', async () => {
   await h.win.click('.editor-top button:has-text("Recordings")')
   await h.win.waitForSelector('.home')
-  await expect(h.win.locator('.scenario-list .scenario-row')).toHaveCount(1)
+  // the scenario is a block on Home and the recording its replay made is listed under it
+  await expect(h.win.locator('.scenario-block > .scenario-row')).toHaveCount(1)
+  await expect(h.win.locator('.scenario-block .project-row')).toHaveCount(1)
   await h.win.click('.scenario-open')
   await h.win.waitForSelector('.scenario-review')
   await h.win.click('.btn-replay')
@@ -206,11 +208,16 @@ test('Escape aborts a replay and discards the recording', async () => {
 test('a saved scenario can be deleted from Home', async () => {
   await h.win.click('.scenario-back')
   await h.win.waitForSelector('.home')
+  const recordingIds = projectIds(h.recordingsDir)
+  expect(recordingIds).toHaveLength(1)
   h.win.on('dialog', (d) => void d.accept())
   await h.win.click('.scenario-delete')
-  await expect(h.win.locator('.scenario-list .scenario-row')).toHaveCount(0)
+  await expect(h.win.locator('.scenario-block')).toHaveCount(0)
   await sleep(500)
   expect(await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())).toHaveLength(0)
+  // deleting a scenario keeps its recording: still on disk, now a top-level row of the list
+  expect(existsSync(join(h.recordingsDir, recordingIds[0], 'project.json'))).toBe(true)
+  await expect(h.win.locator('.project-list > .project-row')).toHaveCount(1)
   expect(existsSync(join(h.recordingsDir, 'nothing'))).toBe(false)
 })
 

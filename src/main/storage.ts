@@ -158,7 +158,8 @@ export async function listProjects(): Promise<ProjectSummary[]> {
         durationMs: raw.recording.durationMs,
         width: raw.recording.width,
         height: raw.recording.height,
-        dir: projectDir(entry.name)
+        dir: projectDir(entry.name),
+        scenarioId: raw.origin?.scenarioId ?? null
       })
     } catch {
       // not a project folder (or a recording that never finished) – skip
@@ -168,7 +169,19 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   return out
 }
 
-export async function deleteProject(id: string): Promise<void> {
+/**
+ * Runs on the same per-project queue as saveProject: an autosave already in flight finishes
+ * first, and one queued after this sees the folder gone and returns quietly - so deleting the
+ * open project can never race its own autosave (no ENOENT from a half-done rename, no resurrection).
+ */
+export function deleteProject(id: string): Promise<void> {
+  const previous = saveQueues.get(id) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(() => deleteProjectNow(id))
+  saveQueues.set(id, next)
+  return next
+}
+
+async function deleteProjectNow(id: string): Promise<void> {
   // Windows refuses to remove files that are being written (a save in flight): retry briefly
   for (let attempt = 0; ; attempt++) {
     try {

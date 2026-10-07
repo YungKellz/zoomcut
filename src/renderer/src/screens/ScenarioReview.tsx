@@ -1,12 +1,13 @@
 import type { JSX } from 'react'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Play, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, RotateCcw, Trash2 } from 'lucide-react'
 import type { AudioCaptureOptions, DisplayInfo, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE, SCENARIO_MAX_MS } from '@shared/defaults'
 import { actionDuration, deleteAction, describeAction, retimeAction, scenarioEnd, validateScenario } from '@shared/scenario'
 import { useScenario, useStore } from '../store'
 import { useRecorder } from '../recording/useRecorder'
+import { deleteOpenScenario, recaptureScenario } from '../recording/lifecycle'
 import { ScenarioTimeline } from '../components/ScenarioTimeline'
 import { KIND_ICON, KIND_LABEL_KEY } from '../scenario/kindMeta'
 import { audioHintKey, dotPositionPercent, formatMinSec, gapBeforeIndex, gapToAt } from '../scenario/format'
@@ -151,7 +152,9 @@ export function ScenarioReview(): JSX.Element {
 
   const selected = scenario.actions.find((a) => a.id === selectedId) ?? null
 
-  const startReplay = async (): Promise<void> => {
+  // `audioOverride`: Record again repeats the audio sources of the recording it replaces (null = none)
+  // instead of the home screen's current choice; undefined = the current choice
+  const startReplay = async (audioOverride?: AudioCaptureOptions | null): Promise<void> => {
     setNotice(null)
     // a stale warning from a previous attempt (e.g. "system audio failed") must not linger into
     // this one - NoticeBar (App.tsx) shows store.notice across screens, so it otherwise outlives
@@ -161,8 +164,17 @@ export function ScenarioReview(): JSX.Element {
     const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
     if (target === undefined) return
     // the replay recording captures the same audio sources the user picked on the home screen
-    await recorder.start(target, { scenario, audio: settings.audioDefaults ?? undefined })
+    const audio = audioOverride === undefined ? settings.audioDefaults : audioOverride
+    await recorder.start(target, { scenario, audio: audio ?? undefined })
   }
+
+  // "Record again" on a recording opens its scenario with a replay already queued: start it like the button
+  useEffect(() => {
+    const pending = useStore.getState().takePendingStart((p) => p.kind === 'replay' && p.scenarioId === scenario.id)
+    if (pending?.kind === 'replay') void startReplay(pending.audio)
+    // once, on entry only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="scenario-review">
@@ -177,6 +189,14 @@ export function ScenarioReview(): JSX.Element {
           spellCheck={false}
           aria-label={t('scenario.nameLabel')}
         />
+        <div className="editor-top-file">
+          <button className="btn btn-ghost btn-small danger" onClick={() => void deleteOpenScenario(scenario)} disabled={busy} title={t('editor.deleteScenarioTitle')}>
+            <Trash2 size={14} /> {t('common.delete')}
+          </button>
+          <button className="btn btn-ghost btn-small" onClick={() => void recaptureScenario(scenario)} disabled={busy} title={t('editor.recaptureTitle')}>
+            <RotateCcw size={14} /> {t('editor.recordAgain')}
+          </button>
+        </div>
         <span className="muted scenario-display">
           {displayLabel} · {sizeLabel}
         </span>

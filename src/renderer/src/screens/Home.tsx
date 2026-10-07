@@ -1,9 +1,11 @@
 import type { JSX } from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Circle, Clapperboard, FileImage, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
 import type { AppInfo, AudioCaptureOptions, CompositionSummary, DisplayInfo, Language, ProjectSummary, ScenarioSummary } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
+import { buildHomeItems } from '../home/items'
+import { confirmDeleteProject, confirmDeleteScenario } from '../recording/lifecycle'
 import { useRecorder } from '../recording/useRecorder'
 import { useScenarioCapture } from '../recording/useScenarioCapture'
 import { formatDuration } from '../util/format'
@@ -89,12 +91,12 @@ export function Home(): JSX.Element {
     })
   }, [])
 
-  const refreshProjects = useCallback(async () => {
-    setProjects(await window.zc.projects.list())
-  }, [])
-
-  const refreshScenarios = useCallback(async () => {
-    setScenarios(await window.zc.scenario.list())
+  // fetched together: recordings made from a scenario are grouped under it, so a half-loaded
+  // pair would flash them as standalone rows first
+  const refreshLibrary = useCallback(async () => {
+    const [projectList, scenarioList] = await Promise.all([window.zc.projects.list(), window.zc.scenario.list()])
+    setProjects(projectList)
+    setScenarios(scenarioList)
   }, [])
 
   const refreshCompositions = useCallback(async () => {
@@ -103,15 +105,24 @@ export function Home(): JSX.Element {
 
   useEffect(() => {
     void refreshDisplays()
-    void refreshProjects()
-    void refreshScenarios()
     void refreshCompositions()
     void window.zc.app.info().then(setInfo)
-  }, [refreshDisplays, refreshProjects, refreshScenarios, refreshCompositions])
+  }, [refreshDisplays, refreshCompositions])
 
+  // on entry, and whenever an attempt ends (finished, discarded, failed): either list may have changed
   useEffect(() => {
-    if (recorder.phase === 'idle') void refreshProjects()
-  }, [recorder.phase, refreshProjects])
+    if (recorder.phase === 'idle' && scenario.phase === 'idle') void refreshLibrary()
+  }, [recorder.phase, scenario.phase, refreshLibrary])
+
+  // "Record again" hands the new attempt over through the store: start it exactly like the button
+  // would. takePendingStart clears it atomically, so a StrictMode re-run of this effect cannot start twice.
+  useEffect(() => {
+    const pending = useStore.getState().takePendingStart((p) => p.kind !== 'replay')
+    if (pending?.kind === 'record') void recorder.start(pending.displayId, { audio: pending.audio ?? undefined })
+    else if (pending?.kind === 'capture') void scenario.start(pending.displayId)
+    // once, on entry only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // displays come and go (docking, projectors): keep the list fresh while idle - a scenario
   // capture also has to stay excluded, the same as an ordinary recording, or this ends up
@@ -134,9 +145,7 @@ export function Home(): JSX.Element {
   }
 
   const remove = async (p: ProjectSummary): Promise<void> => {
-    if (!confirm(t('home.deleteConfirm', { name: p.name }))) return
-    await window.zc.projects.remove(p.id)
-    await refreshProjects()
+    if (await confirmDeleteProject(p.id, p.name)) await refreshLibrary()
   }
 
   const newComposition = async (): Promise<void> => {
@@ -182,15 +191,29 @@ export function Home(): JSX.Element {
     }
   }
 
+  // the scenario's recordings stay and move to the top level of the list
   const removeScenario = async (s: ScenarioSummary): Promise<void> => {
-    if (!confirm(t('scenario.deleteConfirm', { name: s.name }))) return
-    try {
-      await window.zc.scenario.remove(s.id)
-    } catch (err) {
-      console.error('failed to delete scenario', err)
-    }
-    await refreshScenarios()
+    if (await confirmDeleteScenario(s.id, s.name)) await refreshLibrary()
   }
+
+  const items = useMemo(() => buildHomeItems(projects, scenarios), [projects, scenarios])
+
+  const projectRow = (p: ProjectSummary): JSX.Element => (
+    <li key={p.id} className="project-row">
+      <button className="project-open" onClick={() => void open(p.id)} disabled={busy !== null}>
+        <span className="project-name">{p.name}</span>
+        <span className="muted">
+          {formatDuration(p.durationMs)} · {p.width}×{p.height} · {new Date(p.createdAt).toLocaleString()}
+        </span>
+      </button>
+      <button className="btn btn-ghost" title={t('home.showFolder')} onClick={() => void window.zc.projects.reveal(p.id)}>
+        <FolderOpen size={15} />
+      </button>
+      <button className="btn btn-ghost danger" title={t('common.delete')} onClick={() => void remove(p)}>
+        <Trash2 size={15} />
+      </button>
+    </li>
+  )
 
   return (
     <div className="home">
@@ -326,34 +349,6 @@ export function Home(): JSX.Element {
           )}
         </section>
 
-        {scenarios.length > 0 && (
-          <section className="card">
-            <div className="card-head">
-              <h2>
-                <MousePointerClick size={18} /> {t('scenario.saved')}
-              </h2>
-            </div>
-            <ul className="scenario-list">
-              {scenarios.map((s) => (
-                <li key={s.id} className="scenario-row">
-                  <button className="scenario-open" onClick={() => void openSavedScenario(s.id)} disabled={scenarioBusy !== null || recording || capturing}>
-                    <span className="project-name">{s.name}</span>
-                    <span className="muted">{t('scenario.summary', { n: s.actions, duration: formatDuration(s.durationMs) })}</span>
-                  </button>
-                  <button
-                    className="btn btn-ghost danger scenario-delete"
-                    title={t('common.delete')}
-                    disabled={scenarioBusy !== null || recording || capturing}
-                    onClick={() => void removeScenario(s)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
         <section className="card">
           <div className="card-head">
             <h2>
@@ -382,27 +377,47 @@ export function Home(): JSX.Element {
         <section className="card">
           <div className="card-head">
             <h2>
-              <FolderOpen size={18} /> {t('home.recent')}
+              <FolderOpen size={18} /> {t('home.library')}
             </h2>
           </div>
-          {projects.length === 0 && <p className="muted">{t('home.nothingYet')}</p>}
+          {items.length === 0 && <p className="muted">{t('home.nothingYet')}</p>}
           <ul className="project-list">
-            {projects.map((p) => (
-              <li key={p.id} className="project-row">
-                <button className="project-open" onClick={() => void open(p.id)} disabled={busy !== null}>
-                  <span className="project-name">{p.name}</span>
-                  <span className="muted">
-                    {formatDuration(p.durationMs)} · {p.width}×{p.height} · {new Date(p.createdAt).toLocaleString()}
-                  </span>
-                </button>
-                <button className="btn btn-ghost" title={t('home.showFolder')} onClick={() => void window.zc.projects.reveal(p.id)}>
-                  <FolderOpen size={15} />
-                </button>
-                <button className="btn btn-ghost danger" title={t('common.delete')} onClick={() => void remove(p)}>
-                  <Trash2 size={15} />
-                </button>
-              </li>
-            ))}
+            {items.map((item) =>
+              item.kind === 'recording' ? (
+                projectRow(item.project)
+              ) : (
+                <li key={'scenario:' + item.scenario.id} className="scenario-block">
+                  <div className="scenario-row">
+                    <button
+                      className="scenario-open"
+                      onClick={() => void openSavedScenario(item.scenario.id)}
+                      disabled={scenarioBusy !== null || recording || capturing}
+                    >
+                      <span className="project-name scenario-name-line">
+                        <MousePointerClick size={15} /> {item.scenario.name}
+                      </span>
+                      <span className="muted">
+                        {t('scenario.summary', { n: item.scenario.actions, duration: formatDuration(item.scenario.durationMs) })}
+                        {item.children.length > 0 && ` · ${t('home.scenarioRecordings', { n: item.children.length })}`}
+                      </span>
+                    </button>
+                    <button
+                      className="btn btn-ghost danger scenario-delete"
+                      title={t('common.delete')}
+                      disabled={scenarioBusy !== null || recording || capturing}
+                      onClick={() => void removeScenario(item.scenario)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  {item.children.length === 0 ? (
+                    <p className="muted small scenario-empty">{t('home.scenarioNoRecordings')}</p>
+                  ) : (
+                    <ul className="scenario-children">{item.children.map(projectRow)}</ul>
+                  )}
+                </li>
+              )
+            )}
           </ul>
         </section>
       </div>

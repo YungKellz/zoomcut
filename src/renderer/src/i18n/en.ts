@@ -37,6 +37,9 @@ export const en = {
   'home.stop': 'Stop',
   'home.transcoding': 'Preparing video for editing… {percent}%',
   'home.finishing': 'Finishing…',
+  'home.library': 'Recordings and scenarios',
+  'home.scenarioRecordings': '{n} recording(s)',
+  'home.scenarioNoRecordings': 'No recordings made from this scenario yet.',
 
   // ---- updates ----
   'update.check': 'Check for updates',
@@ -70,6 +73,20 @@ export const en = {
   'editor.undo': 'Undo (Ctrl+Z)',
   'editor.redo': 'Redo (Ctrl+Y)',
   'editor.export': 'Export',
+  // delete / record again, in the editor and the scenario review headers
+  'editor.recordAgain': 'Record again',
+  'editor.deleteTitle': 'Delete this recording',
+  'editor.recordAgainTitle': 'Delete this recording and record it again the same way',
+  'editor.deleteScenarioTitle': 'Delete this scenario (its recordings are kept)',
+  'editor.recaptureTitle': 'Delete this scenario and capture a new one on the same display',
+  'editor.deleteScenarioConfirm': 'Delete scenario "{name}"? Recordings made from it are kept.',
+  'editor.deleteFailed': 'Could not delete: {error}',
+  'editor.recordAgainConfirm': 'Delete this recording and record it again with the same display and audio?',
+  'editor.recordAgainScenarioConfirm': 'Delete this recording and record it again with the same display, audio and scenario?',
+  'editor.recordAgainLegacyConfirm': 'Delete this recording and record again? Its original settings were not saved, so the last used display and audio choice apply.',
+  'editor.recordAgainScenarioMissing': 'The scenario this recording was made from no longer exists. Nothing was deleted.',
+  'editor.recordAgainNoDisplay': 'No display is available to record. Nothing was deleted.',
+  'editor.recaptureConfirm': 'Delete this scenario and capture a new one on the same display? Recordings made from it are kept.',
 
   // ---- preview ----
   'preview.loading': 'Loading video…',

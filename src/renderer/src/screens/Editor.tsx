@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
-import { useEffect } from 'react'
-import { ArrowLeft, Download, Redo2, Undo2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, Download, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react'
 import { useProject, useStore } from '../store'
 import { useFollowPath } from '../hooks/useFollowPath'
 import { Preview } from '../editor/Preview'
@@ -10,6 +10,7 @@ import { Inspector } from '../editor/Inspector'
 import { ExportDialog } from '../editor/ExportDialog'
 import { keepSegments, outputDuration } from '../engine/timeline'
 import { formatDuration } from '../util/format'
+import { deleteOpenProject, recordProjectAgain } from '../recording/lifecycle'
 import { useT } from '../i18n'
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -30,6 +31,17 @@ export function Editor(): JSX.Element {
   const canRedo = useStore((s) => s.future.length > 0)
   const exportOpen = useStore((s) => s.exportOpen)
   const setExportOpen = useStore((s) => s.setExportOpen)
+  const [lifecycleBusy, setLifecycleBusy] = useState(false)
+
+  // Delete / Record again leave this screen on success; only a decline or a failure comes back here
+  const runLifecycle = async (action: () => Promise<void>): Promise<void> => {
+    setLifecycleBusy(true)
+    try {
+      await action()
+    } finally {
+      setLifecycleBusy(false)
+    }
+  }
 
   const segments = keepSegments(project.recording.durationMs, project.cuts)
   const outDuration = outputDuration(segments)
@@ -101,6 +113,14 @@ export function Editor(): JSX.Element {
           <ArrowLeft size={16} /> {t('editor.back')}
         </button>
         <input className="name-input" value={project.name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label={t('editor.projectName')} />
+        <div className="editor-top-file">
+          <button className="btn btn-ghost btn-small danger" onClick={() => void runLifecycle(() => deleteOpenProject(project))} disabled={lifecycleBusy} title={t('editor.deleteTitle')}>
+            <Trash2 size={14} /> {t('common.delete')}
+          </button>
+          <button className="btn btn-ghost btn-small" onClick={() => void runLifecycle(() => recordProjectAgain(project))} disabled={lifecycleBusy} title={t('editor.recordAgainTitle')}>
+            <RotateCcw size={14} /> {t('editor.recordAgain')}
+          </button>
+        </div>
         <div className="editor-top-info muted">
           {t('editor.info', {
             w: project.recording.width,
