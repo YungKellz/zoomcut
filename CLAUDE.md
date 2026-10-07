@@ -11,7 +11,7 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 | `npm run dev` | dev app with hot reload; restart it after changes in `src/main` or `src/preload` |
 | `npm run typecheck` | main/preload/shared (`tsconfig.node.json`) and renderer (`tsconfig.json`) |
 | `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine, composition layout, GIF converter args, formatting helpers |
-| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing); needs a display, ~7 min |
+| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing), zoom parts (`zoom-parts.spec.ts`, synthetic), delete / record again / home list (`lifecycle.spec.ts`); needs a display, ~7 min |
 | `npm run dist` | installer + portable exe + `latest.yml` + `.blockmap` in `release/`; never publishes |
 
 - `ZOOMCUT_EXE=release/win-unpacked/ZoomCut.exe npm run e2e` runs the e2e tests against the packaged app.
@@ -40,14 +40,15 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   Releases), `ipc.ts` (all channels; `e2e:*` handlers exist only under `ZOOMCUT_E2E=1`).
 - `src/preload/index.ts` – exposes `window.zc`, typed by `src/shared/api.ts`.
 - `src/shared` – data model (`types.ts`), defaults, the API contract, `audio.ts` helpers and the pure scenario
-  engine `scenario.ts` (event grouping, retiming, path synthesis, replay compilation). Renderer and main only share these.
+  engine `scenario.ts` (event grouping, timing model and edits, v1 → v2 migration, replay compilation). Renderer and main only share these.
 - `src/renderer/src` – React app: `screens/` (Home, Editor, Composition, RecorderBar, ScenarioReview, ReplayOverlay, E2eTarget),
   `editor/` (Preview, Timeline, Inspector, ExportDialog, AudioPlayer), `engine/` (timeline math, cursor, camera,
   `compose.ts` = the single frame compositor used by both preview and export), `export/` (Mediabunny/WebCodecs or
   raw RGBA → ffv1 path, size estimate, `audioPlan.ts`), `audio/` (`clipLabel.tsx` = the one place that names and
   icons audio clips, `peaks.ts` = waveform peaks decoded through `zc-media://`), `editor/AudioWaveform.tsx`,
-  `scenario/` (review-screen helpers), `composition/` (`layout.ts` = pure composition timeline/frame/audio math,
-  `CompositionPlayer.tsx`), `converter/GifConverterDialog.tsx`, `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`), `store.ts`
+  `scenario/` (review-screen helpers, `fields.tsx` seconds inputs + presets), `home/items.ts` (the unified home list),
+  `composition/` (`layout.ts` = pure composition timeline/frame/audio math,
+  `CompositionPlayer.tsx`), `converter/GifConverterDialog.tsx`, `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`, `lifecycle.ts` = delete / record again), `store.ts`
   (zustand, lazy undo checkpoints), `i18n/`, `components/`, `hooks/`.
 - `tests/e2e` – Playwright specs and `adv-helpers.ts`; `scripts/` – icon rendering and release notes;
   `.github/workflows` – `ci.yml` (typecheck, tests, build) and `release.yml` (tag `v*` → GitHub release).
@@ -78,11 +79,23 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   into the composition frame over `background`. Export goes through the same `encodeParts` path as a project
   (`runCompositionExport`), audio plans are concatenated with shifted `outAt`. Editing a recording from a
   composition keeps `state.composition` set, so the editor's Back returns to the composition screen.
-- Scenarios: coordinates are DIP screen coordinates of the virtual desktop (`screen.dipToScreenPoint` converts for
-  SendInput), times are ms from the capture start; the first action is normalized to 1 s. `src/shared/scenario.ts`
-  is the only place that groups raw hook events, retimes/deletes actions and compiles replay steps. Key text is
-  resolved for the foreground window's keyboard layout, so typed text is replayed as Unicode regardless of layout.
-  The replay helper must always release every key and button (abort file → exit, `-Release` after a hard kill).
+- Scenarios (`version: 2`): coordinates are DIP screen coordinates of the virtual desktop (`screen.dipToScreenPoint`
+  converts for SendInput). Replay timing is purely sequential: action 0 starts at 0, every action takes its
+  `durationMs` (per-kind default and floor; pointer actions travel there first, then act; `type`/`key` never move the
+  cursor) and is followed by its `pauseMs` (default 1.5 s, the last one too); `at` is only the recorded time, never
+  used for timing. Always read them through `actionDurationMs` / `actionPauseMs` / `scenarioSchedule`. v1 files are
+  migrated to the defaults by `migrateScenario` (load, list and save). `src/shared/scenario.ts` is the only place that
+  groups raw hook events, edits durations/pauses/text, deletes actions and compiles replay steps (ending with an `end`
+  step, so the helper waits out the final pause). Key text is resolved for the foreground window's keyboard layout,
+  so typed text is replayed as Unicode regardless of layout. The replay helper releases exactly what it pressed
+  (abort file → exit); `-Release` after a hard kill releases only what `GetAsyncKeyState` reports as down – never send
+  an up event for something that is not down (a lone right-button-up opens a context menu).
+- Projects carry `origin` (display, audio, scenario id) – what "Record again" repeats (`recording/lifecycle.ts`,
+  handed to the screen that owns the recorder through `store.pendingStart`) and how Home nests recordings under their
+  scenario (`home/items.ts`). Deleting a scenario keeps its recordings; project and scenario deletes run on the same
+  per-id queue as their autosaves.
+- Zoom parts: a `fixed` zoom can hold `parts` (further areas, each from its `start` boundary); the zoom's own
+  target/scale is area 0. `cameraAt` glides between areas (`engine/camera.ts`: `zoomAreas`, `normalizeZoomParts`).
 - Env vars: `ZOOMCUT_E2E=1` (no single-instance lock, updater never installs on quit), `ZOOMCUT_RECORDINGS_DIR`,
   `ZOOMCUT_SCENARIOS_DIR`, `ZOOMCUT_COMPOSITIONS_DIR`, `ZOOMCUT_EXE`, `ZOOMCUT_UPDATE_URL` (generic update feed: a folder with `latest.yml` +
   installer), `ZOOMCUT_UPDATE_CHECK=1` (keep the updater on under `ZOOMCUT_E2E`).

@@ -23,7 +23,8 @@ pick the file name and folder.
   background, alignment, fade/pop animation. Overlapping texts get their own lanes.
 - **Zoom**: segments from 1.2× to 5× with eased transitions. *Follow cursor* pans smoothly after the recorded
   mouse with a dead zone and smoothing; *Fixed* zooms into an area you place on the frame ("Pick area": drag and resize the
-  rectangle, then Apply). "Auto-zoom from clicks" builds zooms around click clusters.
+  rectangle, then Apply); a fixed zoom can have several parts, and the camera glides from one area to the next.
+  "Auto-zoom from clicks" builds zooms around click clusters.
 - **Blur**: hide passwords, e-mails or other private details with blurred or pixelated rectangles (`B` or the Blur
   button), each with its own start/end on the timeline. While a rectangle is edited the preview shows the whole
   cropped frame without zoom; in the video the area sticks to the picture and follows zooms.
@@ -42,6 +43,8 @@ pick the file name and folder.
 - **MP4 → GIF**: a separate converter on the home screen turns any video file (MP4, MOV, WebM, MKV, AVI) into a GIF
   with trim, width, frame rate and the same palette / dithering presets as the export.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
+  The home screen lists recordings and scenarios together, with each scenario's recordings nested under it; both
+  editors have Delete and "Record again" (same display, audio and scenario).
 - **Updates**: the installed app checks GitHub Releases on start and every six hours, downloads a new version in the
   background and offers "Restart and update"; the portable exe is updated by hand.
 - **Audio**: record the microphone and/or system audio along with the screen (each as its own track), record a
@@ -50,8 +53,9 @@ pick the file name and folder.
   sync offset and position, with a peak-level waveform on the selected clip; the MP4 export mixes everything into
   an AAC track (GIF stays silent).
 - **Scenario recorder**: "Record scenario" captures your clicks, drags, scrolls, typed text and shortcuts in your
-  product with the mouse path, timings and a screenshot of every clicked spot. Review the actions (delete, retime,
-  10-minute limit), then "Record & replay": the app records the screen while it replays the input for you, with
+  product with a screenshot of every clicked spot. Review the actions: every action has its own duration (how long
+  the mouse takes to get there; 1 / 1.5 / 2 s presets, typing speed for text) and is followed by a pause (1.5 s by
+  default, one control sets all pauses), typed text can be edited, actions deleted, 10-minute limit. Then "Record & replay": the app records the screen while it replays the input for you, with
   click ripples and a progress HUD drawn over the screen (not in the recording). Esc aborts, Stop keeps the recording,
   and the result opens in the editor. Scenarios are saved for another take after you fix your product.
 
