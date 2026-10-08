@@ -204,11 +204,21 @@ export interface WindowRect {
   y: number
   w: number
   h: number
+  /** exe name of the window's process, lower case (e.g. 'chrome.exe'); since 0.4.1 */
+  app?: string
+  /** browsers only: the page itself, without the tab strip and the address bar, normalized to the
+   * display like the window (and inside it); since 0.4.1 */
+  content?: { x: number; y: number; w: number; h: number }
+  /** share of the window that was really visible, not covered by other windows. Set by snapshots
+   * since 0.4.1, which already leave out windows hidden behind others (with every window on screen as
+   * an occluder); older snapshots list every window and are filtered in the editor instead. */
+  visible?: number
 }
 
 export interface WindowSnapshot {
   /** ms since recording start (0 = at start, duration = at the end) */
   t: number
+  /** topmost first */
   windows: WindowRect[]
 }
 

@@ -33,7 +33,8 @@ import { useProject, useStore } from '../store'
 import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
 import { findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
-import { uniqueWindows, windowToCrop } from '../engine/windows'
+import { Globe, PanelTopDashed } from 'lucide-react'
+import { pageToCrop, sameCrop, uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
 import { clipIcon, clipLabel } from '../audio/clipLabel'
@@ -190,26 +191,28 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
   const duration = project.recording.durationMs
   const crop = project.crop
   const isCropped = crop.x > 0 || crop.y > 0 || crop.w < 1 || crop.h < 1
+  // only the windows that were really visible, front to back (see engine/windows.ts)
   const windows = uniqueWindows(project.windows)
 
   return (
-    <>
-      <h3>{t('clip.trimCut')}</h3>
-      <div className="btn-row">
-        <button className="btn btn-small" onClick={() => addCut(0, playheadMs)} disabled={playheadMs < 50}>
-          {t('clip.trimStart')}
+    <div className="clip-panel">
+      <Section title={t('clip.trimCut')} icon={<Scissors size={13} />}>
+        <div className="btn-row">
+          <button className="btn btn-small" onClick={() => addCut(0, playheadMs)} disabled={playheadMs < 50}>
+            {t('clip.trimStart')}
+          </button>
+          <button className="btn btn-small" onClick={() => addCut(playheadMs, duration)} disabled={playheadMs > duration - 50}>
+            {t('clip.trimEnd')}
+          </button>
+        </div>
+        <button className="btn btn-small" disabled={!range} onClick={() => range && addCut(range.start, range.end)}>
+          <Scissors size={14} /> {t('clip.cutRange')}
         </button>
-        <button className="btn btn-small" onClick={() => addCut(playheadMs, duration)} disabled={playheadMs > duration - 50}>
-          {t('clip.trimEnd')}
-        </button>
-      </div>
-      <button className="btn btn-small" disabled={!range} onClick={() => range && addCut(range.start, range.end)}>
-        <Scissors size={14} /> {t('clip.cutRange')}
-      </button>
-      <p className="muted small">{t('clip.help')}</p>
+        <p className="muted small">{t('clip.help')}</p>
+      </Section>
+
       {project.cuts.length > 0 && (
-        <>
-          <h3>{t('clip.removedPieces')}</h3>
+        <Section title={t('clip.removedPieces')} icon={<Undo2 size={13} />}>
           <ul className="list cuts-list">
             {project.cuts.map((c) => (
               <li key={c.id} className="list-item">
@@ -222,46 +225,60 @@ function ClipPanel({ t }: PanelProps): JSX.Element {
               </li>
             ))}
           </ul>
-        </>
+        </Section>
       )}
 
-      <h3>{t('clip.crop')}</h3>
-      <div className="btn-row">
-        <button className={'btn btn-small' + (mode === 'crop' ? ' active' : '')} onClick={() => setMode(mode === 'crop' ? 'normal' : 'crop')}>
-          <Crop size={14} /> {mode === 'crop' ? t('common.done') : t('clip.editCrop')}
-        </button>
-        <button className="btn btn-small" disabled={!isCropped} onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>
-          {t('common.reset')}
-        </button>
-      </div>
-      <p className="muted small">
-        {isCropped
-          ? t('clip.cropInfo', {
-              w: Math.round(crop.w * project.recording.width),
-              h: Math.round(crop.h * project.recording.height),
-              x: Math.round(crop.x * project.recording.width),
-              y: Math.round(crop.y * project.recording.height)
-            })
-          : t('clip.cropFull')}
-      </p>
-      <h3>{t('clip.windows')}</h3>
-      {windows.length === 0 ? (
-        <p className="muted small">{t('clip.noWindows')}</p>
-      ) : (
-        <>
-          <ul className="list windows-list">
-            {windows.map((w, i) => (
-              <li key={i} className="list-item">
-                <button className="list-main" onClick={() => setCrop(windowToCrop(w))} title={w.title}>
-                  <AppWindow size={13} /> {w.title}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="muted small">{t('clip.windowsHelp')}</p>
-        </>
-      )}
-    </>
+      <Section title={t('clip.crop')} icon={<Crop size={13} />}>
+        <div className="btn-row">
+          <button className={'btn btn-small' + (mode === 'crop' ? ' active' : '')} onClick={() => setMode(mode === 'crop' ? 'normal' : 'crop')}>
+            <Crop size={14} /> {mode === 'crop' ? t('common.done') : t('clip.editCrop')}
+          </button>
+          <button className="btn btn-small" disabled={!isCropped} onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>
+            {t('common.reset')}
+          </button>
+        </div>
+        <p className="muted small">
+          {isCropped
+            ? t('clip.cropInfo', {
+                w: Math.round(crop.w * project.recording.width),
+                h: Math.round(crop.h * project.recording.height),
+                x: Math.round(crop.x * project.recording.width),
+                y: Math.round(crop.y * project.recording.height)
+              })
+            : t('clip.cropFull')}
+        </p>
+      </Section>
+
+      <Section title={t('clip.windows')} icon={<AppWindow size={13} />}>
+        {windows.length === 0 ? (
+          <p className="muted small">{t('clip.noWindows')}</p>
+        ) : (
+          <>
+            <ul className="list windows-list">
+              {windows.map((w, i) => {
+                const page = pageToCrop(w)
+                const onWindow = sameCrop(crop, windowToCrop(w))
+                const onPage = page !== null && sameCrop(crop, page)
+                return (
+                  <li key={i} className={'list-item' + (onWindow || onPage ? ' active' : '')} data-browser={page ? '' : undefined}>
+                    <button className="list-main" onClick={() => setCrop(windowToCrop(w))} title={`${w.title}\n${t('clip.cropToWindow')}`}>
+                      {page ? <Globe size={13} /> : <AppWindow size={13} />}
+                      <span className="window-title">{w.title}</span>
+                    </button>
+                    {page && (
+                      <button className={'btn btn-small window-page' + (onPage ? ' active' : '')} onClick={() => setCrop(page)} title={t('clip.pageOnlyHint')}>
+                        <PanelTopDashed size={13} /> {t('clip.pageOnly')}
+                      </button>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+            <p className="muted small">{t('clip.windowsHelp')}</p>
+          </>
+        )}
+      </Section>
+    </div>
   )
 }
 
