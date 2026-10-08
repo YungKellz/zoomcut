@@ -97,7 +97,9 @@ export function CompositionPlayer({ layout, frame, background }: Props): JSX.Ele
     if (!video) return
     const tSrc = outToSrc(Math.min(loc.localOut, span.entry.outMs - 1), span.entry.segments)
     video.currentTime = tSrc / 1000
-    if (playingRef.current) void video.play().catch(() => undefined)
+    // a file shorter than its recording's stored duration ends here: play() on an ended video would restart it
+    const atEnd = tSrc >= video.duration * 1000 - 1
+    if (playingRef.current && !atEnd) void video.play().catch(() => undefined)
   }, [])
 
   const togglePlay = (): void => {
@@ -223,7 +225,7 @@ export function CompositionPlayer({ layout, frame, background }: Props): JSX.Ele
         }
         const fileTimeS = Math.max(0, info.fileTime / 1000)
         if (Math.abs(el.currentTime - fileTimeS) > DRIFT_THRESHOLD_S) el.currentTime = fileTimeS
-        if (el.paused) void el.play().catch(() => undefined)
+        if (el.paused && !el.ended) void el.play().catch(() => undefined)
       }
     }
     const timer = window.setInterval(sync, 100)

@@ -88,6 +88,8 @@ export const ru: Record<TKey, string> = {
   'preview.goStart': 'В начало (Home)',
   'preview.playFromStart': 'Воспроизвести с начала',
   'preview.playPause': 'Воспроизведение / пауза (Пробел)',
+  'preview.stepBack': 'Кадр назад (←)',
+  'preview.stepForward': 'Кадр вперёд (→)',
   'preview.sourceTime': 'исходник {time}',
   'preview.pickHint': 'Переместите и растяните прямоугольник, затем нажмите «Применить» · Enter применяет, Esc отменяет',
   'preview.cropWindowHint': 'Кликните по контуру окна, чтобы кадрировать по нему ·',

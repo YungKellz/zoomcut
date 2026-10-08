@@ -16,7 +16,7 @@ import type {
 } from '@shared/types'
 import { BLUR_DEFAULTS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
-import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts } from './engine/timeline'
+import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts, playStartTime, stepFrames } from './engine/timeline'
 import {
   findZoom,
   insertZoomPart,
@@ -108,6 +108,8 @@ export interface EditorState {
   setPlaying(playing: boolean): void
   togglePlay(): void
   playFromStart(): void
+  /** one frame back (-1) or forward (1) along the output timeline; stops playback first */
+  stepFrame(direction: 1 | -1): void
   select(selection: Selection): void
   setRange(range: RangeSelection | null): void
   setMode(mode: EditorMode): void
@@ -232,12 +234,28 @@ export const useStore = create<EditorState>((set, get) => ({
     set(seek ? { playheadMs: clamped, seekSeq: get().seekSeq + 1 } : { playheadMs: clamped })
   },
   setPlaying: (playing) => set({ playing }),
-  togglePlay: () => set({ playing: !get().playing }),
+  togglePlay: () => {
+    const { playing, playheadMs, project: p } = get()
+    if (playing || !p) {
+      set({ playing: !playing })
+      return
+    }
+    // from the end (or from inside a cut) playback starts at the first frame that is left to play
+    const start = playStartTime(playheadMs, keepSegments(p.recording.durationMs, p.cuts))
+    set(start === playheadMs ? { playing: true } : { playing: true, playheadMs: start, seekSeq: get().seekSeq + 1 })
+  },
   playFromStart: () => {
     const p = get().project
     if (!p) return
     const start = firstKeptTime(keepSegments(p.recording.durationMs, p.cuts))
     set({ playheadMs: start, seekSeq: get().seekSeq + 1, playing: true, mode: 'normal' })
+  },
+  stepFrame: (direction) => {
+    const p = get().project
+    if (!p) return
+    const frameMs = 1000 / (p.recording.fps || 30)
+    const playheadMs = stepFrames(get().playheadMs, direction, frameMs, keepSegments(p.recording.durationMs, p.cuts))
+    set({ playing: false, playheadMs, seekSeq: get().seekSeq + 1 })
   },
   select: (selection) =>
     set({

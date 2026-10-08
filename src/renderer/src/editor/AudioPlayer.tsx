@@ -74,7 +74,8 @@ export function AudioPlayer(): JSX.Element {
       }
       const fileTimeS = Math.max(0, info.fileTime / 1000)
       if (Math.abs(el.currentTime - fileTimeS) > DRIFT_THRESHOLD_S) el.currentTime = fileTimeS
-      if (el.paused) void el.play().catch(() => undefined)
+      // a file that ends before its stored duration stays silent: play() on an ended element starts it over
+      if (el.paused && !el.ended) void el.play().catch(() => undefined)
     }
   }
 

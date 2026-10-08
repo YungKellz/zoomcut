@@ -1007,7 +1007,8 @@ input.name-input:focus {
 }
 
 .tab {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1021,9 +1022,21 @@ input.name-input:focus {
   font-size: 12px;
 }
 
+/* only the open tab shows its name; the others are icons that share what is left of the bar */
 .tab.active {
+  flex: none;
+  padding: 9px 12px;
+  white-space: nowrap;
   color: var(--text);
   border-bottom-color: var(--accent);
+}
+
+.tab svg {
+  flex: none;
+}
+
+.tab:hover:not(.active) {
+  color: var(--text);
 }
 
 .panel {
@@ -2729,6 +2742,35 @@ input.scenario-pause-input {
 
 /* ---------- 0.4.1 track C: editor top bar, tabs, playback ---------- */
 
+/* thin divider inside a row of buttons: editor top bar (Undo Redo | Record again Delete) and the player controls */
+.editor-top-sep,
+.transport-sep {
+  align-self: center;
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+.editor-top-sep {
+  margin: 0 2px;
+}
+
+/* go to start, play from start | previous frame, play / pause, next frame */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.transport .btn {
+  padding: 7px 9px;
+}
+
+.transport-sep {
+  margin: 0 6px;
+}
 
 /* ---------- 0.4.1 track D: zoom area editing, inspector sections ---------- */
 

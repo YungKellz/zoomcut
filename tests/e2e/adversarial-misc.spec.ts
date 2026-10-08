@@ -52,7 +52,7 @@ async function reset(): Promise<void> {
   await h.win.click('.project-open')
   await h.win.waitForSelector('.editor')
   await h.win.waitForSelector('.preview-loading', { state: 'detached', timeout: 60_000 })
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
 }
 
 async function playheadAt(seconds: number): Promise<void> {
@@ -93,7 +93,7 @@ test('clicking into the text field costs one undo step that does nothing', async
   await playheadAt(2)
   await h.win.keyboard.press('t')
   await expect(h.win.locator('.region.text')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   await h.win.click('.panel textarea') // focus only – no edit at all
   await h.win.click('.timeline-toolbar .timeline-hint')
   await expect(h.win.locator('.editor-top-actions .btn-ghost').first()).toBeEnabled()
@@ -137,7 +137,7 @@ test('auto-zoom without recorded clicks explains itself instead of doing nothing
   await reset()
   const p = readProject(h.recordingsDir, id) as unknown as { cursorData: { samples: unknown[]; clicks: unknown[]; source: string } }
   console.log('[cursor data] samples', p.cursorData.samples.length, 'clicks', p.cursorData.clicks.length, 'source', p.cursorData.source)
-  await h.win.click('.tab:has-text("Cursor")')
+  await h.win.click('.tab[data-tab="cursor"]')
   const recorded = (await h.win.textContent('.panel .muted.small')) ?? ''
   console.log('[cursor data] panel says:', recorded.trim())
 
@@ -146,7 +146,7 @@ test('auto-zoom without recorded clicks explains itself instead of doing nothing
     dialogText = d.message()
     void d.accept()
   })
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   await h.win.click('button:has-text("Auto-zoom from clicks")')
   await sleep(1200)
   console.log('[auto zoom] dialog:', JSON.stringify(dialogText), '| zooms:', await h.win.locator('.region.zoom').count())
@@ -174,7 +174,7 @@ test('the zoom scale slider covers its whole documented range', async () => {
   await reset()
   await playheadAt(2)
   await h.win.keyboard.press('z')
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   const slider = h.win.locator('.panel input[type="range"]').first()
   await slider.fill('5')
   await sleep(200)
@@ -198,7 +198,7 @@ test('a short text with a long fade is still readable', async () => {
   await reset()
   await playheadAt(2)
   await h.win.keyboard.press('t')
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   // 200 ms long text
   await h.win.fill('.panel input[type="number"] >> nth=0', '2')
   await h.win.fill('.panel input[type="number"] >> nth=1', '2.2')

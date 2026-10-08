@@ -83,7 +83,7 @@ test('Delete in the editor removes the recording and returns to Home', async () 
   await record(h, 3000)
   const [id] = projectIds(h.recordingsDir)
   expect(id).toBeTruthy()
-  await h.win.click('.editor-top-file button:has-text("Delete")')
+  await h.win.click('.editor-top-actions [data-action="delete"]')
   await acceptConfirm(h.win)
   await h.win.waitForSelector('.home')
   expect(projectIds(h.recordingsDir)).toEqual([])
@@ -98,7 +98,7 @@ test('Record again deletes the recording and starts a new one under the same con
   expect(before, 'a new recording must remember how it was made').toBeTruthy()
   expect(before!.scenarioId).toBeNull()
 
-  await h.win.click('.editor-top-file button:has-text("Record again")')
+  await h.win.click('.editor-top-actions [data-action="record-again"]')
   await acceptConfirm(h.win)
   const bar = await waitForBar(h.app)
   await bar.waitForSelector('.bar-dot-live', { timeout: 30_000 })
@@ -126,7 +126,7 @@ test('a recording of a deleted scenario is a standalone row, and Record again re
   await h.win.click('.project-open:has-text("Synthetic orphanRec")')
   await h.win.waitForSelector('.editor .preview-canvas')
   const before = dialogs.length
-  await h.win.click('.editor-top-file button:has-text("Record again")')
+  await h.win.click('.editor-top-actions [data-action="record-again"]')
   await expect.poll(() => dialogs.length).toBeGreaterThan(before)
   expect(dialogs[dialogs.length - 1]).toContain('no longer exists')
   // nothing was deleted and nothing started: still in the editor, folder intact

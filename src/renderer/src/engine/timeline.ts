@@ -97,6 +97,44 @@ export function firstKeptTime(segments: Segment[]): number {
   return segments.length ? segments[0].start : 0
 }
 
+/**
+ * Where playback starts when Play is pressed with the playhead at `tSrc`: the next kept frame,
+ * or the first kept frame when nothing is left to play (the end was reached) - Play at the end
+ * starts over, like in any other player. Less than a millisecond of footage counts as the end.
+ */
+export function playStartTime(tSrc: number, segments: Segment[]): number {
+  const t = resolvePlayableTime(tSrc, segments)
+  if (t === null || lastKeptTime(segments) - t < 1) return firstKeptTime(segments)
+  return t
+}
+
+/**
+ * `tSrc` moved by `frames` frames of `frameMs` along the OUTPUT timeline, so removed pieces are
+ * jumped over; the result stays inside the kept range (the start of the output .. its end).
+ */
+export function stepFrames(tSrc: number, frames: number, frameMs: number, segments: Segment[]): number {
+  // float noise must not decide on which side of a cut the step ends
+  const out = Math.round((srcToOut(tSrc, segments) + frames * frameMs) * 1e6) / 1e6
+  return outToSrc(Math.max(0, Math.min(outputDuration(segments), out)), segments)
+}
+
+/** A hair past the instant: see displayTime. */
+const SEEK_BIAS_MS = 0.05
+
+/**
+ * Source time the player is asked to show for a playhead at `tSrc`. A video shows the frame that
+ * starts at or before the time it is asked for, so the time lands 50 µs past the playhead: a
+ * frame step that float noise left a few nanoseconds short of the next frame would otherwise show
+ * the previous frame. The end of the output is the end of its last frame, not a frame of its own
+ * (the source there is a removed piece, or nothing at all), so it shows the last frame that is
+ * really part of the output.
+ */
+export function displayTime(tSrc: number, frameMs: number, segments: Segment[]): number {
+  const last = segments[segments.length - 1]
+  if (!last || tSrc < last.end) return tSrc + SEEK_BIAS_MS
+  return Math.max(last.start, last.end - frameMs / 2)
+}
+
 export interface TimedRegion {
   start: number
   end: number

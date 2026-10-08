@@ -60,7 +60,7 @@ async function reset(): Promise<void> {
   await h.win.click('.project-open')
   await h.win.waitForSelector('.editor')
   await h.win.waitForSelector('.preview-loading', { state: 'detached', timeout: 60_000 })
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
 }
 
 async function timecode(): Promise<string> {
@@ -236,7 +236,7 @@ test('a zoom added in a small gap overlaps its neighbour', async () => {
   // zoom A around 1 s, then pin its end to exactly 3.00 s
   await playheadAt(1)
   await h.win.keyboard.press('z')
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   await h.win.fill('.panel input[type="number"] >> nth=1', '3')
   await h.win.locator('.panel input[type="number"] >> nth=1').blur()
 
@@ -308,7 +308,7 @@ test('texts: empty, very long, multi-line and six overlapping lanes', async () =
   for (let i = 0; i < 6; i++) await h.win.keyboard.press('t')
   await expect(h.win.locator('.region.text')).toHaveCount(6)
   await expect(h.win.locator('.track-text .lane')).toHaveCount(6)
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   await h.win.screenshot({ path: join(h.shotsDir, 'text-lanes.png') })
 
   const lanes = await h.win.locator('.track-text .lane').evaluateAll((els) => els.map((e) => (e as HTMLElement).style.top))
@@ -362,7 +362,7 @@ test('undo / redo after a cut brings the zoom and the text back', async () => {
   await h.win.keyboard.press('Control+z')
   await expect(h.win.locator('.region.zoom')).toHaveCount(1)
   await expect(h.win.locator('.region.text')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(0)
   const undone = await flushedProject(h.recordingsDir, id)
   expect(undone.zooms[0].start).toBe(before.zooms[0].start)
@@ -372,7 +372,7 @@ test('undo / redo after a cut brings the zoom and the text back', async () => {
   await h.win.click('.timeline-toolbar .timeline-hint')
   await h.win.keyboard.press('Control+y')
   await expect(h.win.locator('.region.zoom')).toHaveCount(0)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(1)
   await h.win.click('.timeline-toolbar .timeline-hint')
   await h.win.keyboard.press('Control+z')
@@ -383,7 +383,7 @@ test('pick area mode: click, Escape, Enter and Apply', async () => {
   await reset()
   await playheadAt(2)
   await h.win.keyboard.press('z')
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   await h.win.click('.seg-btn:has-text("Fixed area")')
   const targetBefore = (await flushedProject(h.recordingsDir, id)).zooms[0].target
   console.log('[pick] target before', JSON.stringify(targetBefore))
@@ -433,7 +433,7 @@ test('shortcuts must not fire while typing in an input or a textarea', async () 
   // …and in the text textarea
   await playheadAt(2)
   await h.win.keyboard.press('t')
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   await h.win.fill('.panel textarea', '')
   await h.win.type('.panel textarea', 'zoom z text t cut c', { delay: 15 })
   await expect(h.win.locator('.region.zoom')).toHaveCount(0)
@@ -541,9 +541,9 @@ test('edits survive closing and reopening the project', async () => {
   await playheadAt(4)
   await h.win.keyboard.press('z')
   await h.win.keyboard.press('t')
-  await h.win.click('.tab:has-text("Style")')
+  await h.win.click('.tab[data-tab="style"]')
   await h.win.click('.swatch.checker')
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   const windowsCount = await h.win.locator('.windows-list .list-item').count()
   if (windowsCount > 0) await h.win.locator('.windows-list .list-main').first().click()
   const beforeClose = await flushedProject(h.recordingsDir, id)
@@ -557,9 +557,9 @@ test('edits survive closing and reopening the project', async () => {
 
   await expect(h.win.locator('.region.zoom')).toHaveCount(1)
   await expect(h.win.locator('.region.text')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Style")')
+  await h.win.click('.tab[data-tab="style"]')
   await expect(h.win.locator('.swatch.checker.active')).toHaveCount(1)
   const reopened = readProject(h.recordingsDir, id)
   expect(reopened.crop).toEqual(beforeClose.crop)
