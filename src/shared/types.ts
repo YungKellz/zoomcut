@@ -45,6 +45,28 @@ export interface CursorData {
   clicks: ClickEvent[]
   /** how the data was captured; polling has no click events */
   source: 'uiohook' | 'polling' | 'none'
+  /**
+   * Input tags for the timeline (shared/inputMarks.ts), same time base and stop cutoff as
+   * `clicks`. Missing in recordings made before 0.4.1 or without the global hook - the timeline
+   * then derives its click tags from `clicks`.
+   */
+  input?: InputMark[]
+}
+
+/** What an input tag on the timeline stands for. */
+export type InputMarkKind = 'click' | 'doubleClick' | 'rightClick' | 'middleClick' | 'drag' | 'scroll' | 'type' | 'key'
+
+/**
+ * One input tag on the timeline. Never carries typed text: a `type` mark is only its span, and
+ * `label` exists for `key` marks only - a combination or a special key ("Ctrl+C", "Enter").
+ */
+export interface InputMark {
+  /** source ms */
+  t: number
+  /** source ms where it ends; equal to `t` for an instant (the clicks) */
+  end: number
+  kind: InputMarkKind
+  label?: string
 }
 
 export interface RecordingInfo {
