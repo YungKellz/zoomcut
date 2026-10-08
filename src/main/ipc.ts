@@ -29,6 +29,7 @@ import {
 import { importAudioClip, importAudioFile, sweepAudioFiles, type AudioImportClipInput } from './media/audioImport'
 import { importMusicTrack, listMusic } from './audio/musicLibrary'
 import type { ScenarioCapture } from './scenario/capture'
+import type { ScenarioPreview } from './scenario/preview'
 import { ffmpegPath } from './media/ffmpeg'
 import {
   deleteProject,
@@ -48,6 +49,7 @@ import { createE2eTargetWindow, getMainWindow } from './windows'
 interface Deps {
   recorder: RecordingController
   scenarioCapture: ScenarioCapture
+  scenarioPreview: ScenarioPreview
   exporter: ExportManager
   updater: Updater
   converter: GifConverter
@@ -61,7 +63,7 @@ function assertValidScenarioId(id: string): void {
   if (typeof id !== 'string' || !SCENARIO_ID_RE.test(id)) throw new Error('Invalid scenario id')
 }
 
-export function registerIpc({ recorder, scenarioCapture, exporter, updater, converter }: Deps): void {
+export function registerIpc({ recorder, scenarioCapture, scenarioPreview, exporter, updater, converter }: Deps): void {
   // ---- app ----
   ipcMain.handle('app:info', (): AppInfo => ({
     version: app.getVersion(),
@@ -148,6 +150,12 @@ export function registerIpc({ recorder, scenarioCapture, exporter, updater, conv
     assertValidScenarioId(id)
     return deleteScenario(id)
   })
+  // the dry run: the id also names the replay's temp files, so it is checked like a save's
+  ipcMain.handle('scenario:preview', (_e, scenario: Scenario) => {
+    assertValidScenarioId(scenario?.id)
+    return scenarioPreview.start(scenario)
+  })
+  ipcMain.handle('scenario:preview-abort', () => scenarioPreview.abort())
 
   // ---- composition ----
   ipcMain.handle('compositions:list', () => listCompositions())

@@ -107,15 +107,15 @@ export async function recordProjectAgain(project: Project, anchor?: Element | nu
   }
 }
 
-/** Scenario review header, Delete: removes the scenario (its recordings stay) and returns to Home. */
+/** Scenario review footer, Delete: removes the scenario (its recordings stay) and returns to Home. */
 export async function deleteOpenScenario(scenario: Scenario, anchor?: Element | null): Promise<void> {
   if (!(await confirmDeleteScenario(scenario.id, scenario.name, anchor))) return
   useStore.getState().closeScenario()
 }
 
-/** Scenario review header, Record again: replaces the scenario by a freshly captured one on the same display. */
+/** Scenario review footer, Record scenario again: replaces the scenario by a freshly captured one on the same display. */
 export async function recaptureScenario(scenario: Scenario, anchor?: Element | null): Promise<void> {
-  if (!(await confirmAt(anchor, t('editor.recaptureConfirm'), { confirmLabel: t('editor.recordAgain') }))) return
+  if (!(await confirmAt(anchor, t('editor.recaptureConfirm'), { confirmLabel: t('scenario.recordScenarioAgain') }))) return
   try {
     await window.zc.scenario.remove(scenario.id)
   } catch (err) {

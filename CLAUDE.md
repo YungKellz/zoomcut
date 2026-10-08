@@ -32,7 +32,10 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   see Gotchas), `audio/musicLibrary.ts` (the bundled CC0 tracks in `resources/music`, copied into the installer
   as `extraResources`), `psHelper.ts` (writes/spawns the PowerShell helpers), `scenario/` (input capture through the
   shared uiohook in `hook.ts`, key-text resolver and SendInput replay helpers as PowerShell scripts in
-  `inputHelper.ts`, `capture.ts`, `replay.ts`, scenario storage under `userData/scenarios/<id>/`),
+  `inputHelper.ts`, `capture.ts`, `replay.ts`, `preview.ts` = the "Preview" dry run (a `ReplaySession` without
+  `RecordingController`, mutually exclusive with recording and capture through the busy checks wired in `index.ts`;
+  `scenario:preview` / `scenario:preview-abort` / `scenario:preview-state`), scenario storage under
+  `userData/scenarios/<id>/`),
   `composition/storage.ts` (compositions as `<id>.json` in `userData/compositions`), `media/gifConvert.ts` (the
   standalone MP4 → GIF converter: file picker or a dropped path (`probe`, validated by `media/videoFile.ts`) +
   `encodeGif` with an fps/scale prefilter and a trim; `windows.ts` also blocks the main window from navigating to a
@@ -93,7 +96,10 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   step, so the helper waits out the final pause). Key text is resolved for the foreground window's keyboard layout,
   so typed text is replayed as Unicode regardless of layout. The replay helper releases exactly what it pressed
   (abort file → exit); `-Release` after a hard kill releases only what `GetAsyncKeyState` reports as down – never send
-  an up event for something that is not down (a lone right-button-up opens a context menu).
+  an up event for something that is not down (a lone right-button-up opens a context menu). A click action with
+  `hoverOnly: true` ("Position only, no click") only brings the cursor there: `compileScenario` travels and presses
+  nothing (no modifiers either), 150 ms floor; only a real `true` on a click kind survives `migrateScenario`, and it is
+  set through `setActionHoverOnly`. A preview waits for the overlay page (`overlay:ready`) before its schedule starts.
 - Projects carry `origin` (display, audio, scenario id) – what "Record again" repeats (`recording/lifecycle.ts`,
   handed to the screen that owns the recorder through `store.pendingStart`) and how Home nests recordings under their
   scenario (`home/items.ts`). Deleting a scenario keeps its recordings; project and scenario deletes run on the same

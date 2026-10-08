@@ -55,7 +55,9 @@ pick the file name and folder.
 - **Scenario recorder**: "Record scenario" captures your clicks, drags, scrolls, typed text and shortcuts in your
   product with a screenshot of every clicked spot. Review the actions: every action has its own duration (how long
   the mouse takes to get there; 1 / 1.5 / 2 s presets, typing speed for text) and is followed by a pause (1.5 s by
-  default, one control sets all pauses), typed text can be edited, actions deleted, 10-minute limit. Then "Record & replay": the app records the screen while it replays the input for you, with
+  default, one control sets all pauses), typed text can be edited, actions deleted, a click can become "position
+  only, no click" (the cursor just moves there, for hover effects), 10-minute limit. "Preview" runs it on screen
+  without recording anything; "Record video from scenario" records the screen while it replays the input for you, with
   click ripples and a progress HUD drawn over the screen (not in the recording). Esc aborts, Stop keeps the recording,
   and the result opens in the editor. Scenarios are saved for another take after you fix your product.
 
@@ -153,8 +155,9 @@ for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CH
    Вкладка **Аудио**: клипы микрофона / системного звука (флажки на главном экране), запись голоса за кадром,
    музыкальные подложки и свои файлы; всё это микшируется в MP4.
    **Записать сценарий** на главном экране: покликайте по своему продукту, остановите панелью – откроется экран
-   со списком действий и таймлайном (удаление, тайминги, лимит 10 минут); «Записать и воспроизвести» запишет
-   экран, пока приложение само повторит действия (Esc прерывает, Стоп сохраняет запись).
+   со списком действий и таймлайном (удаление, тайминги, «Положение без клика» для наведения, лимит 10 минут);
+   «Предпросмотр» прогонит сценарий на экране без записи, «Записать видео по сценарию» запишет экран, пока
+   приложение само повторит действия (Esc прерывает, Стоп сохраняет запись).
    `B` или кнопка **Размытие** добавляет прямоугольник размытия/пикселизации: пока он редактируется, превью
    показывает весь кадр кропа без зума; в видео область привязана к картинке и следует за зумом.
    **Композиции** на главном экране склеивают несколько записей (каждую с её текущей обработкой) в одно видео.

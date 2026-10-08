@@ -154,12 +154,32 @@ test('a scenario block nests its recordings and deleting the scenario keeps them
   expect(existsSync(join(h.recordingsDir, 'childRec', 'project.json'))).toBe(true)
 })
 
+test('Delete in the scenario review footer removes the scenario and returns to Home', async () => {
+  makeScenario('synthScenario3', Date.now() + 3500)
+  await reloadHome()
+  await h.win.click('.scenario-open:has-text("Synthetic synthScenario3")')
+  await h.win.waitForSelector('.scenario-review')
+  // the footer: Record video from scenario, Preview ... Record scenario again, Delete
+  await expect(h.win.locator('.scenario-footer .btn-replay')).toHaveText(/Record video from scenario/)
+  await expect(h.win.locator('.scenario-footer .btn-preview')).toHaveText(/Preview/)
+  const labels = await h.win.locator('.scenario-footer-row button').allTextContents()
+  expect(labels.map((l) => l.trim())).toEqual(['Record video from scenario', 'Preview', 'Record scenario again', 'Delete'])
+  await h.win.click('.scenario-footer .scenario-review-delete')
+  await acceptConfirm(h.win)
+  await h.win.waitForSelector('.home')
+  expect(existsSync(join(h.scenariosDir, 'synthScenario3'))).toBe(false)
+  await expect(h.win.locator('.scenario-block:has-text("synthScenario3")')).toHaveCount(0)
+})
+
 test('Record again in the scenario review replaces the scenario and starts a new capture', async () => {
   makeScenario('synthScenario2', Date.now() + 4000)
   await reloadHome()
   await h.win.click('.scenario-open:has-text("Synthetic synthScenario2")')
   await h.win.waitForSelector('.scenario-review')
-  await h.win.click('.editor-top-file button:has-text("Record again")')
+  // Record scenario again / Delete live in the footer, next to Record video from scenario
+  await expect(h.win.locator('.scenario-header button')).toHaveCount(1) // only Back is left up there
+  await expect(h.win.locator('.scenario-footer .scenario-review-delete')).toHaveText(/Delete/)
+  await h.win.click('.scenario-footer .scenario-recapture:has-text("Record scenario again")')
   await acceptConfirm(h.win)
   // Home takes the queued capture over: the bar counts down for a scenario capture
   const bar = await waitForBar(h.app)
