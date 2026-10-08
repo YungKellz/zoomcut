@@ -452,5 +452,15 @@ export const ru: Record<TKey, string> = {
   'converter.start': 'Начало, с',
   'converter.end': 'Конец, с',
   'converter.output': 'Результат: {w}×{h} · {duration} · кадров: {frames} при {fps} fps',
-  'converter.run': 'Сделать GIF'
+  'converter.run': 'Сделать GIF',
+  'converter.dropTitle': 'Перетащите видеофайл сюда',
+  'converter.chooseFile': 'Выбрать файл',
+  'converter.dropRelease': 'Отпустите файл, чтобы сделать из него GIF',
+  'converter.dropNotVideo': 'Это не видеофайл. Подойдут MP4, MOV, WebM, MKV и AVI.',
+  'converter.dropNoPath': 'Не удалось определить путь к файлу.',
+  'converter.dropNotFound': 'Этого файла больше нет.',
+  'converter.dropNotFile': 'Это папка, а не видеофайл.',
+  'converter.dropUnreadable': 'В этом файле нет видео, или он повреждён.',
+  'converter.dropFailed': 'Не удалось открыть файл: {error}',
+  'converter.probing': 'Читаем файл…'
 }

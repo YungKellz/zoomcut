@@ -465,7 +465,17 @@ export const en = {
   'converter.start': 'Start, s',
   'converter.end': 'End, s',
   'converter.output': 'Output: {w}×{h} · {duration} · {frames} frames at {fps} fps',
-  'converter.run': 'Convert to GIF'
+  'converter.run': 'Convert to GIF',
+  'converter.dropTitle': 'Drop a video file here',
+  'converter.chooseFile': 'Choose file',
+  'converter.dropRelease': 'Drop the file to turn it into a GIF',
+  'converter.dropNotVideo': 'That is not a video file. MP4, MOV, WebM, MKV and AVI work.',
+  'converter.dropNoPath': 'Could not get the path of that file.',
+  'converter.dropNotFound': 'That file does not exist any more.',
+  'converter.dropNotFile': 'That is a folder, not a video file.',
+  'converter.dropUnreadable': 'There is no video in that file, or it is damaged.',
+  'converter.dropFailed': 'Could not open the file: {error}',
+  'converter.probing': 'Reading the file…'
 }
 
 export type TKey = keyof typeof en

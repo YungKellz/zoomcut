@@ -200,8 +200,8 @@ test('the MP4 → GIF converter trims, scales and writes a GIF', async () => {
   await app.evaluate(({ dialog }, p) => {
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [p] })) as typeof dialog.showOpenDialog
   }, input)
-  await win.click('button:has-text("MP4 → GIF")')
-  await win.click('.modal button:has-text("Choose a video")')
+  // the converter card on Home: its picker opens the dialog already filled with the chosen video
+  await win.click('.converter-card .converter-choose')
   await win.waitForSelector('.modal .row2')
   await win.fill('.modal .folder-row input', h.exportDir)
   await win.locator('.modal .field input').first().fill('converted')
@@ -216,5 +216,97 @@ test('the MP4 → GIF converter trims, scales and writes a GIF', async () => {
   expect(sizeOf(out)).toEqual({ w: 640, h: 360 })
   expect(Math.abs(durationOf(out) - 2000)).toBeLessThan(200)
   await win.click('.modal-foot .btn:has-text("Close")')
+  expect(h.errors).toEqual([])
+})
+
+test('a video dropped on Home opens the converter filled in; other drops are refused, none navigates', async () => {
+  const { win } = h
+  await win.waitForSelector('.home')
+  const input = join(h.recordingsDir, 'synthB', 'source.mp4')
+  const notes = join(h.exportDir, 'notes.txt')
+  writeFileSync(notes, 'not a video', 'utf8')
+
+  // a synthetic drag carrying a file: the window lights up while it is over, and every drop is cancelled
+  const fileDrag = (type: 'dragenter' | 'dragleave' | 'drop', name: string): Promise<boolean> =>
+    win.evaluate(
+      ({ type, name }) => {
+        const dt = new DataTransfer()
+        dt.items.add(new File(['x'], name))
+        const ev = new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true })
+        document.querySelector('.home')!.dispatchEvent(ev)
+        return ev.defaultPrevented
+      },
+      { type, name }
+    )
+  expect(await fileDrag('dragenter', 'clip.mp4')).toBe(true)
+  await expect(win.locator('.home-drop-overlay')).toHaveCount(1)
+  await expect(win.locator('.converter-card.drop-active')).toHaveCount(1)
+  await fileDrag('dragleave', 'clip.mp4')
+  await expect(win.locator('.home-drop-overlay')).toHaveCount(0)
+  await expect(win.locator('.converter-card.drop-active')).toHaveCount(0)
+
+  // not a video: a short message in the card, nothing opens
+  expect(await fileDrag('drop', 'notes.txt')).toBe(true)
+  await expect(win.locator('.converter-card .converter-error')).toContainText('not a video file')
+  await expect(win.locator('.modal')).toHaveCount(0)
+  await win.click('.converter-card .converter-error .btn')
+  await expect(win.locator('.converter-card .converter-error')).toHaveCount(0)
+  // a File that does not come from the disk has no path to convert
+  expect(await fileDrag('drop', 'clip.mp4')).toBe(true)
+  await expect(win.locator('.converter-card .converter-error')).toContainText('path')
+  await expect(win.locator('.modal')).toHaveCount(0)
+
+  // the main process validates what the renderer sends, whatever the extension check said
+  const probe = (p: string): Promise<string> =>
+    win.evaluate(
+      (path) =>
+        (window as unknown as { zc: { converter: { probe: (p: string) => Promise<unknown> } } }).zc.converter
+          .probe(path)
+          .then(() => 'ok', (e: Error) => e.message),
+      p
+    )
+  // (main only sends coded reasons; the renderer translates them)
+  expect(await probe(notes)).toContain('video-file:not-video')
+  expect(await probe(join(h.exportDir, 'missing.mp4'))).toContain('video-file:not-found')
+  expect(await probe('clip.mp4')).toContain('video-file:not-path')
+
+  // real drags carrying file paths (CDP): a text file is refused and the window stays on Home ...
+  const cdp = await win.context().newCDPSession(win)
+  const box = (await win.locator('.home-header').boundingBox())!
+  const [x, y] = [Math.round(box.x + 40), Math.round(box.y + 20)]
+  const drag = async (type: 'dragEnter' | 'dragOver' | 'drop', file: string): Promise<void> => {
+    await cdp.send('Input.dispatchDragEvent', { type, x, y, data: { items: [], files: [file], dragOperationsMask: 1 } })
+  }
+  await drag('dragEnter', notes)
+  await drag('dragOver', notes)
+  await drag('drop', notes)
+  await expect(win.locator('.converter-card .converter-error')).toContainText('not a video file')
+  await expect(win.locator('.home')).toHaveCount(1)
+  await expect(win.locator('.modal')).toHaveCount(0)
+  // ... a file with a video extension that ffmpeg cannot read gets a translated message, not the ffmpeg log ...
+  const broken = join(h.exportDir, 'broken.mp4')
+  writeFileSync(broken, 'definitely not a video', 'utf8')
+  await drag('dragEnter', broken)
+  await drag('dragOver', broken)
+  await drag('drop', broken)
+  await expect(win.locator('.converter-card .converter-error')).toContainText('There is no video in that file')
+  await expect(win.locator('.converter-card .converter-error')).not.toContainText('metadata')
+  await expect(win.locator('.modal')).toHaveCount(0)
+  await win.click('.converter-card .converter-error .btn')
+  // ... a video opens the converter with that file already loaded, anywhere on the window
+  await drag('dragEnter', input)
+  await drag('dragOver', input)
+  await expect(win.locator('.home-drop-overlay')).toHaveCount(1)
+  await drag('drop', input)
+  await win.waitForSelector('.modal .row2', { timeout: 30_000 })
+  await expect(win.locator('.modal .converter-file-info')).toContainText('source.mp4')
+  await expect(win.locator('.modal .converter-file-info')).toContainText('800×600')
+  await expect(win.locator('.home-drop-overlay')).toHaveCount(0)
+  await expect(win.locator('.modal .field input').first()).toHaveValue('source')
+  await expect.poll(() => win.locator('.modal .folder-row input').inputValue()).not.toBe('')
+  await expect(win.locator('.modal-foot .btn-primary')).toBeEnabled()
+  await win.click('.modal-foot .btn:has-text("Close")')
+  await expect(win.locator('.modal')).toHaveCount(0)
+  await cdp.detach()
   expect(h.errors).toEqual([])
 })
