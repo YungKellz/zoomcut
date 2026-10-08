@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   AppWindow,
   AudioLines,
-  Crosshair,
   Crop,
   Droplet,
   Loader2,
@@ -17,6 +16,7 @@ import {
   Scissors,
   Sparkles,
   Square,
+  SquareDashedMousePointer,
   Trash2,
   Type,
   Undo2,
@@ -40,6 +40,8 @@ import { clipIcon, clipLabel } from '../audio/clipLabel'
 import { formatElapsed, formatTimecode } from '../util/format'
 import { useT, type Translate, type TKey } from '../i18n'
 import { confirmAt } from '../components/ConfirmPopover'
+import { Section } from '../components/Section'
+import { PickOverlay } from './PickOverlay'
 
 type Tab = 'clip' | 'zoom' | 'text' | 'blur' | 'audio' | 'cursor' | 'style'
 
@@ -84,6 +86,7 @@ export function Inspector(): JSX.Element {
         {tab === 'cursor' && <CursorPanel t={t} />}
         {tab === 'style' && <StylePanel t={t} />}
       </div>
+      <PickOverlay />
     </aside>
   )
 }
@@ -104,6 +107,10 @@ function Field({ label, children, hint }: { label: string; children: React.React
   )
 }
 
+/** `439.203 ms` is never useful: milliseconds and pixels are shown as whole numbers. */
+const fmtMs = (v: number): string => `${Math.round(v)} ms`
+const fmtPx1080 = (v: number): string => `${Math.round(v)} px @1080p`
+
 function Slider(props: {
   label: string
   value: number
@@ -118,7 +125,7 @@ function Slider(props: {
   return (
     <label className="field">
       <span className="field-label">
-        {label} <span className="field-value">{format ? format(value) : value}</span>
+        {label} <span className="field-value">{format ? format(value) : Number(value.toFixed(2))}</span>
       </span>
       <input type="range" min={min} max={max} step={step} value={value} onPointerDown={onBegin} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
@@ -152,7 +159,8 @@ function TimeInput({ label, value, max, onChange }: { label: string; value: numb
         max={max / 1000}
         step={0.1}
         value={(value / 1000).toFixed(2)}
-        onChange={(e) => onChange(Math.max(0, Math.min(max, Number(e.target.value) * 1000)))}
+        // seconds -> whole ms (0.44 * 1000 is 440.00000000000006)
+        onChange={(e) => onChange(Math.round(Math.max(0, Math.min(max, Number(e.target.value) * 1000))))}
       />
     </Field>
   )
@@ -265,13 +273,13 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
   const duration = project.recording.durationMs
   const zoom: ZoomSegment | undefined = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const playheadMs = useStore((s) => s.playheadMs)
-  // the part last clicked in the list; only matters while the playhead is outside the zoom
+  // the step last clicked in the list; only matters while the playhead is outside the zoom
   const [clicked, setClicked] = useState<{ id: string; area: number } | null>(null)
   const areas = zoom ? zoomAreas(zoom) : []
   const playheadInZoom = zoom !== undefined && playheadMs >= zoom.start && playheadMs < zoom.end
-  // the scale slider and the single Pick button act on the part under the playhead
+  // the scale slider acts on the step under the playhead
   const activeArea = !zoom ? 0 : playheadInZoom ? zoomAreaIndexAt(zoom, playheadMs) : Math.min(clicked?.id === zoom.id ? clicked.area : 0, areas.length - 1)
-  const canAddPart = zoom !== undefined && insertZoomPart(zoom, playheadMs, '') !== null
+  const canAddPart = zoom !== undefined && insertZoomPart(zoom, Math.round(playheadMs), '') !== null
   const zoomAtPlayhead = findZoom(project.zooms, playheadMs)
   // no point in an "edit" button when the zoom under the playhead is the one being edited
   const showAddEdit = !(zoomAtPlayhead && zoom && zoomAtPlayhead.id === zoom.id)
@@ -300,93 +308,108 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
         </button>
       </div>
 
-      {zoom ? (
-        <>
-          <h3>{t('zoom.selected')}</h3>
-          <Slider
-            label={areas.length > 1 ? t('zoom.scalePart', { n: activeArea + 1 }) : t('zoom.scale')}
-            value={areas[activeArea].scale}
-            min={1.2}
-            max={5}
-            step={0.1}
-            format={(v) => `${v.toFixed(1)}×`}
-            onBegin={checkpoint}
-            onChange={(v) => (activeArea === 0 ? updateZoom(zoom.id, { scale: v }, false) : updateZoomPart(zoom.id, activeArea, { scale: v }, false))}
-          />
-          <Field label={t('zoom.focus')}>
-            <div className="seg">
-              <button className={'seg-btn' + (zoom.mode === 'follow' ? ' active' : '')} onClick={() => updateZoom(zoom.id, { mode: 'follow' })}>
-                {t('zoom.follow')}
-              </button>
-              <button className={'seg-btn' + (zoom.mode === 'fixed' ? ' active' : '')} onClick={() => updateZoom(zoom.id, { mode: 'fixed' })}>
-                {t('zoom.fixed')}
+      <Section title={t('zoom.selected')} className="zoom-selected">
+        {zoom ? (
+          <>
+            <Slider
+              label={areas.length > 1 ? t('zoom.scalePart', { n: activeArea + 1 }) : t('zoom.scale')}
+              value={areas[activeArea].scale}
+              min={1.2}
+              max={5}
+              step={0.1}
+              format={(v) => `${v.toFixed(1)}×`}
+              onBegin={checkpoint}
+              onChange={(v) => (activeArea === 0 ? updateZoom(zoom.id, { scale: v }, false) : updateZoomPart(zoom.id, activeArea, { scale: v }, false))}
+            />
+            <Field label={t('zoom.focus')}>
+              <div className="seg">
+                <button className={'seg-btn' + (zoom.mode === 'follow' ? ' active' : '')} onClick={() => updateZoom(zoom.id, { mode: 'follow' })}>
+                  {t('zoom.follow')}
+                </button>
+                <button className={'seg-btn' + (zoom.mode === 'fixed' ? ' active' : '')} onClick={() => updateZoom(zoom.id, { mode: 'fixed' })}>
+                  {t('zoom.fixed')}
+                </button>
+              </div>
+            </Field>
+            <div className="row2">
+              <TimeInput label={t('zoom.start')} value={zoom.start} max={duration} onChange={(v) => updateZoom(zoom.id, { start: Math.min(v, zoom.end - 200) })} />
+              <TimeInput label={t('zoom.end')} value={zoom.end} max={duration} onChange={(v) => updateZoom(zoom.id, { end: Math.max(v, zoom.start + 200) })} />
+            </div>
+            <details className="adv">
+              <summary>{t('common.advanced')}</summary>
+              <Slider label={t('zoom.easeIn')} value={zoom.easeInMs} min={0} max={1500} step={50} format={fmtMs} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeInMs: v }, false)} />
+              <Slider label={t('zoom.easeOut')} value={zoom.easeOutMs} min={0} max={1500} step={50} format={fmtMs} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeOutMs: v }, false)} />
+            </details>
+            <div className="btn-row">
+              <button className="btn btn-small danger" onClick={() => removeZoom(zoom.id)}>
+                <Trash2 size={14} /> {t('zoom.delete')}
               </button>
             </div>
-          </Field>
-          {zoom.mode === 'fixed' && (
-            <>
-              <button className="btn btn-small" onClick={() => beginPick(zoom.id, activeArea)}>
-                <Crosshair size={14} /> {areas.length > 1 ? t('zoom.pickPart', { n: activeArea + 1 }) : t('zoom.pick')}
-              </button>
-              <p className="muted small">{t('zoom.pickHelp')}</p>
-              <h3>{t('zoom.parts')}</h3>
-              <ul className="list zoom-parts">
-                {areas.map((a) => (
-                  <li key={a.index} className={'list-item' + (a.index === activeArea ? ' active' : '')}>
-                    <button
-                      className="list-main"
-                      onClick={() => {
-                        setClicked({ id: zoom.id, area: a.index })
-                        setPlayhead(zoomAreaFocusMs(zoom, a.index), true)
-                      }}
-                    >
-                      {t('zoom.partRow', { n: a.index + 1, start: formatTimecode(a.start), end: formatTimecode(a.end), scale: a.scale.toFixed(1) })}
-                    </button>
-                    <button className="btn btn-ghost" onClick={() => beginPick(zoom.id, a.index)} title={t('zoom.pickPart', { n: a.index + 1 })}>
-                      <Crosshair size={14} />
-                    </button>
-                    {a.index >= 1 && (
-                      <button className="btn btn-ghost danger" onClick={() => removeZoomPart(zoom.id, a.index)} title={t('zoom.removePart')}>
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <button
-                className="btn btn-small"
-                disabled={!canAddPart}
-                title={canAddPart ? t('zoom.addPartTitle') : t('zoom.addPartDisabled')}
-                onClick={() => {
-                  const index = addZoomPart(zoom.id, playheadMs)
-                  if (index !== null) beginPick(zoom.id, index)
-                }}
-              >
-                <Plus size={14} /> {t('zoom.addPart')}
-              </button>
-              <p className="muted small">{t('zoom.partsHelp')}</p>
-            </>
-          )}
-          <div className="row2">
-            <TimeInput label={t('zoom.start')} value={zoom.start} max={duration} onChange={(v) => updateZoom(zoom.id, { start: Math.min(v, zoom.end - 200) })} />
-            <TimeInput label={t('zoom.end')} value={zoom.end} max={duration} onChange={(v) => updateZoom(zoom.id, { end: Math.max(v, zoom.start + 200) })} />
+          </>
+        ) : (
+          <p className="muted small">{t('zoom.empty')}</p>
+        )}
+      </Section>
+
+      {zoom && zoom.mode === 'fixed' && (
+        <Section title={t('zoom.parts')} className="zoom-steps">
+          <ul className="list zoom-parts">
+            {areas.map((a) => (
+              <li key={a.index} className={'list-item' + (a.index === activeArea ? ' active' : '')}>
+                <button
+                  className="list-main"
+                  onClick={() => {
+                    setClicked({ id: zoom.id, area: a.index })
+                    setPlayhead(zoomAreaFocusMs(zoom, a.index), true)
+                  }}
+                >
+                  {t('zoom.partRow', { n: a.index + 1, start: formatTimecode(a.start), end: formatTimecode(a.end), scale: a.scale.toFixed(1) })}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  data-pick-area={a.index}
+                  onClick={() => beginPick(zoom.id, a.index)}
+                  title={areas.length > 1 ? t('zoom.pickPart', { n: a.index + 1 }) : t('zoom.pick')}
+                >
+                  <SquareDashedMousePointer size={14} />
+                </button>
+                {/* every step can go, the only one cannot: a zoom keeps at least one area */}
+                {areas.length > 1 && (
+                  <button
+                    className="btn btn-ghost danger"
+                    data-remove-area={a.index}
+                    onClick={() => {
+                      removeZoomPart(zoom.id, a.index)
+                      setClicked({ id: zoom.id, area: Math.max(0, a.index - 1) })
+                    }}
+                    title={t('zoom.removePart')}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="btn-row">
+            <button
+              className="btn btn-small"
+              disabled={!canAddPart}
+              title={canAddPart ? t('zoom.addPartTitle') : t('zoom.addPartDisabled')}
+              onClick={() => {
+                const index = addZoomPart(zoom.id, playheadMs)
+                if (index !== null) beginPick(zoom.id, index)
+              }}
+            >
+              <Plus size={14} /> {t('zoom.addPart')}
+            </button>
           </div>
-          <details className="adv">
-            <summary>{t('common.advanced')}</summary>
-            <Slider label={t('zoom.easeIn')} value={zoom.easeInMs} min={0} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeInMs: v }, false)} />
-            <Slider label={t('zoom.easeOut')} value={zoom.easeOutMs} min={0} max={1500} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateZoom(zoom.id, { easeOutMs: v }, false)} />
-          </details>
-          <button className="btn btn-small danger" onClick={() => removeZoom(zoom.id)}>
-            <Trash2 size={14} /> {t('zoom.delete')}
-          </button>
-        </>
-      ) : (
-        <p className="muted small">{t('zoom.empty')}</p>
+          <p className="muted small">{t('zoom.pickHelp')}</p>
+          <p className="muted small">{t('zoom.partsHelp')}</p>
+        </Section>
       )}
 
       {project.zooms.length > 0 && (
-        <>
-          <h3>{t('zoom.all')}</h3>
+        <Section title={t('zoom.all')} className="zoom-all">
           <ul className="list">
             {project.zooms.map((z) => (
               <li key={z.id} className={'list-item' + (zoom?.id === z.id ? ' active' : '')}>
@@ -405,7 +428,7 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
               </li>
             ))}
           </ul>
-        </>
+        </Section>
       )}
       <p className="muted small">{t('zoom.help')}</p>
     </>
@@ -429,54 +452,54 @@ function TextPanel({ t }: PanelProps): JSX.Element {
       <button className="btn btn-small" onClick={() => addText()}>
         <Type size={14} /> {t('text.add')}
       </button>
-      {text ? (
-        <>
-          <h3>{t('text.selected')}</h3>
-          <Field label={t('text.text')}>
-            <textarea rows={3} value={text.text} onFocus={checkpoint} onChange={(e) => updateText(text.id, { text: e.target.value }, false)} />
-          </Field>
-          <div className="row2">
-            <TimeInput label={t('zoom.start')} value={text.start} max={duration} onChange={(v) => updateText(text.id, { start: Math.min(v, text.end - 100) })} />
-            <TimeInput label={t('zoom.end')} value={text.end} max={duration} onChange={(v) => updateText(text.id, { end: Math.max(v, text.start + 100) })} />
-          </div>
-          <Slider label={t('text.size')} value={text.fontSize} min={0.02} max={0.14} step={0.005} format={(v) => `${Math.round(v * 1080)} px @1080p`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { fontSize: v }, false)} />
-          <div className="row2">
-            <ColorField label={t('text.color')} value={text.color} onChange={(v) => updateText(text.id, { color: v })} />
-            <ColorField label={t('text.background')} value={text.background} onChange={(v) => updateText(text.id, { background: v })} />
-          </div>
-          <Slider label={t('text.bgOpacity')} value={text.backgroundOpacity} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { backgroundOpacity: v }, false)} />
-          <Slider label={t('text.radius')} value={text.cornerRadius} min={0} max={40} step={1} format={(v) => `${v} px`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { cornerRadius: v }, false)} />
-          <div className="row2">
-            <Toggle label={t('text.bold')} value={text.bold} onChange={(v) => updateText(text.id, { bold: v })} />
-            <Field label={t('text.align')}>
-              <select value={text.align} onChange={(e) => updateText(text.id, { align: e.target.value as TextOverlay['align'] })}>
-                <option value="left">{t('text.align.left')}</option>
-                <option value="center">{t('text.align.center')}</option>
-                <option value="right">{t('text.align.right')}</option>
-              </select>
+      <Section title={t('text.selected')}>
+        {text ? (
+          <>
+            <Field label={t('text.text')}>
+              <textarea rows={3} value={text.text} onFocus={checkpoint} onChange={(e) => updateText(text.id, { text: e.target.value }, false)} />
             </Field>
-          </div>
-          <div className="row2">
-            <Field label={t('text.animation')}>
-              <select value={text.animation} onChange={(e) => updateText(text.id, { animation: e.target.value as TextOverlay['animation'] })}>
-                <option value="none">{t('text.anim.none')}</option>
-                <option value="fade">{t('text.anim.fade')}</option>
-                <option value="pop">{t('text.anim.pop')}</option>
-              </select>
-            </Field>
-            <Slider label={t('text.animTime')} value={text.animationMs} min={0} max={800} step={20} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { animationMs: v }, false)} />
-          </div>
-          <p className="muted small">{t('text.dragHint')}</p>
-          <button className="btn btn-small danger" onClick={() => removeText(text.id)}>
-            <Trash2 size={14} /> {t('text.delete')}
-          </button>
-        </>
-      ) : (
-        <p className="muted small">{t('text.empty')}</p>
-      )}
+            <div className="row2">
+              <TimeInput label={t('zoom.start')} value={text.start} max={duration} onChange={(v) => updateText(text.id, { start: Math.min(v, text.end - 100) })} />
+              <TimeInput label={t('zoom.end')} value={text.end} max={duration} onChange={(v) => updateText(text.id, { end: Math.max(v, text.start + 100) })} />
+            </div>
+            <Slider label={t('text.size')} value={text.fontSize} min={0.02} max={0.14} step={0.005} format={(v) => `${Math.round(v * 1080)} px @1080p`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { fontSize: v }, false)} />
+            <div className="row2">
+              <ColorField label={t('text.color')} value={text.color} onChange={(v) => updateText(text.id, { color: v })} />
+              <ColorField label={t('text.background')} value={text.background} onChange={(v) => updateText(text.id, { background: v })} />
+            </div>
+            <Slider label={t('text.bgOpacity')} value={text.backgroundOpacity} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { backgroundOpacity: v }, false)} />
+            <Slider label={t('text.radius')} value={text.cornerRadius} min={0} max={40} step={1} format={(v) => `${Math.round(v)} px`} onBegin={checkpoint} onChange={(v) => updateText(text.id, { cornerRadius: v }, false)} />
+            <div className="row2">
+              <Toggle label={t('text.bold')} value={text.bold} onChange={(v) => updateText(text.id, { bold: v })} />
+              <Field label={t('text.align')}>
+                <select value={text.align} onChange={(e) => updateText(text.id, { align: e.target.value as TextOverlay['align'] })}>
+                  <option value="left">{t('text.align.left')}</option>
+                  <option value="center">{t('text.align.center')}</option>
+                  <option value="right">{t('text.align.right')}</option>
+                </select>
+              </Field>
+            </div>
+            <div className="row2">
+              <Field label={t('text.animation')}>
+                <select value={text.animation} onChange={(e) => updateText(text.id, { animation: e.target.value as TextOverlay['animation'] })}>
+                  <option value="none">{t('text.anim.none')}</option>
+                  <option value="fade">{t('text.anim.fade')}</option>
+                  <option value="pop">{t('text.anim.pop')}</option>
+                </select>
+              </Field>
+              <Slider label={t('text.animTime')} value={text.animationMs} min={0} max={800} step={20} format={fmtMs} onBegin={checkpoint} onChange={(v) => updateText(text.id, { animationMs: v }, false)} />
+            </div>
+            <p className="muted small">{t('text.dragHint')}</p>
+            <button className="btn btn-small danger" onClick={() => removeText(text.id)}>
+              <Trash2 size={14} /> {t('text.delete')}
+            </button>
+          </>
+        ) : (
+          <p className="muted small">{t('text.empty')}</p>
+        )}
+      </Section>
       {project.texts.length > 0 && (
-        <>
-          <h3>{t('text.all')}</h3>
+        <Section title={t('text.all')}>
           <ul className="list">
             {project.texts.map((x) => (
               <li key={x.id} className={'list-item' + (text?.id === x.id ? ' active' : '')}>
@@ -495,7 +518,7 @@ function TextPanel({ t }: PanelProps): JSX.Element {
               </li>
             ))}
           </ul>
-        </>
+        </Section>
       )}
     </>
   )
@@ -522,54 +545,54 @@ function BlurPanel({ t }: PanelProps): JSX.Element {
       <button className="btn btn-small" onClick={() => addBlur()}>
         <Droplet size={14} /> {t('blur.add')}
       </button>
-      {blur ? (
-        <>
-          <h3>{t('blur.selected')}</h3>
-          <div className="btn-row">
-            <button className={'btn btn-small' + (editing ? ' active' : '')} onClick={() => (editing ? setMode('normal') : beginBlurEdit(blur.id))}>
-              <Crop size={14} /> {editing ? t('common.done') : t('blur.editArea')}
-            </button>
-          </div>
-          <Field label={t('blur.style')}>
-            <div className="seg">
-              <button className={'seg-btn' + (blur.style === 'blur' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'blur' })}>
-                {t('blur.style.blur')}
-              </button>
-              <button className={'seg-btn' + (blur.style === 'pixelate' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'pixelate' })}>
-                {t('blur.style.pixelate')}
+      <Section title={t('blur.selected')}>
+        {blur ? (
+          <>
+            <div className="btn-row">
+              <button className={'btn btn-small' + (editing ? ' active' : '')} onClick={() => (editing ? setMode('normal') : beginBlurEdit(blur.id))}>
+                <Crop size={14} /> {editing ? t('common.done') : t('blur.editArea')}
               </button>
             </div>
-          </Field>
-          <Slider
-            label={blur.style === 'pixelate' ? t('blur.blockSize') : t('blur.strength')}
-            value={blur.strength}
-            min={4}
-            max={80}
-            step={1}
-            format={(v) => `${v} px @1080p`}
-            onBegin={checkpoint}
-            onChange={(v) => updateBlur(blur.id, { strength: v }, false)}
-          />
-          <div className="row2">
-            <TimeInput label={t('zoom.start')} value={blur.start} max={duration} onChange={(v) => updateBlur(blur.id, { start: Math.min(v, blur.end - 100) })} />
-            <TimeInput label={t('zoom.end')} value={blur.end} max={duration} onChange={(v) => updateBlur(blur.id, { end: Math.max(v, blur.start + 100) })} />
-          </div>
-          <div className="btn-row">
-            <button className="btn btn-small" onClick={() => updateBlur(blur.id, { start: 0, end: duration })}>
-              {t('blur.wholeRecording')}
+            <Field label={t('blur.style')}>
+              <div className="seg">
+                <button className={'seg-btn' + (blur.style === 'blur' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'blur' })}>
+                  {t('blur.style.blur')}
+                </button>
+                <button className={'seg-btn' + (blur.style === 'pixelate' ? ' active' : '')} onClick={() => updateBlur(blur.id, { style: 'pixelate' })}>
+                  {t('blur.style.pixelate')}
+                </button>
+              </div>
+            </Field>
+            <Slider
+              label={blur.style === 'pixelate' ? t('blur.blockSize') : t('blur.strength')}
+              value={blur.strength}
+              min={4}
+              max={80}
+              step={1}
+              format={fmtPx1080}
+              onBegin={checkpoint}
+              onChange={(v) => updateBlur(blur.id, { strength: v }, false)}
+            />
+            <div className="row2">
+              <TimeInput label={t('zoom.start')} value={blur.start} max={duration} onChange={(v) => updateBlur(blur.id, { start: Math.min(v, blur.end - 100) })} />
+              <TimeInput label={t('zoom.end')} value={blur.end} max={duration} onChange={(v) => updateBlur(blur.id, { end: Math.max(v, blur.start + 100) })} />
+            </div>
+            <div className="btn-row">
+              <button className="btn btn-small" onClick={() => updateBlur(blur.id, { start: 0, end: duration })}>
+                {t('blur.wholeRecording')}
+              </button>
+            </div>
+            <p className="muted small">{t('blur.editHelp')}</p>
+            <button className="btn btn-small danger" onClick={() => removeBlur(blur.id)}>
+              <Trash2 size={14} /> {t('blur.delete')}
             </button>
-          </div>
-          <p className="muted small">{t('blur.editHelp')}</p>
-          <button className="btn btn-small danger" onClick={() => removeBlur(blur.id)}>
-            <Trash2 size={14} /> {t('blur.delete')}
-          </button>
-        </>
-      ) : (
-        <p className="muted small">{t('blur.empty')}</p>
-      )}
+          </>
+        ) : (
+          <p className="muted small">{t('blur.empty')}</p>
+        )}
+      </Section>
       {project.blurs.length > 0 && (
-        <>
-          <h3>{t('blur.all')}</h3>
+        <Section title={t('blur.all')}>
           <ul className="list">
             {project.blurs.map((b) => (
               <li key={b.id} className={'list-item' + (blur?.id === b.id ? ' active' : '')}>
@@ -588,7 +611,7 @@ function BlurPanel({ t }: PanelProps): JSX.Element {
               </li>
             ))}
           </ul>
-        </>
+        </Section>
       )}
       <p className="muted small">{t('blur.help')}</p>
     </>
@@ -687,7 +710,7 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
             kind: 'voiceover',
             file: result.file,
             name,
-            start: clipStart,
+            start: Math.round(clipStart), // whole ms, like every time in the project
             durationMs: result.durationMs,
             ...newAudioClipDefaults('voiceover')
           })
@@ -1008,7 +1031,7 @@ function MusicAndFilePicker({ t }: PanelProps): JSX.Element {
         kind: 'file',
         file: result.file,
         name: result.name,
-        start: srcToOut(useStore.getState().playheadMs, segments),
+        start: Math.round(srcToOut(useStore.getState().playheadMs, segments)),
         durationMs: result.durationMs,
         ...newAudioClipDefaults('file')
       })
@@ -1090,38 +1113,41 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
 
   return (
     <>
-      <VoiceoverRecorder t={t} />
-      <MusicAndFilePicker t={t} />
+      <Section title={t('audio.sectionAdd')}>
+        <VoiceoverRecorder t={t} />
+        <MusicAndFilePicker t={t} />
+      </Section>
 
-      {project.audio.length === 0 ? (
-        <p className="muted small">{t('audio.empty')}</p>
-      ) : (
-        <ul className="list audio-list">
-          {project.audio.map((c) => (
-            <li key={c.id} className={'list-item' + (clip?.id === c.id ? ' active' : '')}>
-              <button className="list-main audio-list-item" onClick={() => select({ kind: 'audio', id: c.id })}>
-                {clipIcon(c.kind)}
-                <span className={c.muted ? 'muted' : ''}>{clipLabel(t, c)}</span>
-                {audioErrors[c.id] && (
-                  <span className="audio-warn" title={t('audio.fileMissing')}>
-                    <AlertTriangle size={13} />
-                  </span>
-                )}
-              </button>
-              <button className="btn btn-ghost" onClick={() => updateAudioClip(c.id, { muted: !c.muted })} title={c.muted ? t('audio.unmute') : t('audio.mute')}>
-                {c.muted || c.volume <= 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
-              </button>
-              <button className="btn btn-ghost danger" onClick={() => removeAudioClip(c.id)} title={t('audio.delete')}>
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Section title={t('audio.sectionTracks')}>
+        {project.audio.length === 0 ? (
+          <p className="muted small">{t('audio.empty')}</p>
+        ) : (
+          <ul className="list audio-list">
+            {project.audio.map((c) => (
+              <li key={c.id} className={'list-item' + (clip?.id === c.id ? ' active' : '')}>
+                <button className="list-main audio-list-item" onClick={() => select({ kind: 'audio', id: c.id })}>
+                  {clipIcon(c.kind)}
+                  <span className={c.muted ? 'muted' : ''}>{clipLabel(t, c)}</span>
+                  {audioErrors[c.id] && (
+                    <span className="audio-warn" title={t('audio.fileMissing')}>
+                      <AlertTriangle size={13} />
+                    </span>
+                  )}
+                </button>
+                <button className="btn btn-ghost" onClick={() => updateAudioClip(c.id, { muted: !c.muted })} title={c.muted ? t('audio.unmute') : t('audio.mute')}>
+                  {c.muted || c.volume <= 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                </button>
+                <button className="btn btn-ghost danger" onClick={() => removeAudioClip(c.id)} title={t('audio.delete')}>
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
 
       {clip && (
-        <>
-          <h3>{t('audio.selected')}</h3>
+        <Section title={t('audio.selected')}>
           {/* every kind is renamable, including system/mic - clipLabel shows the custom name
               once it differs from the kind's default English name, in every language */}
           <Field label={t('audio.name')}>
@@ -1148,7 +1174,7 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
               min={Math.min(-500, clip.start)}
               max={Math.max(500, clip.start)}
               step={5}
-              format={(v) => `${v} ms`}
+              format={fmtMs}
               onBegin={checkpoint}
               onChange={(v) => updateAudioClip(clip.id, { start: v }, false)}
             />
@@ -1165,7 +1191,7 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
               min={0}
               max={3000}
               step={50}
-              format={(v) => `${v} ms`}
+              format={fmtMs}
               onBegin={checkpoint}
               onChange={(v) => updateAudioClip(clip.id, { fadeInMs: v }, false)}
             />
@@ -1175,7 +1201,7 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
               min={0}
               max={3000}
               step={50}
-              format={(v) => `${v} ms`}
+              format={fmtMs}
               onBegin={checkpoint}
               onChange={(v) => updateAudioClip(clip.id, { fadeOutMs: v }, false)}
             />
@@ -1183,7 +1209,7 @@ function AudioPanel({ t }: PanelProps): JSX.Element {
           <button className="btn btn-small danger" onClick={() => removeAudioClip(clip.id)}>
             <Trash2 size={14} /> {t('audio.delete')}
           </button>
-        </>
+        </Section>
       )}
       <p className="muted small">{t('audio.help')}</p>
     </>
@@ -1199,38 +1225,41 @@ function CursorPanel({ t }: PanelProps): JSX.Element {
 
   return (
     <>
-      <h3>{t('cursor.highlight')}</h3>
-      <Toggle label={t('cursor.highlightOn')} value={c.highlight} onChange={(v) => updateCursor({ highlight: v })} />
-      {c.highlight && (
-        <>
-          <ColorField label={t('cursor.color')} value={c.highlightColor} onChange={(v) => updateCursor({ highlightColor: v })} />
-          <Slider label={t('cursor.radius')} value={c.highlightRadius} min={8} max={90} step={1} format={(v) => `${v} px @1080p`} onBegin={checkpoint} onChange={(v) => updateCursor({ highlightRadius: v }, false)} />
-          <Slider label={t('cursor.opacity')} value={c.highlightOpacity} min={0.05} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateCursor({ highlightOpacity: v }, false)} />
-          <Toggle label={t('cursor.outline')} value={c.highlightOutline} onChange={(v) => updateCursor({ highlightOutline: v })} />
-        </>
-      )}
+      <Section title={t('cursor.highlight')}>
+        <Toggle label={t('cursor.highlightOn')} value={c.highlight} onChange={(v) => updateCursor({ highlight: v })} />
+        {c.highlight && (
+          <>
+            <ColorField label={t('cursor.color')} value={c.highlightColor} onChange={(v) => updateCursor({ highlightColor: v })} />
+            <Slider label={t('cursor.radius')} value={c.highlightRadius} min={8} max={90} step={1} format={fmtPx1080} onBegin={checkpoint} onChange={(v) => updateCursor({ highlightRadius: v }, false)} />
+            <Slider label={t('cursor.opacity')} value={c.highlightOpacity} min={0.05} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateCursor({ highlightOpacity: v }, false)} />
+            <Toggle label={t('cursor.outline')} value={c.highlightOutline} onChange={(v) => updateCursor({ highlightOutline: v })} />
+          </>
+        )}
+      </Section>
 
-      <h3>{t('cursor.clicks')}</h3>
-      <Toggle label={t('cursor.showClicks')} value={c.clicks} onChange={(v) => updateCursor({ clicks: v })} />
-      {c.clicks && (
-        <>
-          <div className="row2">
-            <ColorField label={t('cursor.leftClick')} value={c.clickColor} onChange={(v) => updateCursor({ clickColor: v })} />
-            <ColorField label={t('cursor.rightClick')} value={c.rightClickColor} onChange={(v) => updateCursor({ rightClickColor: v })} />
-          </div>
-          <Slider label={t('cursor.rippleSize')} value={c.clickRadius} min={16} max={120} step={2} format={(v) => `${v} px @1080p`} onBegin={checkpoint} onChange={(v) => updateCursor({ clickRadius: v }, false)} />
-          <Slider label={t('cursor.rippleDuration')} value={c.clickDurationMs} min={150} max={1200} step={50} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateCursor({ clickDurationMs: v }, false)} />
-        </>
-      )}
+      <Section title={t('cursor.clicks')}>
+        <Toggle label={t('cursor.showClicks')} value={c.clicks} onChange={(v) => updateCursor({ clicks: v })} />
+        {c.clicks && (
+          <>
+            <div className="row2">
+              <ColorField label={t('cursor.leftClick')} value={c.clickColor} onChange={(v) => updateCursor({ clickColor: v })} />
+              <ColorField label={t('cursor.rightClick')} value={c.rightClickColor} onChange={(v) => updateCursor({ rightClickColor: v })} />
+            </div>
+            <Slider label={t('cursor.rippleSize')} value={c.clickRadius} min={16} max={120} step={2} format={fmtPx1080} onBegin={checkpoint} onChange={(v) => updateCursor({ clickRadius: v }, false)} />
+            <Slider label={t('cursor.rippleDuration')} value={c.clickDurationMs} min={150} max={1200} step={50} format={fmtMs} onBegin={checkpoint} onChange={(v) => updateCursor({ clickDurationMs: v }, false)} />
+          </>
+        )}
+      </Section>
 
-      <h3>{t('cursor.camera')}</h3>
-      <Slider label={t('cursor.smoothing')} value={c.followSmoothing} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateCursor({ followSmoothing: v }, false)} />
-      <Slider label={t('cursor.deadZone')} value={c.followDeadZone} min={0} max={0.3} step={0.01} format={(v) => t('cursor.deadZoneValue', { v: Math.round(v * 100) })} onBegin={checkpoint} onChange={(v) => updateCursor({ followDeadZone: v }, false)} />
-      <Slider label={t('cursor.sync')} value={c.offsetMs} min={-500} max={500} step={5} format={(v) => `${v} ms`} onBegin={checkpoint} onChange={(v) => updateCursor({ offsetMs: v }, false)} />
-      <p className="muted small">
-        {t('cursor.syncHelp')} {t('cursor.recorded', { samples: data.samples.length, clicks: data.clicks.length })}
-        {data.source === 'polling' ? ' ' + t('cursor.noHook') : ''}
-      </p>
+      <Section title={t('cursor.camera')}>
+        <Slider label={t('cursor.smoothing')} value={c.followSmoothing} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateCursor({ followSmoothing: v }, false)} />
+        <Slider label={t('cursor.deadZone')} value={c.followDeadZone} min={0} max={0.3} step={0.01} format={(v) => t('cursor.deadZoneValue', { v: Math.round(v * 100) })} onBegin={checkpoint} onChange={(v) => updateCursor({ followDeadZone: v }, false)} />
+        <Slider label={t('cursor.sync')} value={c.offsetMs} min={-500} max={500} step={5} format={fmtMs} onBegin={checkpoint} onChange={(v) => updateCursor({ offsetMs: v }, false)} />
+        <p className="muted small">
+          {t('cursor.syncHelp')} {t('cursor.recorded', { samples: data.samples.length, clicks: data.clicks.length })}
+          {data.source === 'polling' ? ' ' + t('cursor.noHook') : ''}
+        </p>
+      </Section>
     </>
   )
 }
@@ -1245,26 +1274,28 @@ function StylePanel({ t }: PanelProps): JSX.Element {
 
   return (
     <>
-      <h3>{t('style.frame')}</h3>
-      <Slider label={t('style.padding')} value={f.padding} min={0} max={0.2} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateFrame({ padding: v }, false)} />
-      <Slider label={t('style.radius')} value={f.cornerRadius} min={0} max={64} step={1} format={(v) => `${v} px @1080p`} onBegin={checkpoint} onChange={(v) => updateFrame({ cornerRadius: v }, false)} />
-      <Toggle label={t('style.shadow')} value={f.shadow} onChange={(v) => updateFrame({ shadow: v })} />
-      <h3>{t('style.background')}</h3>
-      <div className="swatches">
-        <button
-          className={'swatch checker' + (isTransparent ? ' active' : '')}
-          onClick={() => updateFrame({ background: TRANSPARENT_BACKGROUND })}
-          title={t('style.transparent')}
-        />
-        {['#111214', '#ffffff', '#1e293b', '#f1f5f9'].map((color) => (
-          <button key={color} className={'swatch' + (f.background === color ? ' active' : '')} style={{ background: color }} onClick={() => updateFrame({ background: color })} title={color} />
-        ))}
-        {Object.entries(GRADIENT_PRESETS).map(([id, [a, b]]) => (
-          <button key={id} className={'swatch' + (f.background === id ? ' active' : '')} style={{ background: `linear-gradient(135deg, ${a}, ${b})` }} onClick={() => updateFrame({ background: id })} title={id.replace('gradient:', '')} />
-        ))}
-      </div>
-      <ColorField label={t('style.customColor')} value={isGradient || isTransparent ? '#111214' : f.background} onChange={(v) => updateFrame({ background: v })} />
-      <p className="muted small">{isTransparent ? t('style.transparentHelp') : t('style.help')}</p>
+      <Section title={t('style.frame')}>
+        <Slider label={t('style.padding')} value={f.padding} min={0} max={0.2} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onBegin={checkpoint} onChange={(v) => updateFrame({ padding: v }, false)} />
+        <Slider label={t('style.radius')} value={f.cornerRadius} min={0} max={64} step={1} format={fmtPx1080} onBegin={checkpoint} onChange={(v) => updateFrame({ cornerRadius: v }, false)} />
+        <Toggle label={t('style.shadow')} value={f.shadow} onChange={(v) => updateFrame({ shadow: v })} />
+      </Section>
+      <Section title={t('style.background')}>
+        <div className="swatches">
+          <button
+            className={'swatch checker' + (isTransparent ? ' active' : '')}
+            onClick={() => updateFrame({ background: TRANSPARENT_BACKGROUND })}
+            title={t('style.transparent')}
+          />
+          {['#111214', '#ffffff', '#1e293b', '#f1f5f9'].map((color) => (
+            <button key={color} className={'swatch' + (f.background === color ? ' active' : '')} style={{ background: color }} onClick={() => updateFrame({ background: color })} title={color} />
+          ))}
+          {Object.entries(GRADIENT_PRESETS).map(([id, [a, b]]) => (
+            <button key={id} className={'swatch' + (f.background === id ? ' active' : '')} style={{ background: `linear-gradient(135deg, ${a}, ${b})` }} onClick={() => updateFrame({ background: id })} title={id.replace('gradient:', '')} />
+          ))}
+        </div>
+        <ColorField label={t('style.customColor')} value={isGradient || isTransparent ? '#111214' : f.background} onChange={(v) => updateFrame({ background: v })} />
+        <p className="muted small">{isTransparent ? t('style.transparentHelp') : t('style.help')}</p>
+      </Section>
     </>
   )
 }
