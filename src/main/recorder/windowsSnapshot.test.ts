@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 // only snapshotWindows() asks Electron's `screen` for the display's physical bounds
 vi.mock('electron', () => ({ screen: {} }))
 
-import { parse, selectWindows, type PixelRect } from './windowsSnapshot'
+import { helperArgs, parse, selectWindows, type PixelRect } from './windowsSnapshot'
 
 const row = (kind: 'c' | 'o', rect: number[], app = '', page: number[] | null = null, title = ''): string =>
   [kind, ...rect, app, ...(page ?? ['', '', '', '']), title].join('\t')
@@ -69,6 +69,17 @@ describe('window snapshot', () => {
     expect(selectWindows(raw, { x: 0, y: 0, w: 1920, h: 1080 })).toEqual([])
     const own = parse([row('c', [0, 0, 1920, 1080], 'zoomcut.exe', null, 'ZoomCut'), row('c', [100, 100, 900, 700], 'app.exe', null, 'App')].join('\n'))
     expect(selectWindows(own, { x: 0, y: 0, w: 1920, h: 1080 })).toEqual([])
+  })
+
+  it('never lists a known overlay nor lets it hide anything', () => {
+    const raw = parse([row('c', [0, 0, 1920, 1080], 'nvidia overlay.exe', null, 'NVIDIA GeForce Overlay'), row('c', [100, 100, 900, 700], 'app.exe', null, 'App')].join('\n'))
+    expect(selectWindows(raw, { x: 0, y: 0, w: 1920, h: 1080 }).map((w) => w.title)).toEqual(['App'])
+  })
+
+  it('tells the helper the display in whole physical pixels', () => {
+    expect(helperArgs(42, LEFT)).toEqual(['-OwnPid', '42', '-DisplayL', '-2560', '-DisplayT', '0', '-DisplayR', '0', '-DisplayB', '1440'])
+    // 125 % scaling of a DIP rectangle can leave fractions
+    expect(helperArgs(1, { x: 1920.4, y: 0, w: 1599.6, h: 900 }).slice(2)).toEqual(['-DisplayL', '1920', '-DisplayT', '0', '-DisplayR', '3520', '-DisplayB', '900'])
   })
 
   it('ignores windows on another display as occluders, and windows mostly off this one', () => {

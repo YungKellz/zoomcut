@@ -70,7 +70,8 @@ test('the Clip tab lists only visible windows, and a browser crops to its page',
   await win.click(`.project-open:has-text("Synthetic ${ID}")`)
   await win.waitForSelector('.preview-canvas')
   await win.waitForSelector('.preview-loading', { state: 'detached', timeout: 60_000 })
-  await win.click('.tab:has-text("Clip")')
+  // the Clip tab is the one open after opening a project
+  await win.waitForSelector('.clip-panel')
 
   // the panel is split into blocks; no removed pieces yet, so no block for them
   await expect(win.locator('.clip-panel .section-title')).toHaveText(['Trim & cut', 'Crop', 'Windows on the recording'])
@@ -123,12 +124,32 @@ test('in crop mode a click on a window or a browser page crops to it, also insid
   await win.mouse.click(...at(0.3, 0.1))
   await waitForProject(h.recordingsDir, ID, (p) => near(p.crop, CHROME))
 
+  // inside the window's crop: a tap that jitters by a pixel or two still picks the page, without
+  // moving the rectangle first, so one undo step brings back exactly the window's crop
+  const [tx, ty] = at(0.3, 0.4)
+  await win.mouse.move(tx, ty)
+  await win.mouse.down()
+  await win.mouse.move(tx + 2, ty + 1)
+  await win.mouse.up()
+  await waitForProject(h.recordingsDir, ID, (p) => near(p.crop, PAGE))
+  await win.keyboard.press('Control+z')
+  await waitForProject(h.recordingsDir, ID, (p) => p.crop.x === CHROME.x && p.crop.y === CHROME.y && p.crop.w === CHROME.w && p.crop.h === CHROME.h)
+
   // a drag inside the crop rectangle still moves it
   await win.mouse.move(...at(0.3, 0.4))
   await win.mouse.down()
   await win.mouse.move(...at(0.35, 0.45), { steps: 6 })
   await win.mouse.up()
   await waitForProject(h.recordingsDir, ID, (p) => p.crop.x > CHROME.x + 0.02 && Math.abs(p.crop.w - CHROME.w) < 0.003)
+
+  // a crop adjusted by hand: a click inside it (over the page) neither highlights nor picks anything
+  const cropInfo = win.locator('.clip-panel .section', { has: win.locator('.section-title', { hasText: /^Crop$/ }) }).locator('p')
+  const before = await cropInfo.textContent()
+  await win.mouse.move(...at(0.4, 0.5))
+  await expect(win.locator('.win-page.hover, .win-outline.hover')).toHaveCount(0)
+  await win.mouse.click(...at(0.4, 0.5))
+  await win.waitForTimeout(300)
+  expect(await cropInfo.textContent()).toBe(before)
 
   await win.click('.preview-controls .hint button:has-text("Done")')
   await expect(win.locator('.win-outline')).toHaveCount(0)

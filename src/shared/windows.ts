@@ -28,6 +28,17 @@ export const MIN_VISIBLE_SHARE = 0.5
 export const MIN_LARGE_VISIBLE_AREA = 0.25
 export const MIN_VISIBLE_AREA = 0.01
 
+/**
+ * Full-screen overlay windows that paint nothing (GPU vendors' in-game overlays). Snapshots before
+ * 0.4.1 listed them when they had a title; they are never listed and never hide anything.
+ */
+export const OVERLAY_TITLES: ReadonlySet<string> = new Set(['NVIDIA GeForce Overlay', 'NVIDIA GeForce Overlay DT', 'NVIDIA Overlay', 'AMD DVR Overlay'])
+
+/** Whether a box (normalized to the display) covers all of it, up to rounding. */
+export function coversDisplay(b: Box, eps = 0.002): boolean {
+  return b.x <= eps && b.y <= eps && b.x + b.w >= 1 - eps && b.y + b.h >= 1 - eps
+}
+
 export function boxArea(b: Box): number {
   return Math.max(0, b.w) * Math.max(0, b.h)
 }
@@ -67,11 +78,14 @@ export function uncoveredArea(a: Box, cover: Box[]): number {
   return parts.reduce((sum, p) => sum + boxArea(p), 0)
 }
 
-/** For a topmost-first list: the share of each box that no box before it covers (0 for empty boxes). */
-export function uncoveredShares(boxes: Box[]): number[] {
+/**
+ * For a topmost-first list: the share of each box that no box before it covers (0 for empty boxes).
+ * Boxes for which `occludes` says no cover nothing.
+ */
+export function uncoveredShares(boxes: Box[], occludes: (index: number) => boolean = () => true): number[] {
   return boxes.map((b, i) => {
     const area = boxArea(b)
-    return area > EPS ? uncoveredArea(b, boxes.slice(0, i)) / area : 0
+    return area > EPS ? uncoveredArea(b, boxes.slice(0, i).filter((_, j) => occludes(j))) / area : 0
   })
 }
 

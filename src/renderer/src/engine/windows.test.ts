@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WindowRect, WindowSnapshot } from '@shared/types'
-import { pageToCrop, sameCrop, uniqueWindows, visibleWindows, windowAt, windowToCrop } from './windows'
+import { cropFromWindows, pageToCrop, sameCrop, uniqueWindows, visibleWindows, windowAt, windowToCrop } from './windows'
 
 const win = (title: string, x: number, y: number, w: number, h: number, extra: Partial<WindowRect> = {}): WindowRect => ({ title, x, y, w, h, ...extra })
 const snap = (t: number, windows: WindowRect[]): WindowSnapshot => ({ t, windows })
@@ -19,6 +19,19 @@ describe('visible windows', () => {
     const old = snap(0, [win('Browser', 0, 0, 0.4, 0.8), win('Terminal', 0.35, 0.1, 0.35, 0.5), win('Desktop app', 0, 0, 1, 0.96)])
     // Terminal: a seventh of it is under the browser; the maximized app still shows around both
     expect(visibleWindows(old).map((w) => w.title)).toEqual(['Browser', 'Terminal', 'Desktop app'])
+  })
+
+  it('never lets a full-screen overlay of an old snapshot hide everything', () => {
+    // a known overlay title: neither listed nor in front of anything
+    const nvidia = snap(0, [win('NVIDIA GeForce Overlay', 0, 0, 1, 1), win('Editor', 0, 0, 1, 0.96), win('Mail', 0.1, 0.1, 0.5, 0.5)])
+    expect(visibleWindows(nvidia).map((w) => w.title)).toEqual(['Editor'])
+    // an unknown one (or a full-screen app – the snapshot cannot tell): the topmost window over the
+    // whole display stays listed and hides nothing; the windows below still hide each other
+    const unknown = snap(0, [win('Overlay', 0, 0, 1, 1), win('Editor', 0, 0, 1, 0.96), win('Mail', 0.1, 0.1, 0.5, 0.5)])
+    expect(visibleWindows(unknown).map((w) => w.title)).toEqual(['Overlay', 'Editor'])
+    // below a small topmost window too; a second full-display window does hide what is below it
+    const second = snap(0, [win('Sticky', 0.8, 0, 0.2, 0.2), win('Overlay', 0, 0, 1, 1), win('Video', 0, 0, 1, 1), win('Mail', 0.1, 0.1, 0.5, 0.5)])
+    expect(visibleWindows(second).map((w) => w.title)).toEqual(['Sticky', 'Overlay', 'Video'])
   })
 
   it('leaves snapshots filtered by the recorder as they are', () => {
@@ -61,6 +74,18 @@ describe('crop to a window', () => {
     const w = win('A', 0.123456, 0.2, 0.5, 0.5)
     expect(sameCrop(windowToCrop(w), { x: 0.1235, y: 0.2, w: 0.5, h: 0.5 })).toBe(true)
     expect(sameCrop(windowToCrop(w), { x: 0.13, y: 0.2, w: 0.5, h: 0.5 })).toBe(false)
+  })
+
+  it('tells a crop taken from a window or a page from one adjusted by hand', () => {
+    const chrome = win('Chrome', 0.1, 0.1, 0.4, 0.6, { content: { x: 0.1, y: 0.16, w: 0.4, h: 0.54 } })
+    const windows = [chrome, win('Word', 0, 0, 1, 0.96)]
+    expect(cropFromWindows({ x: 0, y: 0, w: 1, h: 1 }, windows)).toBe(true)
+    expect(cropFromWindows(windowToCrop(chrome), windows)).toBe(true)
+    expect(cropFromWindows(pageToCrop(chrome)!, windows)).toBe(true)
+    expect(cropFromWindows({ x: 0, y: 0, w: 1, h: 0.96 }, windows)).toBe(true)
+    // the browser's crop moved by a few pixels
+    expect(cropFromWindows({ x: 0.12, y: 0.1, w: 0.4, h: 0.6 }, windows)).toBe(false)
+    expect(cropFromWindows({ x: 0.2, y: 0.2, w: 0.5, h: 0.5 }, [])).toBe(false)
   })
 
   it('picks the frontmost window under the pointer, and its page', () => {

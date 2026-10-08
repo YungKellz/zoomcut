@@ -8,7 +8,7 @@ import type { FollowPath } from '../engine/cursor'
 import { zoomAreas } from '../engine/camera'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
-import { pageToCrop, uniqueWindows, windowAt, windowToCrop } from '../engine/windows'
+import { cropFromWindows, pageToCrop, uniqueWindows, windowAt, windowToCrop } from '../engine/windows'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
 import { useT } from '../i18n'
@@ -398,7 +398,14 @@ export function Preview({ followPath }: Props): JSX.Element {
 
   // Crop mode: a click anywhere on a window crops to it – on a browser's page to the page only – also
   // inside the crop rectangle, which covers the whole picture until something is cropped (a drag there
-  // still moves the rectangle). The outlines are only a picture; the hit layer and the rectangle ask here.
+  // still moves the rectangle), as long as the crop is the whole frame or came from a window: a crop
+  // adjusted by hand is never replaced by a click inside it. The outlines are only a picture; the hit
+  // layer and the rectangle ask here.
+  const pickInsideCrop = windows.length > 0 && cropFromWindows(project.crop, windows)
+  // dragged by hand: the window highlighted inside the rectangle is no longer what a click picks
+  useEffect(() => {
+    if (!pickInsideCrop) setHoverWindow(null)
+  }, [pickInsideCrop])
   const windowAtClient = (clientX: number, clientY: number): WindowHit | null => {
     const rect = windowHitRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0 || rect.height === 0) return null
@@ -497,8 +504,8 @@ export function Preview({ followPath }: Props): JSX.Element {
               className={'crop-rect' + (hoverWindow && project.crop.w >= 1 && project.crop.h >= 1 ? ' pick-window' : '')}
               onChange={(c, commit) => setCrop(c, commit)}
               onBegin={checkpoint}
-              onTap={windows.length > 0 ? cropToWindowAt : undefined}
-              onHover={windows.length > 0 ? hoverWindowAt : undefined}
+              onTap={pickInsideCrop ? cropToWindowAt : undefined}
+              onHover={pickInsideCrop ? hoverWindowAt : undefined}
               onHoverEnd={() => setHoverWindow(null)}
             />
           )}
@@ -642,9 +649,13 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
     const sx = e.clientX
     const sy = e.clientY
     const o = { ...crop }
+    // a click that may pick a window leaves the rectangle where it is until the pointer really drags
+    // it, so a tap is one undo step (the window crop) and not a jitter move followed by it
+    const tappable = handle === 'move' && onTap !== undefined
     let dragged = false
     const move = (ev: PointerEvent): void => {
-      if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 3) dragged = true
+      if (!dragged && tappable && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) <= 3) return
+      dragged = true
       const dx = (ev.clientX - sx) / W
       const dy = (ev.clientY - sy) / H
       let { x, y, w, h } = o
@@ -670,7 +681,7 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
     const up = (ev: PointerEvent): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
-      if (handle === 'move' && !dragged) onTap?.(ev.clientX, ev.clientY)
+      if (tappable && !dragged) onTap?.(ev.clientX, ev.clientY)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { screen, type Display } from 'electron'
 import type { WindowRect } from '@shared/types'
-import { boxArea, isVisibleEnough, uncoveredArea, type Box } from '@shared/windows'
+import { boxArea, isVisibleEnough, OVERLAY_TITLES, uncoveredArea, type Box } from '@shared/windows'
 
 /**
  * Lists the top-level windows that really paint on screen, topmost first (EnumWindows order), with
@@ -21,10 +21,14 @@ import { boxArea, isVisibleEnough, uncoveredArea, type Box } from '@shared/windo
  * Browsers (Chromium family by exe and window class; Firefox family) also get the page rectangle:
  * Chromium's page widget (Chrome_RenderWidgetHostHWND, the largest visible one), else – and always for
  * Firefox, which has no such child window – UI Automation's largest Document, with a 1.5 s budget for
- * all of them. Any failure there only means no page rectangle.
+ * all of them, and only for windows mostly on the recorded display and visible enough to be listed.
+ * Any failure there only means no page rectangle.
  */
+// C# string literals; the titles hold no quotes or backslashes
+const OVERLAY_LIST = [...OVERLAY_TITLES].map((title) => `"${title}"`).join(', ')
+
 const PS_SCRIPT = String.raw`
-param([int]$OwnPid = 0)
+param([int]$OwnPid = 0, [int]$DisplayL = 0, [int]$DisplayT = 0, [int]$DisplayR = 0, [int]$DisplayB = 0)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -TypeDefinition @'
 using System;
@@ -71,6 +75,8 @@ public static class ZcWinEnum {
   // exe names without .exe; browser.exe is Yandex Browser (also checked by its Chrome_ window class)
   static readonly HashSet<string> Chromium = new HashSet<string>(new string[] { "chrome", "chromium", "msedge", "brave", "opera", "vivaldi", "browser", "arc", "thorium", "whale" });
   static readonly HashSet<string> Gecko = new HashSet<string>(new string[] { "firefox", "librewolf", "waterfox", "floorp", "zen" });
+  // OVERLAY_TITLES of shared/windows.ts: they paint nothing, are never listed and hide nothing
+  static readonly HashSet<string> Overlays = new HashSet<string>(new string[] { ${OVERLAY_LIST} });
 
   public static List<ZcWin> List(int ownPid) {
     // physical pixels for GetWindowRect of child windows too (DWM frame bounds are physical anyway)
@@ -117,6 +123,7 @@ public static class ZcWinEnum {
       GetWindowText(h, sb, sb.Capacity);
       title = sb.ToString().Replace("\t", " ").Replace("\r", " ").Replace("\n", " ").Trim();
     }
+    if (Overlays.Contains(title)) return;
     var cls = new StringBuilder(256);
     GetClassName(h, cls, cls.Capacity);
     string className = cls.ToString();
@@ -192,6 +199,50 @@ public static class ZcWinEnum {
     if (bestArea > 0) SetPage(w, best.L, best.T, best.R, best.B);
   }
 
+  // UI Automation only for browser windows that will most likely be listed: mostly on the recorded
+  // display and visible enough with every window above them as an occluder. A little more generous than
+  // selectWindows / isVisibleEnough (shared/windows.ts), which decide in the end. Asking a browser through
+  // UIA switches its accessibility engine on for the rest of its session, and the time budget is shared.
+  public static void KeepUiaForVisible(List<ZcWin> wins, int dl, int dt, int dr, int db) {
+    if (dr - dl < 1 || db - dt < 1) return;
+    long display = (long)(dr - dl) * (db - dt);
+    var above = new List<int[]>();
+    foreach (var w in wins) {
+      int l = Math.Max(w.L, dl), t = Math.Max(w.T, dt), r = Math.Min(w.R, dr), b = Math.Min(w.B, db);
+      bool on = r - l >= 1 && b - t >= 1;
+      if (w.NeedsUia) {
+        long full = (long)(w.R - w.L) * (w.B - w.T);
+        long area = on ? (long)(r - l) * (b - t) : 0;
+        long open = on ? Uncovered(new int[] { l, t, r, b }, above) : 0;
+        w.NeedsUia = area * 4 >= full && open * 200 >= display && (open * 5 >= area * 2 || open * 5 >= display);
+      }
+      if (on) above.Add(new int[] { l, t, r, b });
+    }
+  }
+
+  // exact area of a (l, t, r, b) not covered by any of cover, by rectangle subtraction
+  static long Uncovered(int[] a, List<int[]> cover) {
+    var parts = new List<int[]>();
+    parts.Add(a);
+    foreach (var c in cover) {
+      var next = new List<int[]>();
+      foreach (var p in parts) {
+        int il = Math.Max(p[0], c[0]), it = Math.Max(p[1], c[1]), ir = Math.Min(p[2], c[2]), ib = Math.Min(p[3], c[3]);
+        if (ir <= il || ib <= it) { next.Add(p); continue; }
+        if (it > p[1]) next.Add(new int[] { p[0], p[1], p[2], it });
+        if (p[3] > ib) next.Add(new int[] { p[0], ib, p[2], p[3] });
+        if (il > p[0]) next.Add(new int[] { p[0], it, il, ib });
+        if (p[2] > ir) next.Add(new int[] { ir, it, p[2], ib });
+      }
+      parts = next;
+      if (parts.Count == 0 || parts.Count > 4000) break;
+    }
+    if (parts.Count > 4000) return (long)(a[2] - a[0]) * (a[3] - a[1]);
+    long sum = 0;
+    foreach (var p in parts) sum += (long)(p[2] - p[0]) * (p[3] - p[1]);
+    return sum;
+  }
+
   public static void SetPage(ZcWin w, int l, int t, int r, int b) {
     l = Math.Max(l, w.L); t = Math.Max(t, w.T); r = Math.Min(r, w.R); b = Math.Min(b, w.B);
     if (r - l < 40 || b - t < 40) return;
@@ -201,6 +252,7 @@ public static class ZcWinEnum {
 }
 '@
 $wins = [ZcWinEnum]::List($OwnPid)
+[ZcWinEnum]::KeepUiaForVisible($wins, $DisplayL, $DisplayT, $DisplayR, $DisplayB)
 $pages = @($wins | Where-Object { $_.NeedsUia })
 if ($pages.Count -gt 0) {
   try {
@@ -261,10 +313,13 @@ public static class ZcPageUia {
   }
 }
 '@
+    # a fair share of what is left for each window, so one without a page (a Firefox Library window)
+    # cannot use up the time of the ones after it
     $deadline = [DateTime]::UtcNow.AddMilliseconds(1500)
-    foreach ($w in $pages) {
-      $budget = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
-      if ($budget -lt 100) { break }
+    for ($i = 0; $i -lt $pages.Count; $i++) {
+      $w = $pages[$i]
+      $budget = [int](($deadline - [DateTime]::UtcNow).TotalMilliseconds / ($pages.Count - $i))
+      if ($budget -lt 100) { continue }
       $r = [ZcPageUia]::Find($w.Hwnd, $budget)
       if ($null -ne $r) { [ZcWinEnum]::SetPage($w, $r[0], $r[1], $r[2], $r[3]) }
     }
@@ -380,6 +435,7 @@ export function selectWindows(raw: RawWindow[], d: PixelRect): WindowRect[] {
     if (!box) continue // on another display: covers nothing here
     const fullArea = (w.right - w.left) * (w.bottom - w.top)
     const onDisplay = box.w * d.w >= 40 && box.h * d.h >= 40 && boxArea(box) * d.w * d.h >= fullArea * 0.3
+    if (OVERLAY_TITLES.has(w.title)) continue // the helper leaves them out as well
     if (w.candidate && w.title && !OWN_TITLES.has(w.title) && onDisplay) {
       const share = uncoveredArea(box, above) / boxArea(box)
       if (isVisibleEnough(box, share)) {
@@ -411,6 +467,14 @@ function pageBox(d: PixelRect, win: Box, page: RawWindow['page']): Box | null {
   return { x, y, w, h }
 }
 
+/** The helper's arguments: our process (left out) and the display, which only browser windows mostly
+ * on it and visible enough are asked for their page through UI Automation (`KeepUiaForVisible`). */
+export function helperArgs(ownPid: number, d: PixelRect): string[] {
+  const l = Math.round(d.x)
+  const t = Math.round(d.y)
+  return ['-OwnPid', String(ownPid), '-DisplayL', String(l), '-DisplayT', String(t), '-DisplayR', String(l + Math.round(d.w)), '-DisplayB', String(t + Math.round(d.h))]
+}
+
 /** The display's bounds in physical pixels (exact for every display, even with mixed scale factors). */
 function physicalBounds(display: Display): PixelRect {
   try {
@@ -429,12 +493,13 @@ function physicalBounds(display: Display): PixelRect {
  */
 export async function snapshotWindows(display: Display): Promise<WindowRect[]> {
   if (process.platform !== 'win32') return []
+  const d = physicalBounds(display)
   let raw: RawWindow[]
   try {
-    raw = parse(await runPowerShell(PS_SCRIPT, ['-OwnPid', String(process.pid)]))
+    raw = parse(await runPowerShell(PS_SCRIPT, helperArgs(process.pid, d)))
   } catch (err) {
     console.warn('[windows] enumeration failed', err)
     return []
   }
-  return selectWindows(raw, physicalBounds(display))
+  return selectWindows(raw, d)
 }

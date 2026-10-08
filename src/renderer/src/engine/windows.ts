@@ -1,15 +1,35 @@
 import type { CropRect, WindowRect, WindowSnapshot } from '@shared/types'
-import { isVisibleEnough, uncoveredShares } from '@shared/windows'
+import { coversDisplay, isVisibleEnough, OVERLAY_TITLES, uncoveredShares } from '@shared/windows'
 
 /**
  * Windows of one snapshot that were really visible. Snapshots since 0.4.1 come filtered by the recorder
  * (every window on screen counted as an occluder; their windows carry `visible`); older ones list every
  * window, topmost first, so the ones hidden behind the windows listed above them are dropped here.
+ *
+ * An old snapshot cannot tell an invisible full-screen overlay from a full-screen app, and it listed
+ * overlays that had a title: known overlays are dropped, and the topmost window covering the whole
+ * display hides nothing – the windows below it stay listed as 0.4.0 listed them (still filtered among
+ * themselves) rather than all vanishing behind what may have been an overlay.
  */
 export function visibleWindows(snap: WindowSnapshot): WindowRect[] {
   if (snap.windows.some((w) => w.visible !== undefined)) return snap.windows
-  const shares = uncoveredShares(snap.windows)
-  return snap.windows.filter((w, i) => isVisibleEnough(w, shares[i]))
+  const windows = snap.windows.filter((w) => !OVERLAY_TITLES.has(w.title))
+  const fullScreen = windows.findIndex((w) => coversDisplay(w))
+  const shares = uncoveredShares(windows, (i) => i !== fullScreen)
+  return windows.filter((w, i) => isVisibleEnough(w, shares[i]))
+}
+
+/**
+ * Whether the crop is the whole frame or the crop of one of these windows (or a browser's page). Only
+ * then a click inside the crop rectangle picks a window: a crop adjusted by hand is never replaced by
+ * a plain click.
+ */
+export function cropFromWindows(crop: CropRect, windows: WindowRect[]): boolean {
+  if (crop.x <= 0 && crop.y <= 0 && crop.w >= 1 && crop.h >= 1) return true
+  return windows.some((w) => {
+    const page = pageToCrop(w)
+    return sameCrop(crop, windowToCrop(w)) || (page !== null && sameCrop(crop, page))
+  })
 }
 
 function windowKey(w: WindowRect): string {

@@ -142,7 +142,7 @@ export const en = {
   'clip.restore': 'Restore this piece',
   'clip.crop': 'Crop',
   'clip.windows': 'Windows on the recording',
-  'clip.windowsHelp': 'Windows that were visible at the start and the end of the recording. Click one here, or on the preview while editing the crop, to crop to it; "Page only" keeps just the page of a browser, without the tabs and the address bar.',
+  'clip.windowsHelp': 'Windows that were visible at the start or at the end of the recording. Click one here, or on the preview while editing the crop, to crop to it; "Page only" keeps just the page of a browser, without the tabs and the address bar.',
   'clip.noWindows': 'No visible windows were detected on the recording.',
   'clip.cropToWindow': 'Crop to this window',
   'clip.pageOnly': 'Page only',
