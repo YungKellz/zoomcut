@@ -221,6 +221,13 @@ describe('picking an area is modal', () => {
     expect(useStore.getState().mode).toBe('normal')
   })
 
+  it('leaving the editor mid-pick does not leave the lock behind', () => {
+    useStore.getState().beginPick('z1', 0)
+    useStore.getState().closeProject()
+    expect(useStore.getState().mode).toBe('normal')
+    expect(useStore.getState().pickRect).toBeNull()
+  })
+
   it('a delete during a pick keeps pickArea pointing at a real step', () => {
     useStore.getState().beginPick('z1', 2)
     useStore.getState().removeZoomPart('z1', 0) // later steps move down

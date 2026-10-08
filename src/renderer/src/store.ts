@@ -225,6 +225,9 @@ export const useStore = create<EditorState>((set, get) => ({
       screen: get().composition ? 'composition' : 'home',
       project: null,
       playing: false,
+      // leaving the editor mid-pick must not leave the pick lock behind (select() ignores changes while picking)
+      mode: 'normal',
+      pickRect: null,
       history: [],
       future: [],
       audioMuted: false,

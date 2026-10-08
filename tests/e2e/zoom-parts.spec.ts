@@ -221,6 +221,8 @@ test('the pick rectangle: centre cross, Shift magnet, Alt resizes from the centr
   expect(Math.abs(shrunk.x - grown.x)).toBeLessThan(1.5)
   expect(Math.abs(shrunk.y - grown.y)).toBeLessThan(1.5)
 
+  await win.screenshot({ path: join(h.shotsDir, 'pick-overlay.png') })
+
   // Escape cancels and unlocks the inspector
   await win.keyboard.press('Escape')
   await expect(win.locator('.pick-rect')).toHaveCount(0)
@@ -239,7 +241,8 @@ test('a zoom added on a fractional playhead has whole milliseconds everywhere', 
   await win.keyboard.press('Home')
   for (let i = 0; i < 13; i++) await win.keyboard.press('ArrowRight')
   await win.keyboard.press('z')
-  const saved = await waitForProject(h.recordingsDir, ID, (p) => p.zooms.length === 1)
+  // autosave lands a moment later: wait for the new zoom (ends at ~2.9 s), not for the one deleted above (ended at ~3.5 s)
+  const saved = await waitForProject(h.recordingsDir, ID, (p) => p.zooms.length === 1 && p.zooms[0].end < 3000)
   const z = zoomOf(saved)
   for (const v of [z.start, z.end, z.easeInMs, z.easeOutMs]) expect(Number.isInteger(v), `${v} is a whole number of ms`).toBe(true)
   expect(z.start).toBe(0)
@@ -247,6 +250,7 @@ test('a zoom added on a fractional playhead has whole milliseconds everywhere', 
 
   // and the slider prints it without decimals
   await win.click('.panel details.adv summary')
+  await win.screenshot({ path: join(h.shotsDir, 'zoom-sections.png') })
   const label = await win.locator('.panel .field', { hasText: 'Ease in' }).locator('.field-value').textContent()
   expect(label?.trim()).toBe('433 ms')
 })
