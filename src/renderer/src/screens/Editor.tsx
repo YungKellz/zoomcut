@@ -8,7 +8,7 @@ import { AudioPlayer } from '../editor/AudioPlayer'
 import { Timeline } from '../editor/Timeline'
 import { Inspector } from '../editor/Inspector'
 import { ExportDialog } from '../editor/ExportDialog'
-import { keepSegments, outputDuration } from '../engine/timeline'
+import { firstKeptTime, keepSegments, outputDuration } from '../engine/timeline'
 import { formatDuration } from '../util/format'
 import { deleteOpenProject, recordProjectAgain } from '../recording/lifecycle'
 import { useT } from '../i18n'
@@ -99,8 +99,9 @@ export function Editor(): JSX.Element {
           s.stepFrame(dir)
         }
       } else if (e.key === 'Home') {
+        // the same place as the go-to-start button: the first frame of the output, not a removed head
         s.setPlaying(false)
-        s.setPlayhead(0, true)
+        s.setPlayhead(firstKeptTime(keepSegments(s.project!.recording.durationMs, s.project!.cuts)), true)
       } else if (e.key === 'End') {
         s.setPlaying(false)
         s.setPlayhead(s.project!.recording.durationMs, true)

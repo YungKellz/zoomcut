@@ -110,7 +110,10 @@ describe('playback start and frame steps', () => {
     expect(stepFrames(1000, -1, FRAME, segments)).toBeCloseTo(1000 - FRAME)
     // forward over the cut: the last frames before it, then the first after it
     expect(stepFrames(2000 - FRAME, 1, FRAME, segments)).toBeCloseTo(5000)
-    expect(stepFrames(2000, 1, FRAME, segments)).toBeCloseTo(5000 + FRAME)
+    // a playhead inside the removed piece: the next frame is the first one after it, not the second
+    expect(stepFrames(2000, 1, FRAME, segments)).toBeCloseTo(5000)
+    expect(stepFrames(3500, 1, FRAME, segments)).toBeCloseTo(5000)
+    expect(stepFrames(3500, 2, FRAME, segments)).toBeCloseTo(5000 + FRAME)
     // back over the cut
     expect(stepFrames(5000, -1, FRAME, segments)).toBeCloseTo(2000 - FRAME)
     expect(stepFrames(5000 + FRAME, -1, FRAME, segments)).toBe(5000)
@@ -120,10 +123,49 @@ describe('playback start and frame steps', () => {
     expect(stepFrames(0, -1, FRAME, segments)).toBe(0)
     expect(stepFrames(10000, 1, FRAME, segments)).toBe(10000)
     expect(stepFrames(10000 - FRAME / 2, 1, FRAME, segments)).toBe(10000)
-    expect(stepFrames(10000, -1, FRAME, segments)).toBeCloseTo(10000 - FRAME)
     // a playhead inside a cut counts as the next kept frame
     expect(stepFrames(3000, -1, FRAME, segments)).toBeCloseTo(2000 - FRAME)
     expect(stepFrames(500, 1, FRAME, [])).toBe(0)
+    // before the first piece (a removed head) the next frame is the first kept one
+    const headCut = keepSegments(10000, [{ id: 'a', start: 0, end: 3000 }])
+    expect(stepFrames(0, 1, FRAME, headCut)).toBeCloseTo(3000)
+    expect(stepFrames(1000, -1, FRAME, headCut)).toBeCloseTo(3000)
+  })
+
+  it('shows another picture on the first step back from the end', () => {
+    // the end shows the last frame, which starts one frame before it: the step back lands on the frame before that
+    expect(stepFrames(10000, -1, FRAME, segments)).toBeCloseTo(10000 - 2 * FRAME)
+    expect(stepFrames(10000, -2, FRAME, segments)).toBeCloseTo(10000 - 3 * FRAME)
+    // forward from there reaches the last frame, and then the end itself
+    expect(stepFrames(10000 - 2 * FRAME, 1, FRAME, segments)).toBeCloseTo(10000 - FRAME)
+    expect(stepFrames(10000 - FRAME, 1, FRAME, segments)).toBe(10000)
+    // a removed tail is the end as well: the last frame is the last frame before it
+    const tailCut = keepSegments(10000, [{ id: 'a', start: 8000, end: 10000 }])
+    expect(stepFrames(10000, -1, FRAME, tailCut)).toBeCloseTo(8000 - 2 * FRAME)
+    expect(stepFrames(8000, -1, FRAME, tailCut)).toBeCloseTo(8000 - 2 * FRAME)
+    // the picture at the end and the picture one step back from it never come from the same frame
+    const shown = displayTime(10000, FRAME, segments)
+    const back = displayTime(stepFrames(10000, -1, FRAME, segments), FRAME, segments)
+    expect(Math.floor(shown / FRAME + 1e-6)).not.toBe(Math.floor(back / FRAME + 1e-6))
+  })
+
+  it('does not drift over many steps, so a cut is still crossed on the frame where it begins', () => {
+    const plain = keepSegments(10000, [])
+    let t = 0
+    for (let i = 0; i < 60; i++) t = stepFrames(t, 1, FRAME, plain)
+    expect(t).toBe(2000) // not 1999.99998
+    // 59 steps reach the last frame before the cut, the 60th is the first frame after it
+    t = 0
+    for (let i = 0; i < 59; i++) t = stepFrames(t, 1, FRAME, segments)
+    expect(t).toBeCloseTo(2000 - FRAME, 3)
+    expect(stepFrames(t, 1, FRAME, segments)).toBe(5000)
+    // the whole output is 210 frames and the last step lands exactly on its end
+    t = 0
+    for (let i = 0; i < 210; i++) t = stepFrames(t, 1, FRAME, segments)
+    expect(t).toBe(10000)
+    // and all of them back again
+    for (let i = 0; i < 210; i++) t = stepFrames(t, -1, FRAME, segments)
+    expect(t).toBeCloseTo(0, 3)
   })
 
   it('steps along the output, so each frame is one frame of the output', () => {

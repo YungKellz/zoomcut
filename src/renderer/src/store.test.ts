@@ -95,4 +95,14 @@ describe('frame step', () => {
     useStore.getState().stepFrame(1)
     expect(state().playheadMs).toBe(10000)
   })
+
+  it('goes back from the end to the frame before the last one, which is the one the end shows', () => {
+    open(project(10000, 30), 10000)
+    useStore.getState().stepFrame(-1)
+    expect(state().playheadMs).toBeCloseTo(10000 - 2 * FRAME, 3)
+    useStore.getState().stepFrame(1)
+    expect(state().playheadMs).toBeCloseTo(10000 - FRAME, 3)
+    useStore.getState().stepFrame(1)
+    expect(state().playheadMs).toBe(10000)
+  })
 })

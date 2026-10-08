@@ -139,6 +139,11 @@ test.beforeAll(async () => {
   })
   // the project claims 40 ms more than the file has
   makeProject('pb_short', { mediaMs: 3000, durationMs: 3040 })
+  // the last kept piece (3.02 .. 3.10 s) starts past the end of the 3.0 s file: the standby player seeked
+  // there is clamped to the end of the file, and playing an ended video would start it over from 0
+  makeProject('pb_gap', { mediaMs: 3000, durationMs: 3100, cuts: [{ id: 'c1', start: 2000, end: 3020 }] })
+  // the first second is removed: output = 1.0 .. 3.0 s
+  makeProject('pb_headcut', { mediaMs: 3000, cuts: [{ id: 'c1', start: 0, end: 1000 }] })
   makeProject('pb_steps30', { mediaMs: 3000 })
   makeProject('pb_steps60', { mediaMs: 2000, fps: 60 })
   makeProject('pb_stepcut', { mediaMs: 3000, cuts: [{ id: 'c1', start: 1000, end: 1500 }] })
@@ -205,7 +210,7 @@ test('with cuts it stops at the end of the last kept piece on the last kept fram
   await expectStopped('00:01.70')
 })
 
-test('a file shorter than the project duration: Play near the end does not start over from 0', async () => {
+test('a file shorter than the project duration: playback stops at its end, Play past the end starts over', async () => {
   const { win } = h
   await openProject('pb_short')
   expect(await outTotal()).toBe('00:03.04')
@@ -213,15 +218,65 @@ test('a file shorter than the project duration: Play near the end does not start
   await win.click(PLAY_FROM_START)
   await waitForStop()
   expect(await timecode()).toBe('00:03.04')
+  await expectStopped('00:03.04')
 
-  // one frame back puts the playhead (3.007 s) past the end of the file (3.000 s); Play must not rewind the video to its start
+  // back to the frame before the last one and forward again puts the playhead (3.007 s) past the end of the
+  // file (3.000 s): there is nothing left to play from there, so Play starts over from the first frame (not
+  // a no-op, not a rewind inside the end of the file)
   await win.click(STEP_BACK)
-  await expect.poll(timecode).toBe('00:03.00')
-  await win.click(PLAY)
-  await sleep(1500)
-  expect(await isPlaying()).toBe(false)
+  await win.click(STEP_FORWARD)
+  await sleep(300)
   expect(await timecode()).toBe('00:03.00')
-  expect((await videoStates()).every((v) => v.paused)).toBe(true)
+  await win.click(PLAY)
+  await expect.poll(isPlaying).toBe(true)
+  await expect.poll(async () => ms(await timecode()), { timeout: 3000 }).toBeLessThan(1500)
+  await waitForStop()
+  expect(await timecode()).toBe('00:03.04')
+  await expectStopped('00:03.04')
+  expect(h.errors).toEqual([])
+})
+
+test('a kept piece that starts past the end of the file ends playback instead of looping it', async () => {
+  const { win } = h
+  await openProject('pb_gap')
+  expect(await outTotal()).toBe('00:02.08')
+
+  await win.click(PLAY_FROM_START)
+  await expect.poll(isPlaying).toBe(true)
+  await waitForStop()
+  expect(await timecode()).toBe('00:02.08')
+  // stays stopped: a swap to a player that is already at the end of the file would restart it from 0
+  await expectStopped('00:02.08', 2500)
+
+  await win.click(PLAY)
+  await expect.poll(isPlaying).toBe(true)
+  await expect.poll(async () => ms(await timecode()), { timeout: 3000 }).toBeLessThan(1500)
+  await waitForStop()
+  expect(await timecode()).toBe('00:02.08')
+  await expectStopped('00:02.08', 1500)
+  expect(h.errors).toEqual([])
+})
+
+test('Home and the go-to-start button both go to the first kept frame', async () => {
+  const { win } = h
+  await openProject('pb_headcut')
+  expect(await outTotal()).toBe('00:02.00')
+  for (const how of ['key', 'button'] as const) {
+    await win.keyboard.press('End')
+    await sleep(300)
+    expect(await timecode()).toBe('00:02.00')
+    if (how === 'key') await win.keyboard.press('Home')
+    else await win.click('.preview-controls [data-action="go-start"]')
+    await sleep(300)
+    expect(await timecode(), how).toBe('00:00.00')
+    // the source time is where the output begins (1.0 s), not the removed head
+    expect(await win.textContent('.preview-controls .source-time'), how).toContain('00:01.00')
+    const shown = (await videoStates()).map((v) => v.currentTime)
+    expect(
+      shown.some((t) => t >= 1 && t < 1.04),
+      `${how}: ${JSON.stringify(shown)}`
+    ).toBe(true)
+  }
   expect(h.errors).toEqual([])
 })
 
@@ -289,7 +344,7 @@ test('a step while playing stops playback first; the end is a limit in both dire
   await win.click(STEP_BACK)
   await expect.poll(isPlaying).toBe(false)
 
-  // the end: forward does nothing, back goes to the last frame
+  // the end shows the last frame: forward does nothing, and the first step back already shows the frame before it
   await win.keyboard.press('End')
   await sleep(300)
   expect(await timecode()).toBe('00:03.00')
@@ -300,8 +355,14 @@ test('a step while playing stops playback first; the end is a limit in both dire
   expect(await frameHash()).toBe(endPicture)
   await win.click(STEP_BACK)
   await sleep(300)
+  expect(ms(await timecode())).toBeGreaterThanOrEqual(2920)
+  expect(ms(await timecode())).toBeLessThanOrEqual(2940)
+  expect(await frameHash(), 'one step back from the end must change the picture').not.toBe(endPicture)
+  await win.click(STEP_FORWARD)
+  await sleep(300)
   expect(ms(await timecode())).toBeGreaterThanOrEqual(2950)
   expect(ms(await timecode())).toBeLessThanOrEqual(2980)
+  expect(await frameHash(), 'the last frame').toBe(endPicture)
   await win.click(STEP_FORWARD)
   await sleep(300)
   expect(await timecode()).toBe('00:03.00')
@@ -315,16 +376,32 @@ test('steps skip removed pieces', async () => {
   await win.keyboard.press('Shift+ArrowRight') // source 1000 ms: where the removed piece begins
   await sleep(300)
   expect(await timecode()).toBe('00:01.00')
+  // from inside the removed piece the next frame is the first one after it (source 1500 ms), not the second
   await win.click(STEP_FORWARD)
   await sleep(300)
+  const first = (await videoStates()).map((v) => v.currentTime)
+  expect(
+    first.some((t) => t >= 1.5 && t < 1.52),
+    JSON.stringify(first)
+  ).toBe(true)
+  expect(await timecode()).toBe('00:01.00')
   // one frame into the piece after the cut (source 1533 ms), not into the cut
+  await win.click(STEP_FORWARD)
+  await sleep(300)
   const after = (await videoStates()).map((v) => v.currentTime)
   expect(
-    after.some((t) => t > 1.5 && t < 1.58),
+    after.some((t) => t > 1.52 && t < 1.58),
     JSON.stringify(after)
   ).toBe(true)
   expect(ms(await timecode())).toBeLessThan(1060)
+  // back: the first kept frame, then the last frame before the removed piece
   await win.click(STEP_BACK)
+  await sleep(300)
+  const edge = (await videoStates()).map((v) => v.currentTime)
+  expect(
+    edge.some((t) => t >= 1.5 && t < 1.52),
+    JSON.stringify(edge)
+  ).toBe(true)
   await win.click(STEP_BACK)
   await sleep(300)
   const before = (await videoStates()).map((v) => v.currentTime)

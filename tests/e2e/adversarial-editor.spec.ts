@@ -72,11 +72,19 @@ async function outTotal(): Promise<string> {
   return txt.replace('/', '').trim()
 }
 
-/** Home + n presses of Shift+Right puts the playhead at exactly n * 1000 ms. */
+/**
+ * Home + Shift+Left / Shift+Right puts the playhead at exactly n * 1000 ms of the source. Home goes to the first
+ * kept frame, which is not 0 once the start of the recording is trimmed, so the helper reads where it landed.
+ */
 async function playheadAt(seconds: number): Promise<void> {
   await h.win.click('.timeline-toolbar .timeline-hint') // move focus out of any input
   await h.win.keyboard.press('Home')
-  for (let i = 0; i < seconds; i++) await h.win.keyboard.press('Shift+ArrowRight')
+  await h.win.waitForTimeout(150)
+  const shown = (await h.win.textContent('.preview-controls .source-time')) ?? ''
+  const m = /(\d+):(\d+)\.(\d+)/.exec(shown)
+  const from = m ? Math.round(((Number(m[1]) * 60 + Number(m[2])) * 1000 + Number(m[3]) * 10) / 1000) : 0
+  const key = seconds >= from ? 'Shift+ArrowRight' : 'Shift+ArrowLeft'
+  for (let i = 0; i < Math.abs(seconds - from); i++) await h.win.keyboard.press(key)
 }
 
 async function cutSeconds(from: number, to: number): Promise<void> {

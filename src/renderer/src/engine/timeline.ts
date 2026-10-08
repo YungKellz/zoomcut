@@ -111,11 +111,29 @@ export function playStartTime(tSrc: number, segments: Segment[]): number {
 /**
  * `tSrc` moved by `frames` frames of `frameMs` along the OUTPUT timeline, so removed pieces are
  * jumped over; the result stays inside the kept range (the start of the output .. its end).
+ *
+ * Two positions are not on a frame of their own, and a step starts from the frame they show:
+ * - the end of the output shows the last frame (see displayTime), which starts a frame earlier, so
+ *   the first step back from the end already shows the frame before it;
+ * - a playhead inside a removed piece sits where the first frame after the piece begins, so a step
+ *   forward lands on that frame rather than on the one behind it.
  */
 export function stepFrames(tSrc: number, frames: number, frameMs: number, segments: Segment[]): number {
+  const total = outputDuration(segments)
+  const last = segments[segments.length - 1]
+  let from = srcToOut(tSrc, segments)
+  if (frameMs > 0) {
+    // a position that is a whole number of frames from the start of the output is exactly that: the
+    // microsecond rounding below would otherwise add up over many steps (60 steps at 30 fps stop at 1999.99998)
+    const k = Math.round(from / frameMs)
+    if (Math.abs(from - k * frameMs) < 1e-3) from = k * frameMs
+  }
+  if (last && tSrc >= last.end) from = Math.max(0, total - frameMs)
+  else if (frames > 0 && segmentAt(tSrc, segments) === null) from -= frameMs
   // float noise must not decide on which side of a cut the step ends
-  const out = Math.round((srcToOut(tSrc, segments) + frames * frameMs) * 1e6) / 1e6
-  return outToSrc(Math.max(0, Math.min(outputDuration(segments), out)), segments)
+  const out = Math.round((from + frames * frameMs) * 1e6) / 1e6
+  // the sub-microsecond drift that rounding leaves behind over many steps must not stop a step short of the end
+  return outToSrc(out > total - 1e-3 ? total : Math.max(0, out), segments)
 }
 
 /** A hair past the instant: see displayTime. */

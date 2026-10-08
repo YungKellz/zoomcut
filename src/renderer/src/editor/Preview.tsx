@@ -53,6 +53,15 @@ function nextSegmentIndex(segments: Segment[], t: number): number {
   return segments.findIndex((s) => s.start > t - 1)
 }
 
+/**
+ * `tMs` is at or past the end of the video file. The file can be a hair shorter than the duration
+ * stored in the project (the probed length is rounded), and playing an ended <video> restarts it from 0,
+ * so nothing may ever be played from such a time.
+ */
+function pastMediaEnd(video: HTMLVideoElement, tMs: number): boolean {
+  return Number.isFinite(video.duration) && tMs >= video.duration * 1000 - 1
+}
+
 type Corner = 'nw' | 'ne' | 'sw' | 'se'
 
 /**
@@ -177,20 +186,26 @@ export function Preview({ followPath }: Props): JSX.Element {
         }
         target = segs[idx].start
       }
-      if (Math.abs(video.currentTime * 1000 - target) > 30) video.currentTime = target / 1000
-      // the file can be shorter than the probed duration; play() on an ended element would
-      // start it over from 0 instead of staying at the end
-      if (target >= video.duration * 1000 - 1) {
-        setPlaying(false)
-        return
+      if (pastMediaEnd(video, target)) {
+        // the playhead sits between the end of the file and the project's duration: there is nothing left
+        // to play from here, so start over like Play at the end does (play() on an ended video would
+        // restart it from 0 behind the playhead's back)
+        idx = 0
+        target = segs[0].start
+        if (pastMediaEnd(video, target)) {
+          setPlaying(false)
+          return
+        }
+        setPlayhead(target)
       }
+      if (Math.abs(video.currentTime * 1000 - target) > 30) video.currentTime = target / 1000
       void video.play().catch(() => setPlaying(false))
       prepareStandby(idx + 1)
     } else {
       videoARef.current?.pause()
       videoBRef.current?.pause()
     }
-  }, [playing, ready, setPlaying, activeVideo, prepareStandby])
+  }, [playing, ready, setPlaying, setPlayhead, activeVideo, prepareStandby])
 
   // render loop
   useEffect(() => {
@@ -212,7 +227,9 @@ export function Preview({ followPath }: Props): JSX.Element {
         const idx = segmentIndexAt(segs, vt)
         if (idx === -1) {
           const nextIdx = nextSegmentIndex(segs, vt)
-          if (nextIdx === -1 || active.ended) {
+          // the rest of the output lies past the end of the file: swapping to a player that is seeked
+          // there would play an ended video, which restarts from 0 and loops the preview
+          if (nextIdx === -1 || active.ended || pastMediaEnd(active, segs[nextIdx].start)) {
             active.pause()
             useStore.getState().setPlaying(false)
             useStore.getState().setPlayhead(lastKeptTime(segs), true)

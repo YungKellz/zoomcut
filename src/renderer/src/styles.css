@@ -1031,14 +1031,6 @@ input.name-input:focus {
   border-bottom-color: var(--accent);
 }
 
-.tab svg {
-  flex: none;
-}
-
-.tab:hover:not(.active) {
-  color: var(--text);
-}
-
 .panel {
   padding: 10px 14px 20px;
   overflow: auto;
@@ -2741,6 +2733,15 @@ input.scenario-pause-input {
 
 
 /* ---------- 0.4.1 track C: editor top bar, tabs, playback ---------- */
+
+/* inspector tabs: icons keep their size, an inactive tab lights up on hover */
+.tab svg {
+  flex: none;
+}
+
+.tab:hover:not(.active) {
+  color: var(--text);
+}
 
 /* thin divider inside a row of buttons: editor top bar (Undo Redo | Record again Delete) and the player controls */
 .editor-top-sep,
