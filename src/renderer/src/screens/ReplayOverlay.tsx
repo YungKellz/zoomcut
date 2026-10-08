@@ -22,21 +22,25 @@ const EFFECT_TTL_MS: Record<ScenarioActionKind, number> = {
   type: 1500,
   key: 900
 }
+/** a hover (a click switched to "position only") marks where the cursor arrived a little longer than a ripple */
+const HOVER_TTL_MS = 900
 
 /**
- * Transparent, click-through window shown on top of the display during a scenario replay:
- * a ripple at every click, a fading line from start to end for a drag, a directional arrow for
- * a scroll, a caption bubble for typed text, a keycap badge for shortcuts, and a HUD with the
- * replay progress. Fed by two IPC streams from the main process - overlay:effect (one event per
- * captured action as replay.ps1 reaches it, carrying toX/toY for a drag and deltaY/deltaX for a
- * scroll) and recording:replay-state (for the HUD). Effects are a small array pruned by plain
- * timers (their ids tracked so an early unmount cannot leave one firing into stale state), never
- * a per-frame animation loop.
+ * Transparent, click-through window shown on top of the display during a scenario replay (a
+ * recording's, or a dry run's - the HUD then says nothing is recorded): a ripple at every click,
+ * a dashed ring where the cursor came to rest for a "position only" click, a fading line from
+ * start to end for a drag, a directional arrow for a scroll, a caption bubble for typed text, a
+ * keycap badge for shortcuts, and a HUD with the replay progress. Fed by two IPC streams from the
+ * main process - overlay:effect (one event per captured action as replay.ps1 reaches it, carrying
+ * toX/toY for a drag, deltaY/deltaX for a scroll and hoverOnly for a "position only" click) and
+ * recording:replay-state (for the HUD). Effects are a small array pruned by plain timers (their
+ * ids tracked so an early unmount cannot leave one firing into stale state), never a per-frame
+ * animation loop.
  */
 export function ReplayOverlay(): JSX.Element {
   const t = useT()
   const [effects, setEffects] = useState<Effect[]>([])
-  const [hud, setHud] = useState<{ index: number; total: number } | null>(null)
+  const [hud, setHud] = useState<{ index: number; total: number; preview: boolean } | null>(null)
   const nextId = useRef(0)
   const timeoutIds = useRef(new Set<number>())
 
@@ -49,13 +53,13 @@ export function ReplayOverlay(): JSX.Element {
       const timeoutId = window.setTimeout(() => {
         timeoutIds.current.delete(timeoutId)
         setEffects((prev) => prev.filter((f) => f.id !== id))
-      }, EFFECT_TTL_MS[e.kind] ?? 700)
+      }, e.hoverOnly ? HOVER_TTL_MS : (EFFECT_TTL_MS[e.kind] ?? 700))
       timeoutIds.current.add(timeoutId)
     })
     const offState = window.zc.overlay.onReplayState((s) => {
       setHud(
         s.phase === 'preparing' || s.phase === 'ready' || s.phase === 'running'
-          ? { index: Math.min(s.index + 1, s.total), total: s.total }
+          ? { index: Math.min(s.index + 1, s.total), total: s.total, preview: s.preview === true }
           : null
       )
     })
@@ -71,7 +75,11 @@ export function ReplayOverlay(): JSX.Element {
 
   return (
     <div className="replay-overlay bar-window">
-      {hud && <div className="replay-hud">{t('scenario.overlayHud', { index: hud.index, total: hud.total })}</div>}
+      {hud && (
+        <div className="replay-hud">
+          {t(hud.preview ? 'scenario.overlayHudPreview' : 'scenario.overlayHud', { index: hud.index, total: hud.total })}
+        </div>
+      )}
       {effects.map((e) => (
         <EffectView key={e.id} effect={e} />
       ))}
@@ -93,6 +101,8 @@ function ScrollArrow({ deltaY, deltaX }: { deltaY?: number; deltaX?: number }): 
 
 function EffectView({ effect }: { effect: Effect }): JSX.Element | null {
   const style = { left: effect.x, top: effect.y }
+  // "position only": the cursor just arrived, nothing was pressed - never a click ripple
+  if (effect.hoverOnly) return <span className="replay-hover" style={style} />
   switch (effect.kind) {
     case 'click':
       return <span className="replay-ripple left" style={style} />

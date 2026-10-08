@@ -15,12 +15,15 @@ import {
   describeAction,
   graphemes,
   groupRawEvents,
+  isClickAction,
+  isHoverOnly,
   migrateScenario,
   minDurationMs,
   moveActionStart,
   scenarioEnd,
   scenarioSchedule,
   setActionDuration,
+  setActionHoverOnly,
   setActionPause,
   setActionText,
   setAllPauses,
@@ -1818,10 +1821,248 @@ describe('Scenario.startPoint', () => {
   })
 })
 
+// ---- "position only, no click" (ScenarioClickAction.hoverOnly) ----
+
+const CLICK_KINDS = ['click', 'doubleClick', 'rightClick', 'middleClick'] as const
+
+function hover(kind: ScenarioClickAction['kind'], id: string, extra: Partial<ScenarioClickAction> = {}): ScenarioClickAction {
+  return clickOf(kind, id, { hoverOnly: true, ...extra })
+}
+
 describe('describeAction', () => {
   it('returns the kind and, for type/key, a plain-text detail', () => {
     expect(describeAction(click('a'))).toEqual({ kindKey: 'click', detail: '' })
     expect(describeAction(key('k', { key: 'Enter' }))).toEqual({ kindKey: 'key', detail: 'Enter' })
     expect(describeAction(typed('t', 'hello'))).toEqual({ kindKey: 'type', detail: 'hello' })
+  })
+
+  it('calls a click switched to "position only" a hover, whichever click it was', () => {
+    for (const kind of CLICK_KINDS) {
+      expect(describeAction(clickOf(kind, 'h', { hoverOnly: true }))).toEqual({ kindKey: 'hover', detail: '' })
+      expect(describeAction(clickOf(kind, 'c', { hoverOnly: false }))).toEqual({ kindKey: kind, detail: '' })
+    }
+  })
+})
+
+describe('isClickAction / isHoverOnly', () => {
+  it('knows the four click kinds and nothing else', () => {
+    for (const kind of CLICK_KINDS) expect(isClickAction(clickOf(kind, 'c'))).toBe(true)
+    for (const a of [drag('d'), scroll('s', 1), typed('t', 'x'), key('k')]) expect(isClickAction(a)).toBe(false)
+  })
+
+  it('is a hover only for a click kind with a real true', () => {
+    for (const kind of CLICK_KINDS) {
+      expect(isHoverOnly(hover(kind, 'h'))).toBe(true)
+      expect(isHoverOnly(clickOf(kind, 'c'))).toBe(false)
+      expect(isHoverOnly(clickOf(kind, 'c', { hoverOnly: false }))).toBe(false)
+      expect(isHoverOnly({ ...clickOf(kind, 'c'), hoverOnly: 'yes' } as unknown as ScenarioAction)).toBe(false)
+    }
+    expect(isHoverOnly({ ...drag('d'), hoverOnly: true } as unknown as ScenarioAction)).toBe(false)
+    expect(isHoverOnly({ ...key('k'), hoverOnly: true } as unknown as ScenarioAction)).toBe(false)
+  })
+})
+
+describe('editing: setActionHoverOnly', () => {
+  const base = (): ScenarioAction[] => [click('a'), clickOf('rightClick', 'r', { modifiers: withMods({ ctrl: true }), durationMs: 1700, pauseMs: 300 }), drag('d')]
+
+  it('switches one click on and leaves the others (the very same objects) alone', () => {
+    const actions = base()
+    const out = setActionHoverOnly(actions, 'r', true)
+    expect(out).not.toBe(actions)
+    expect(out[1]).toEqual({ ...actions[1], hoverOnly: true })
+    expect(out[0]).toBe(actions[0])
+    expect(out[2]).toBe(actions[2])
+    expect('hoverOnly' in actions[1]).toBe(false) // the input was not touched
+  })
+
+  it('switching it off removes the field, giving back exactly the click it was', () => {
+    const actions = base()
+    const off = setActionHoverOnly(setActionHoverOnly(actions, 'r', true), 'r', false)
+    expect(off[1]).toEqual(actions[1])
+    expect('hoverOnly' in off[1]).toBe(false)
+  })
+
+  it('works on every click kind', () => {
+    for (const kind of CLICK_KINDS) {
+      const out = setActionHoverOnly([clickOf(kind, 'c')], 'c', true)
+      expect(isHoverOnly(out[0])).toBe(true)
+      expect(out[0].kind).toBe(kind)
+    }
+  })
+
+  it('returns the same array for an unknown id, a kind that is not a click, a value already set or a non-boolean', () => {
+    const actions = base()
+    expect(setActionHoverOnly(actions, 'nope', true)).toBe(actions)
+    expect(setActionHoverOnly(actions, 'd', true)).toBe(actions)
+    expect(setActionHoverOnly(actions, 'a', false)).toBe(actions)
+    expect(setActionHoverOnly(actions, 'a', 'yes' as unknown as boolean)).toBe(actions)
+    const on = setActionHoverOnly(actions, 'a', true)
+    expect(setActionHoverOnly(on, 'a', true)).toBe(on)
+  })
+
+  it('keeps the stored timing, modifiers and shot, and does not mutate frozen input', () => {
+    const actions = deepFreeze(base())
+    const on = setActionHoverOnly(actions, 'r', true)
+    expect(on[1]).toMatchObject({ durationMs: 1700, pauseMs: 300, modifiers: withMods({ ctrl: true }), shot: null })
+    expect(() => setActionHoverOnly(on, 'r', false)).not.toThrow()
+  })
+})
+
+describe('hover timing', () => {
+  it('has its own 150ms floor and the click default of 1s, whichever click it was', () => {
+    for (const kind of CLICK_KINDS) {
+      const h = hover(kind, 'h', { durationMs: 0 })
+      expect(minDurationMs(h)).toBe(150)
+      expect(actionDurationMs(h)).toBe(150)
+      expect(defaultDurationMs(h)).toBe(1000)
+    }
+  })
+
+  it('switching back to a click keeps the stored value and lets the click floor apply again', () => {
+    for (const kind of CLICK_KINDS) {
+      const back = setActionHoverOnly([hover(kind, 'h', { durationMs: 150 })], 'h', false)[0]
+      expect(back.durationMs).toBe(150)
+      expect(actionDurationMs(back)).toBe(minDurationMs(clickOf(kind, 'c')))
+    }
+  })
+
+  it('puts the effect where the cursor lands: 90ms before the end', () => {
+    const [s] = scenarioSchedule([hover('doubleClick', 'h', { durationMs: 800 })])
+    expect(s).toEqual({ start: 0, effectAt: 710, end: 800, pauseEnd: 2300 })
+  })
+
+  it('stays sequential: a hover takes its duration and its pause like any other action', () => {
+    const actions = [click('a', { x: 10, y: 10 }), hover('doubleClick', 'h', { x: 400, y: 300, durationMs: 800, pauseMs: 700 }), click('b', { x: 50, y: 50 })]
+    expect(scenarioSchedule(actions)).toEqual([
+      { start: 0, effectAt: 910, end: 1000, pauseEnd: 2500 },
+      { start: 2500, effectAt: 3210, end: 3300, pauseEnd: 4000 },
+      { start: 4000, effectAt: 4910, end: 5000, pauseEnd: 6500 }
+    ])
+    expect(scenarioEnd(actions)).toBe(6500)
+  })
+})
+
+describe('compileScenario: hover (position only)', () => {
+  it('only travels: no button, no modifier, no key step, whatever click and modifiers it was captured with', () => {
+    const mods = withMods({ ctrl: true, shift: true, alt: true, meta: true })
+    for (const kind of CLICK_KINDS) {
+      const steps = compile([hover(kind, 'h', { x: 300, y: 200, durationMs: 1000, modifiers: mods })])
+      expect(physical(steps).filter((s) => s.op !== 'move')).toEqual([])
+      const moves = steps.filter(isMove)
+      expect(moves.length).toBeGreaterThan(1)
+      expect(moves[moves.length - 1]).toEqual({ t: 910, op: 'move', x: 300, y: 200 })
+      expect(steps.find(isMarker)).toEqual({ t: 910, op: 'action', index: 0 })
+      expect(steps[steps.length - 1]).toEqual({ t: 2500, op: 'end' })
+    }
+  })
+
+  it('travels in a straight line from where the cursor was, using the whole duration but the last 90ms', () => {
+    const steps = compile([hover('click', 'h', { x: 600, y: 0, durationMs: 1500 })], { x: 0, y: 0 })
+    const moves = steps.filter(isMove)
+    expect(moves[0].t).toBeLessThan(40)
+    expect(moves.every((m) => m.y === 0 && m.x >= 0 && m.x <= 600)).toBe(true)
+    expect(moves[moves.length - 1]).toEqual({ t: 1410, op: 'move', x: 600, y: 0 })
+  })
+
+  it('a minimum-duration hover still travels for a few frames and lands inside its window', () => {
+    const steps = compile([hover('click', 'h', { x: 500, y: 0, durationMs: 0, pauseMs: 0 })])
+    const moves = steps.filter(isMove)
+    expect(moves.length).toBeGreaterThan(1)
+    expect(moves[moves.length - 1]).toEqual({ t: 60, op: 'move', x: 500, y: 0 })
+    expect(steps[steps.length - 1]).toEqual({ t: 150, op: 'end' })
+  })
+
+  it('in a scenario: nothing in its pause, and the next action travels from the hover point', () => {
+    const actions = [click('a', { x: 10, y: 10 }), hover('rightClick', 'h', { x: 400, y: 300, durationMs: 800, pauseMs: 700 }), click('b', { x: 50, y: 50 })]
+    const steps = compile(actions)
+    const between = physical(steps).filter((s) => s.t > 1000 && s.t <= 4000)
+    expect(between.length).toBeGreaterThan(0)
+    expect(between.every((s) => s.op === 'move' && s.t >= 2500 && s.t <= 3210)).toBe(true)
+    // only the two real clicks press anything - the hover's right button never goes down
+    expect(steps.filter(isButtonOp('down'))).toEqual([
+      { t: 910, op: 'down', button: 'left' },
+      { t: 4910, op: 'down', button: 'left' }
+    ])
+    const nextTravel = steps.filter((s): s is Extract<ReplayStep, { op: 'move' }> => isMove(s) && s.t > 4000)
+    expect(Math.hypot(nextTravel[0].x - 400, nextTravel[0].y - 300)).toBeLessThan(1)
+    expect(nextTravel[nextTravel.length - 1]).toMatchObject({ x: 50, y: 50 })
+  })
+
+  it('leaves nothing held, mixed with every other kind at their minimum durations', () => {
+    const chain = [
+      hover('click', 'h1', { x: 100, y: 100, modifiers: withMods({ ctrl: true }) }),
+      click('c', { x: 200, y: 100, modifiers: withMods({ shift: true }) }),
+      hover('middleClick', 'h2', { x: 300, y: 100 }),
+      key('k', { modifiers: withMods({ alt: true }) })
+    ].map((a) => ({ ...a, durationMs: 0, pauseMs: 0 }) as ScenarioAction)
+    const steps = compile(chain, { x: 1000, y: 900 })
+    for (let i = 1; i < steps.length; i++) expect(steps[i].t).toBeGreaterThanOrEqual(steps[i - 1].t)
+    const held = new Set<string>()
+    for (const s of steps) {
+      if (s.op === 'down') held.add('btn:' + s.button)
+      else if (s.op === 'up') held.delete('btn:' + s.button)
+      else if (isKey(s)) {
+        if (s.down) held.add(`key:${s.vk}`)
+        else held.delete(`key:${s.vk}`)
+      }
+    }
+    expect([...held]).toEqual([])
+    // the hovers' ctrl never goes down: only the click's shift and the key's alt do
+    expect(steps.filter((s) => isKey(s) && s.down).map((s) => (s as Extract<ReplayStep, { op: 'key' }>).vk)).toEqual([0x10, 0x12, 13])
+  })
+})
+
+describe('migrateScenario: hoverOnly', () => {
+  const scenarioWith = (actions: ScenarioAction[]): Scenario => ({
+    version: 2,
+    id: 's',
+    name: 'n',
+    createdAt: 1,
+    displayId: 1,
+    displayBounds: { x: 0, y: 0, width: 100, height: 100 },
+    scaleFactor: 1,
+    durationMs: 5,
+    dir: 'x',
+    actions
+  })
+
+  it('keeps a true flag on every click kind, through a JSON round trip (save + load), as version 2', () => {
+    const scenario = scenarioWith(CLICK_KINDS.map((kind) => hover(kind, kind)))
+    const migrated = migrateScenario(JSON.parse(JSON.stringify(scenario)))
+    expect(migrated.version).toBe(2)
+    expect(migrated).toEqual(scenario)
+    expect(migrated.actions.every(isHoverOnly)).toBe(true)
+  })
+
+  it('drops anything but a real true, and the flag on any other kind, keeping the rest of the action', () => {
+    const raw = JSON.parse(JSON.stringify(scenarioWith([click('t'), click('f'), click('s'), click('n'), click('z'), drag('d'), key('k')]))) as {
+      actions: Array<Record<string, unknown>>
+    }
+    raw.actions[0]['hoverOnly'] = true
+    raw.actions[1]['hoverOnly'] = false
+    raw.actions[2]['hoverOnly'] = 'yes'
+    raw.actions[3]['hoverOnly'] = 1
+    raw.actions[4]['hoverOnly'] = null
+    raw.actions[5]['hoverOnly'] = true
+    raw.actions[6]['hoverOnly'] = true
+    const migrated = migrateScenario(raw)
+    expect(migrated.actions.map((a) => 'hoverOnly' in a)).toEqual([true, false, false, false, false, false, false])
+    expect(isHoverOnly(migrated.actions[0])).toBe(true)
+    expect(migrated.actions[1]).toEqual(click('f'))
+    expect(migrated.actions[5]).toEqual(drag('d'))
+  })
+
+  it('applies the same rule to a version 1 file, and never mutates its input', () => {
+    const raw = deepFreeze({
+      version: 1,
+      actions: [
+        { id: 'a', kind: 'click', at: 0, x: 1, y: 2, path: [], modifiers: NO_MODS, shot: null, hoverOnly: true },
+        { id: 'b', kind: 'scroll', at: 0, x: 1, y: 2, path: [], modifiers: NO_MODS, shot: null, deltaY: 1, deltaX: 0, hoverOnly: true }
+      ]
+    })
+    const migrated = migrateScenario(raw)
+    expect(isHoverOnly(migrated.actions[0])).toBe(true)
+    expect('hoverOnly' in migrated.actions[1]).toBe(false)
+    expect(raw.actions[1].hoverOnly).toBe(true)
   })
 })

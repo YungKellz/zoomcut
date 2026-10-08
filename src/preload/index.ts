@@ -79,7 +79,10 @@ const api: ZcApi = {
     list: () => ipcRenderer.invoke('scenario:list'),
     load: (id) => ipcRenderer.invoke('scenario:load', id),
     save: (scenario) => ipcRenderer.invoke('scenario:save', scenario),
-    remove: (id) => ipcRenderer.invoke('scenario:delete', id)
+    remove: (id) => ipcRenderer.invoke('scenario:delete', id),
+    preview: (scenario) => ipcRenderer.invoke('scenario:preview', scenario),
+    abortPreview: () => ipcRenderer.invoke('scenario:preview-abort'),
+    onPreviewState: (cb) => subscribe('scenario:preview-state', cb)
   },
   overlay: {
     onEffect: (cb) => subscribe('overlay:effect', cb),

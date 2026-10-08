@@ -477,7 +477,13 @@ export interface ScenarioActionBase {
    * ends after the last one's). Read it through actionPauseMs(). */
   pauseMs: number
 }
-export interface ScenarioClickAction extends ScenarioActionBase { kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick' }
+export interface ScenarioClickAction extends ScenarioActionBase {
+  kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick'
+  /** "Position only, no click": the replay only brings the cursor to (x, y) and presses nothing
+   * (no button, no modifiers), for hover effects. Absent = false; only `true` survives
+   * migrateScenario. Set it through setActionHoverOnly() (shared/scenario.ts). */
+  hoverOnly?: boolean
+}
 export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[] }
 /** deltaY/deltaX in wheel notches (positive = down / right); replayed as that many wheel events spread over the action's durationMs */
 export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number }
@@ -525,6 +531,13 @@ export interface ReplayState {
   index: number
   total: number
   message?: string
+  /** true for a dry run (window.zc.scenario.preview): the same replay, but nothing is recorded */
+  preview?: boolean
+}
+/** How a dry run (window.zc.scenario.preview) ended: it ran to the end, it was aborted (Escape, Stop), or the replay helper failed. */
+export interface ScenarioPreviewResult {
+  outcome: 'done' | 'aborted' | 'error'
+  message?: string
 }
 /** what the overlay window draws; x/y (and toX/toY) are DIP relative to the display's top-left */
 export interface OverlayEffect {
@@ -540,6 +553,8 @@ export interface OverlayEffect {
   /** scroll only: wheel notches, same sign convention as ScenarioScrollAction (positive = down/right) */
   deltaY?: number
   deltaX?: number
+  /** a click kind with ScenarioClickAction.hoverOnly: the cursor only arrives, so a hover marker instead of a ripple */
+  hoverOnly?: boolean
 }
 
 /** Options for recording.prepare() / useRecorder's start(): what to capture besides the screen
