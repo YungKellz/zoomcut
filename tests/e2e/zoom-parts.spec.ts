@@ -99,7 +99,7 @@ test('a second area is added inside a fixed zoom, shows as a divider, and undo r
   expect(zoom.target.x).toBeLessThan(0.45) // area 0 is untouched
 
   await expect(win.locator('.zoom-part-divider')).toHaveCount(1)
-  await expect(win.locator('.region.zoom .region-label')).toContainText('2 parts')
+  await expect(win.locator('.region.zoom .region-label')).toContainText('2 steps')
   await expect(win.locator('.zoom-parts .list-item')).toHaveCount(2)
   await expect(win.locator('.zoom-parts .list-item .danger')).toHaveCount(1) // only Part 2 can be removed
 

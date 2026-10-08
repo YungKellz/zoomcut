@@ -1303,20 +1303,31 @@ input.name-input:focus {
   opacity: 0.9;
 }
 
-.click-mark {
+/* an input tag on the video lane (Timeline.tsx): placed at its start, as wide as its span */
+.input-mark {
   position: absolute;
   bottom: 2px;
-  width: 16px;
   height: 16px;
-  margin-left: -8px;
+  color: var(--warn);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.input-mark-icon {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 2px;
+  transform: translateX(-50%);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--warn);
   background: rgba(0, 0, 0, 0.6);
   cursor: help;
-  z-index: 1;
+  pointer-events: auto;
 }
 
 .track-zoom {
@@ -2737,6 +2748,44 @@ input.scenario-pause-input {
 
 
 /* ---------- 0.4.1 track F: timeline lanes, input tags ---------- */
+
+/* how long a drag / scroll / typing burst / held key combination lasts: a thin bar from its tag */
+.input-mark-span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.8;
+  cursor: help;
+  pointer-events: auto;
+}
+
+/* the "2" of a double click */
+.input-mark-badge {
+  margin-left: 1px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.input-mark[data-kind='drag'] {
+  color: #64d2ff;
+}
+
+.input-mark[data-kind='scroll'] {
+  color: #b48cff;
+}
+
+.input-mark[data-kind='type'] {
+  color: #4cd964;
+}
+
+.input-mark[data-kind='key'] {
+  color: #ff7eb6;
+}
 
 
 /* ---------- 0.4.1 end of track markers ---------- */
