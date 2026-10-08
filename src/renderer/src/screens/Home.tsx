@@ -253,7 +253,7 @@ export function Home(): JSX.Element {
                   onClick={() => setSelectedDisplay(d.id)}
                   disabled={recording || capturing}
                 >
-                  {d.thumbnail ? <img src={d.thumbnail} alt="" /> : <div className="display-placeholder" />}
+                  {d.thumbnail ? <img src={d.thumbnail} alt="" draggable={false} /> :<div className="display-placeholder" />}
                   <div className="display-name">
                     {d.name}
                     {d.primary ? ` · ${t('home.primary')}` : ''}
@@ -428,7 +428,7 @@ export function Home(): JSX.Element {
               <span>v{info.version}</span>
               <UpdateStatus />
             </span>
-            <button className="link folder-link" title={t('home.openRecordingsDir')} onClick={() => void window.zc.app.openPath(info.recordingsDir)}>
+            <button className="link folder-link" title={`${t('home.openRecordingsDir')}\n${info.recordingsDir}`} onClick={() => void window.zc.app.openPath(info.recordingsDir)}>
               {t('home.recordingsDir', { dir: info.recordingsDir })}
             </button>
             {!info.ffmpegPath && <span className="warn">{t('home.ffmpegMissing')}</span>}

@@ -34,7 +34,7 @@ export function GifConverterCard({ intake, disabled }: Props): JSX.Element {
       <div className="converter-drop">
         <FileVideo size={26} className="converter-drop-icon" />
         <div className="converter-drop-text">
-          <p className="converter-drop-title">{intake.busy ? t('converter.probing') : t('converter.dropTitle')}</p>
+          <p className="converter-drop-title">{intake.probing ? t('converter.probing') : t('converter.dropTitle')}</p>
           <p className="muted small">{t('converter.help')}</p>
         </div>
         <button className="btn converter-choose" onClick={() => void intake.choose()} disabled={disabled || intake.busy} title={t('converter.buttonTitle')}>

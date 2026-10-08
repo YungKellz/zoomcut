@@ -34,13 +34,16 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   shared uiohook in `hook.ts`, key-text resolver and SendInput replay helpers as PowerShell scripts in
   `inputHelper.ts`, `capture.ts`, `replay.ts`, scenario storage under `userData/scenarios/<id>/`),
   `composition/storage.ts` (compositions as `<id>.json` in `userData/compositions`), `media/gifConvert.ts` (the
-  standalone MP4 → GIF converter: file picker + `encodeGif` with an fps/scale prefilter and a trim),
+  standalone MP4 → GIF converter: file picker or a dropped path (`probe`, validated by `media/videoFile.ts`) +
+  `encodeGif` with an fps/scale prefilter and a trim; `windows.ts` also blocks the main window from navigating to a
+  dropped file),
   `exportManager.ts`, `storage.ts` (projects in `%USERPROFILE%\Videos\ZoomCut\<timestamp>\`, `settings.json` in
   userData), `mediaProtocol.ts` (`zc-media://` with Range + CORS), `updater.ts` (electron-updater against GitHub
   Releases), `ipc.ts` (all channels; `e2e:*` handlers exist only under `ZOOMCUT_E2E=1`).
 - `src/preload/index.ts` – exposes `window.zc`, typed by `src/shared/api.ts`.
 - `src/shared` – data model (`types.ts`), defaults, the API contract, `audio.ts` helpers and the pure scenario
-  engine `scenario.ts` (event grouping, timing model and edits, v1 → v2 migration, replay compilation). Renderer and main only share these.
+  engine `scenario.ts` (event grouping, timing model and edits, v1 → v2 migration, replay compilation), `videoFiles.ts`
+  (video extensions + the coded `video-file:<code>` errors main throws). Renderer and main only share these.
 - `src/renderer/src` – React app: `screens/` (Home, Editor, Composition, RecorderBar, ScenarioReview, ReplayOverlay, E2eTarget),
   `editor/` (Preview, Timeline, Inspector, ExportDialog, AudioPlayer), `engine/` (timeline math, cursor, camera,
   `compose.ts` = the single frame compositor used by both preview and export), `export/` (Mediabunny/WebCodecs or
@@ -48,7 +51,8 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   icons audio clips, `peaks.ts` = waveform peaks decoded through `zc-media://`), `editor/AudioWaveform.tsx`,
   `scenario/` (review-screen helpers, `fields.tsx` seconds inputs + presets), `home/items.ts` (the unified home list),
   `composition/` (`layout.ts` = pure composition timeline/frame/audio math,
-  `CompositionPlayer.tsx`), `converter/GifConverterDialog.tsx`, `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`, `lifecycle.ts` = delete / record again), `store.ts`
+  `CompositionPlayer.tsx`), `converter/` (`GifConverterDialog.tsx`, the Home card `GifConverterCard.tsx`, `useVideoIntake.ts` = picker + file drop
+  on the whole Home window, `intake.ts` = its pure helpers), `recording/` (`useRecorder.ts`, `useScenarioCapture.ts`, `lifecycle.ts` = delete / record again), `store.ts`
   (zustand, lazy undo checkpoints), `i18n/`, `components/`, `hooks/`.
 - `tests/e2e` – Playwright specs and `adv-helpers.ts`; `scripts/` – icon rendering and release notes;
   `.github/workflows` – `ci.yml` (typecheck, tests, build) and `release.yml` (tag `v*` → GitHub release).
@@ -96,6 +100,13 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   per-id queue as their autosaves.
 - Zoom parts: a `fixed` zoom can hold `parts` (further areas, each from its `start` boundary); the zoom's own
   target/scale is area 0. `cameraAt` glides between areas (`engine/camera.ts`: `zoomAreas`, `normalizeZoomParts`).
+- Home screen: a header (brand), two equal columns that scroll on their own (left = new recording, compositions,
+  the MP4 → GIF card; right = recordings and scenarios as tinted blocks; stacked below ~900 px) and a footer row
+  (language, version + updates, recordings folder). The page itself never scrolls. A video file dropped anywhere on
+  Home (`useVideoIntake`, path from `window.zc.converter.pathForFile`) is validated and probed by main
+  (`converter:probe`) and opens `GifConverterDialog` prefilled; refused files come back as `video-file:<code>`
+  errors that `videoErrorText` translates. Rows are one big click target (the open button's `::after` covers the
+  card); every delete asks through `confirmAt` with the clicked button as the anchor.
 - Env vars: `ZOOMCUT_E2E=1` (no single-instance lock, updater never installs on quit), `ZOOMCUT_RECORDINGS_DIR`,
   `ZOOMCUT_SCENARIOS_DIR`, `ZOOMCUT_COMPOSITIONS_DIR`, `ZOOMCUT_EXE`, `ZOOMCUT_UPDATE_URL` (generic update feed: a folder with `latest.yml` +
   installer), `ZOOMCUT_UPDATE_CHECK=1` (keep the updater on under `ZOOMCUT_E2E`).

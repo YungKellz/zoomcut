@@ -219,6 +219,8 @@ test('Home: equal columns that scroll on their own, a footer row, blocks that re
   expect(m.footerHasFolder).toBe(true)
   expect(m.footerText).toMatch(/v\d+\.\d+\.\d+/)
   expect(m.footerText).toContain('Recordings:')
+  // the path can be ellipsized on a narrow window: the tooltip always carries it in full
+  expect(await win.locator('.home-footer .folder-link').getAttribute('title')).toContain(h.recordingsDir)
   expect(m.footer.y).toBeGreaterThanOrEqual(m.main.bottom - 1)
   expect(m.footer.h).toBeLessThan(60)
   // both start buttons have the same size
@@ -277,6 +279,19 @@ test('Home: equal columns that scroll on their own, a footer row, blocks that re
   })
   expect(micOff).toBeLessThan(1.5)
   await win.locator('.audio-check input').first().uncheck()
+})
+
+test('Home: the whole recording card is the click target, not only its text', async () => {
+  const { win } = h
+  makeProject('wholeCard', null, Date.now() + 9000)
+  await reloadHome()
+  const row = win.locator('.project-list > .project-row:has-text("Synthetic wholeCard")')
+  await expect(row).toHaveCount(1)
+  const box = (await row.boundingBox())!
+  // 3 px inside the card: its own padding, left of the open button's text
+  await win.mouse.click(box.x + 3, box.y + box.height / 2)
+  await win.waitForSelector('.editor', { timeout: 60_000 })
+  await reloadHome()
 })
 
 test('no unexpected renderer errors during the lifecycle flows', async () => {

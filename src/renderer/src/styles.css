@@ -543,9 +543,14 @@ details.adv[open] summary {
   transition: background 0.12s, border-color 0.12s;
 }
 
-.project-row:hover {
+.project-row:hover:not(:has(> .project-open:disabled)) {
   background: rgba(79, 140, 255, 0.15);
   border-color: rgba(79, 140, 255, 0.55);
+}
+
+/* the open button is disabled (something is loading or recording): the card stops reacting */
+.project-row:has(> .project-open:disabled) {
+  cursor: default;
 }
 
 .project-open {
@@ -594,12 +599,16 @@ details.adv[open] summary {
   transition: background 0.12s;
 }
 
-.scenario-block > .scenario-row:hover {
+.scenario-block > .scenario-row:hover:not(:has(> .scenario-open:disabled)) {
   background: rgba(122, 79, 214, 0.2);
 }
 
-.scenario-block > .scenario-row:hover .scenario-name-line {
+.scenario-block > .scenario-row:hover:not(:has(> .scenario-open:disabled)) .scenario-name-line {
   color: #fff;
+}
+
+.scenario-block > .scenario-row:has(> .scenario-open:disabled) {
+  cursor: default;
 }
 
 .scenario-name-line {
@@ -624,7 +633,7 @@ details.adv[open] summary {
   background: rgba(14, 15, 18, 0.35);
 }
 
-.scenario-children > .project-row:hover {
+.scenario-children > .project-row:hover:not(:has(> .project-open:disabled)) {
   background: rgba(79, 140, 255, 0.15);
 }
 
@@ -1969,9 +1978,13 @@ input.name-input:focus {
   transition: background 0.12s, border-color 0.12s;
 }
 
-.scenario-list > .scenario-row:hover {
+.scenario-list > .scenario-row:hover:not(:has(> .scenario-open:disabled)) {
   background: var(--panel-2);
   border-color: #3a414b;
+}
+
+.scenario-list > .scenario-row:has(> .scenario-open:disabled) {
+  cursor: default;
 }
 
 .scenario-row {
@@ -3015,6 +3028,32 @@ input.scenario-pause-input {
 
 .home-drop-hint p {
   margin: 0;
+}
+
+/* a thumbnail dragged inside the window must not look like a file being dropped on it */
+.home img {
+  -webkit-user-drag: none;
+}
+
+/* the whole card is the click target of its open button (the padding and gaps around the
+   buttons included); the folder / delete buttons stay above it */
+.project-row,
+.scenario-row {
+  position: relative;
+}
+
+.project-open::after,
+.scenario-open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.project-row > .btn,
+.scenario-row > .btn {
+  position: relative;
+  z-index: 1;
 }
 
 /* ---------- 0.4.1 track B: scenario review ---------- */

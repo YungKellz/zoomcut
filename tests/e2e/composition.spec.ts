@@ -265,9 +265,10 @@ test('a video dropped on Home opens the converter filled in; other drops are ref
           .then(() => 'ok', (e: Error) => e.message),
       p
     )
-  expect(await probe(notes)).toContain('Not a video file')
-  expect(await probe(join(h.exportDir, 'missing.mp4'))).toContain('File not found')
-  expect(await probe('clip.mp4')).toContain('Not a file path')
+  // (main only sends coded reasons; the renderer translates them)
+  expect(await probe(notes)).toContain('video-file:not-video')
+  expect(await probe(join(h.exportDir, 'missing.mp4'))).toContain('video-file:not-found')
+  expect(await probe('clip.mp4')).toContain('video-file:not-path')
 
   // real drags carrying file paths (CDP): a text file is refused and the window stays on Home ...
   const cdp = await win.context().newCDPSession(win)
@@ -282,6 +283,16 @@ test('a video dropped on Home opens the converter filled in; other drops are ref
   await expect(win.locator('.converter-card .converter-error')).toContainText('not a video file')
   await expect(win.locator('.home')).toHaveCount(1)
   await expect(win.locator('.modal')).toHaveCount(0)
+  // ... a file with a video extension that ffmpeg cannot read gets a translated message, not the ffmpeg log ...
+  const broken = join(h.exportDir, 'broken.mp4')
+  writeFileSync(broken, 'definitely not a video', 'utf8')
+  await drag('dragEnter', broken)
+  await drag('dragOver', broken)
+  await drag('drop', broken)
+  await expect(win.locator('.converter-card .converter-error')).toContainText('There is no video in that file')
+  await expect(win.locator('.converter-card .converter-error')).not.toContainText('metadata')
+  await expect(win.locator('.modal')).toHaveCount(0)
+  await win.click('.converter-card .converter-error .btn')
   // ... a video opens the converter with that file already loaded, anywhere on the window
   await drag('dragEnter', input)
   await drag('dragOver', input)

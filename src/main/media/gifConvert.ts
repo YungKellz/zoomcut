@@ -9,7 +9,7 @@ import { exportTempDir, updateSettings } from '../storage'
 import { sanitizeFileName, uniquePath } from '../exportManager'
 import { allowMediaRoot } from '../mediaProtocol'
 import { getMainWindow } from '../windows'
-import { checkVideoFile } from './videoFile'
+import { asVideoReadError, checkVideoFile } from './videoFile'
 
 /**
  * The standalone "MP4 → GIF" converter: any video file the user picks is run through the same
@@ -37,7 +37,10 @@ export class GifConverter {
   }
 
   private async describe(path: string): Promise<VideoFileInfo> {
-    const probe = await probeVideo(path)
+    const probe = await probeVideo(path).catch((err: unknown) => {
+      console.error('converter: could not read', path, err)
+      throw asVideoReadError(err)
+    })
     // only this one file becomes servable through zc-media:// (for the preview player)
     allowMediaRoot(path)
     return { path, name: basename(path, extname(path)), ...probe }

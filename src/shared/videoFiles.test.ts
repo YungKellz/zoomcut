@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fileExtension, isVideoFileName, VIDEO_EXTENSIONS } from './videoFiles'
+import { fileExtension, isVideoFileName, parseVideoFileError, videoFileErrorMessage, VIDEO_EXTENSIONS, type VideoFileErrorCode } from './videoFiles'
 
 describe('fileExtension', () => {
   it('returns the lower-case extension of a name or a path', () => {
@@ -30,5 +30,24 @@ describe('isVideoFileName', () => {
     expect(isVideoFileName('archive.mp4.zip')).toBe(false)
     expect(isVideoFileName('mp4')).toBe(false)
     expect(isVideoFileName('')).toBe(false)
+  })
+})
+
+describe('video file error messages', () => {
+  const codes: VideoFileErrorCode[] = ['not-path', 'not-video', 'not-found', 'not-file', 'unreadable']
+
+  it('round-trips every code, also behind the Electron invoke prefix', () => {
+    for (const code of codes) {
+      expect(parseVideoFileError(videoFileErrorMessage(code))).toBe(code)
+      expect(parseVideoFileError(`Error invoking remote method 'converter:probe': Error: ${videoFileErrorMessage(code)}`)).toBe(code)
+    }
+  })
+
+  it('ignores other messages and unknown codes', () => {
+    expect(parseVideoFileError('boom')).toBeNull()
+    expect(parseVideoFileError('')).toBeNull()
+    expect(parseVideoFileError('video-file:')).toBeNull()
+    expect(parseVideoFileError('video-file:something-else')).toBeNull()
+    expect(parseVideoFileError('Could not read video metadata:\nstderr')).toBeNull()
   })
 })

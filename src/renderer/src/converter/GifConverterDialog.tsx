@@ -5,7 +5,7 @@ import type { ExportFinishResult, GifConvertProgress, GifSettings, VideoFileInfo
 import { DEFAULT_GIF_SETTINGS, GIF_FPS_OPTIONS } from '@shared/defaults'
 import { formatBytes, formatDuration } from '../util/format'
 import { useT, type TKey } from '../i18n'
-import { ipcErrorMessage } from './intake'
+import { ipcErrorMessage, videoErrorText } from './intake'
 
 interface Props {
   onClose(): void
@@ -111,7 +111,7 @@ export function GifConverterDialog({ onClose, initialVideo }: Props): JSX.Elemen
       setFolder((cur) => cur || settings.lastExportFolder || dirname(info.path))
       setOptions(startOptions(info))
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(videoErrorText(err, t))
     }
   }
 

@@ -1,9 +1,9 @@
 import type { DragEvent } from 'react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VideoFileInfo } from '@shared/types'
 import { isVideoFileName } from '@shared/videoFiles'
 import { useT } from '../i18n'
-import { dragHasFiles, ipcErrorMessage, pickDroppedFile } from './intake'
+import { dragHasFiles, pickDroppedFile, videoErrorText } from './intake'
 
 interface Options {
   /** false while something else owns the screen (recording, an open converter): drops are swallowed, not used */
@@ -14,8 +14,10 @@ interface Options {
 export interface VideoIntake {
   /** a file is being dragged over the window */
   dragging: boolean
-  /** a picked or dropped file is being probed */
+  /** the picker is open or a file is being read: no second one is started meanwhile */
   busy: boolean
+  /** a dropped file is being probed (the picker has its own native dialog, the card shows nothing for it) */
+  probing: boolean
   error: string | null
   clearError(): void
   /** native file picker, then onVideo */
@@ -38,31 +40,46 @@ export function useVideoIntake({ enabled, onVideo }: Options): VideoIntake {
   const t = useT()
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [probing, setProbing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // dragenter/dragleave also fire for every child element: count them instead of toggling
   const depth = useRef(0)
+  // the probe is asynchronous: what matters is the state when it ends, not when it started
+  const enabledRef = useRef(enabled)
+  const busyRef = useRef(false)
+
+  useEffect(() => {
+    enabledRef.current = enabled
+  }, [enabled])
 
   const load = useCallback(
-    async (get: () => Promise<VideoFileInfo | null>): Promise<void> => {
+    async (get: () => Promise<VideoFileInfo | null>, probe: boolean): Promise<void> => {
+      // one file at a time: a second drop while the first is read would replace it with the older one
+      if (busyRef.current) return
+      busyRef.current = true
       setError(null)
       setBusy(true)
+      setProbing(probe)
       try {
         const info = await get()
-        if (info) onVideo(info)
+        // a recording may have started (or the dialog opened) while the file was being read
+        if (info && enabledRef.current) onVideo(info)
       } catch (err) {
-        // the card only has room for the first line (ffmpeg errors carry a long log after it)
-        setError(t('converter.dropFailed', { error: ipcErrorMessage(err).split('\n')[0] }))
+        setError(videoErrorText(err, t))
       } finally {
+        busyRef.current = false
         setBusy(false)
+        setProbing(false)
       }
     },
     [onVideo, t]
   )
 
-  const choose = useCallback(() => load(() => window.zc.converter.chooseVideo()), [load])
+  const choose = useCallback(() => load(() => window.zc.converter.chooseVideo(), false), [load])
 
   const accept = useCallback(
     async (files: FileList): Promise<void> => {
+      if (busyRef.current) return
       const file = pickDroppedFile(files)
       if (!file) return
       if (!isVideoFileName(file.name)) {
@@ -79,7 +96,7 @@ export function useVideoIntake({ enabled, onVideo }: Options): VideoIntake {
         setError(t('converter.dropNoPath'))
         return
       }
-      await load(() => window.zc.converter.probe(path))
+      await load(() => window.zc.converter.probe(path), true)
     },
     [load, t]
   )
@@ -110,5 +127,5 @@ export function useVideoIntake({ enabled, onVideo }: Options): VideoIntake {
     }
   }
 
-  return { dragging: dragging && enabled, busy, error, clearError: () => setError(null), choose, dropProps }
+  return { dragging: dragging && enabled, busy, probing, error, clearError: () => setError(null), choose, dropProps }
 }

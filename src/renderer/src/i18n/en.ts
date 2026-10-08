@@ -471,6 +471,9 @@ export const en = {
   'converter.dropRelease': 'Drop the file to turn it into a GIF',
   'converter.dropNotVideo': 'That is not a video file. MP4, MOV, WebM, MKV and AVI work.',
   'converter.dropNoPath': 'Could not get the path of that file.',
+  'converter.dropNotFound': 'That file does not exist any more.',
+  'converter.dropNotFile': 'That is a folder, not a video file.',
+  'converter.dropUnreadable': 'There is no video in that file, or it is damaged.',
   'converter.dropFailed': 'Could not open the file: {error}',
   'converter.probing': 'Reading the file…'
 }

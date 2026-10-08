@@ -53,9 +53,9 @@ export function createMainWindow(): BrowserWindow {
   })
   // a file dropped outside a drop zone would otherwise replace the whole app with that file;
   // reloads of the app's own URL (hash changes aside) still go through
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const current = mainWindow?.webContents.getURL() ?? ''
-    if (url.split('#')[0] !== current.split('#')[0]) event.preventDefault()
+  const contents = mainWindow.webContents
+  contents.on('will-navigate', (event) => {
+    if (event.url.split('#')[0] !== contents.getURL().split('#')[0]) event.preventDefault()
   })
   mainWindow.on('closed', () => {
     mainWindow = null
