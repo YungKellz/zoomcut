@@ -1400,23 +1400,6 @@ input.name-input:focus {
   z-index: 1;
 }
 
-.input-mark-icon {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 2px;
-  transform: translateX(-50%);
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  cursor: help;
-  pointer-events: auto;
-}
-
 .track-zoom {
   height: 34px;
 }
@@ -3372,6 +3355,24 @@ input.scenario-pause-input {
 
 
 /* ---------- 0.4.1 track F: timeline lanes, input tags ---------- */
+
+/* the icon of an input tag, centred on its start */
+.input-mark-icon {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 2px;
+  transform: translateX(-50%);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  cursor: help;
+  pointer-events: auto;
+}
 
 /* how long a drag / scroll / typing burst / held key combination lasts: a thin bar from its tag */
 .input-mark-span {

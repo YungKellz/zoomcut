@@ -184,7 +184,7 @@ export const en = {
   'zoom.start': 'Start (s)',
   'zoom.end': 'End (s)',
   'zoom.delete': 'Delete zoom',
-  'zoom.empty': 'Select a zoom on the timeline to edit it, or double-click the zoom track to add one.',
+  'zoom.empty': 'Select a zoom on the timeline to edit it, or add one with the Zoom button above the timeline (Z).',
   'zoom.all': 'All zooms',
   'zoom.help': 'Follow mode pans with the recorded mouse position; smoothing and dead zone are in the Cursor tab.',
   'zoom.parts': 'Zoom steps',
@@ -220,7 +220,7 @@ export const en = {
   'text.animTime': 'Anim. time',
   'text.dragHint': 'Drag the text on the preview to position it.',
   'text.delete': 'Delete text',
-  'text.empty': 'Select a text on the timeline to edit it, or double-click the text track to add one.',
+  'text.empty': 'Select a text on the timeline to edit it, or add one with the Text button above the timeline (T).',
   'text.all': 'All texts',
   'text.default': 'New text',
 

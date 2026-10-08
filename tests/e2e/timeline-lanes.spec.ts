@@ -112,6 +112,12 @@ test('a fresh recording shows only the Video lane; the first zoom / text / blur 
   expect(await labels(win)).toEqual(['Time', 'Video'])
   await expect(win.locator('.timeline .track')).toHaveCount(1)
   await expectAligned(win, [['.ruler-label', '.ruler'], ['.video-label', '.track-video']])
+  // the initial fit uses the timeline's real width: the kept video fills it up to the end pad (56 + 8 px)
+  const fill = await win.locator('.timeline-scroll').evaluate((el) => ({
+    video: Array.from(el.querySelectorAll('.track-video .clip')).reduce((w, c) => w + c.getBoundingClientRect().width, 0),
+    viewport: el.clientWidth
+  }))
+  expect(Math.abs(fill.video - (fill.viewport - 64))).toBeLessThanOrEqual(2)
 
   await win.click('.timeline-toolbar .timeline-hint')
   await win.keyboard.press('Home')
@@ -156,8 +162,6 @@ test('input tags sit on the Video lane in output time, clipped by the cuts', asy
   // the typing burst (1.0 .. 2.5 s) is clipped by the cut to 1.0 .. 2.0 s: half as wide as the
   // first kept piece of the video (0 .. 2 s), and it starts at the middle of that piece
   const clip = (await win.locator('.track-video .clip').first().boundingBox())!
-  const clipWidths = await win.locator('.track-video .clip').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().width)))
-  console.log('[input tags] clip widths', JSON.stringify(clipWidths), 'viewport', await win.locator('.timeline-scroll').evaluate((el) => el.clientWidth))
   const type = (await win.locator('.input-mark[data-kind="type"]').boundingBox())!
   expect(Math.abs(type.width - clip.width / 2)).toBeLessThanOrEqual(2)
   expect(Math.abs(type.x - (clip.x + clip.width / 2))).toBeLessThanOrEqual(2)

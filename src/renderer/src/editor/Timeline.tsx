@@ -223,9 +223,12 @@ export function Timeline(): JSX.Element {
   // initial fit
   const fitted = useRef(false)
   useEffect(() => {
-    if (fitted.current || viewportWidth < 50) return
+    // the element's own width: on the first render viewportWidth is still the 800 px default
+    // (the ResizeObserver effect's measurement lands one render later)
+    const width = scrollRef.current?.clientWidth ?? viewportWidth
+    if (fitted.current || width < 50) return
     fitted.current = true
-    setPxPerMs((viewportWidth - END_PAD_PX - 8) / Math.max(1000, outDur))
+    setPxPerMs((width - END_PAD_PX - 8) / Math.max(1000, outDur))
   }, [viewportWidth, outDur, setPxPerMs])
 
   // keep the playhead visible while playing
@@ -268,21 +271,24 @@ export function Timeline(): JSX.Element {
   const audioLaneCount = Math.max(1, ...Array.from(audioLanes.values()).map((l) => l + 1))
 
   // input tags on the video lane: clicks, drags, scrolls, typing, key combinations (a recording
-  // without `input` still has its clicks); only what survives the cuts, in output time
+  // without `input` still has its clicks); only what survives the cuts, in output time. The
+  // tooltips are built here too, not on every render (the timeline re-renders every playback frame).
   const inputMarks = useMemo(() => {
     const marks = project.cursorData.input ?? marksFromClicks(project.cursorData.clicks)
-    return clipMarksToSegments(marks, segments).map((m) => ({ ...m, out: srcToOut(m.t, segments), outEnd: srcToOut(m.end, segments) }))
-  }, [project.cursorData.input, project.cursorData.clicks, segments])
-
-  const markTitle = (m: (typeof inputMarks)[number]): string => {
-    const name =
-      m.kind === 'key'
-        ? t(m.label?.includes('+') ? 'timeline.markCombo' : 'timeline.markKey', { key: m.label ?? '' })
-        : t(MARK_NAMES[m.kind])
-    return m.outEnd > m.out
-      ? t('timeline.markSpan', { kind: name, time: formatTimecode(m.out), end: formatTimecode(m.outEnd) })
-      : t('timeline.markAt', { kind: name, time: formatTimecode(m.out) })
-  }
+    return clipMarksToSegments(marks, segments).map((m) => {
+      const out = srcToOut(m.t, segments)
+      const outEnd = srcToOut(m.end, segments)
+      const name =
+        m.kind === 'key'
+          ? t(m.label?.includes('+') ? 'timeline.markCombo' : 'timeline.markKey', { key: m.label ?? '' })
+          : t(MARK_NAMES[m.kind])
+      const title =
+        outEnd > out
+          ? t('timeline.markSpan', { kind: name, time: formatTimecode(out), end: formatTimecode(outEnd) })
+          : t('timeline.markAt', { kind: name, time: formatTimecode(out) })
+      return { kind: m.kind, out, outEnd, title }
+    })
+  }, [project.cursorData.input, project.cursorData.clicks, segments, t])
 
   // lanes with nothing on them are not drawn: a fresh recording shows the ruler and the video
   // only, adding the first zoom / text / blur (toolbar, Z / T / B) or audio clip brings its lane in
@@ -483,7 +489,7 @@ export function Timeline(): JSX.Element {
                   className="input-mark"
                   data-kind={m.kind}
                   style={{ left: m.out * pxPerMs, width: (m.outEnd - m.out) * pxPerMs }}
-                  title={markTitle(m)}
+                  title={m.title}
                 >
                   {m.outEnd > m.out && <div className="input-mark-span" />}
                   <div className="input-mark-icon">{markIcon(m.kind)}</div>

@@ -264,10 +264,20 @@ test('replaying the scenario records a project and drives the target window', as
   expect(await target.textContent('#last')).toBe('')
   const ids = projectIds(h.recordingsDir)
   expect(ids).toHaveLength(1)
-  const project = readProject(h.recordingsDir, ids[0]) as unknown as { cursorData: { clicks: unknown[] }; recording: { durationMs: number } }
+  const project = readProject(h.recordingsDir, ids[0]) as unknown as {
+    cursorData: { clicks: unknown[]; input?: Array<{ kind: string }> }
+    recording: { durationMs: number }
+  }
   console.log('[replay] recorded clicks:', project.cursorData.clicks.length, 'duration', project.recording.durationMs)
   expect(project.cursorData.clicks.length).toBeGreaterThanOrEqual(3)
   expect(project.recording.durationMs).toBeGreaterThan(3000)
+  // the timeline's input tags saw the replayed input live: the clicks, and the typed text (sent with
+  // KEYEVENTF_UNICODE, keycode 0 in the hook); only the kinds are stored, never what was typed
+  const kinds = (project.cursorData.input ?? []).map((m) => m.kind)
+  console.log('[replay] input tags:', kinds.join(' '))
+  expect(kinds.some((k) => k === 'click' || k === 'doubleClick')).toBe(true)
+  expect(kinds).toContain('type')
+  expect(await h.win.locator('.track-video .input-mark[data-kind="type"]').count()).toBeGreaterThanOrEqual(1)
   await h.win.screenshot({ path: join(h.shotsDir, 'scenario-editor.png') })
 })
 

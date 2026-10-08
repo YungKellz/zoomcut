@@ -66,16 +66,24 @@ export class CursorTracker {
     const hook = await acquireHook()
     if (hook) {
       this.hook = hook
+      // The drag / double-click distances of the input tags use the hook's own position, taken when
+      // the event happened (physical pixels, scaled to DIP size): read in a late callback while the
+      // mouse already moves on, the cursor position could turn a click into a drag.
+      const scale = display.scaleFactor || 1
+      const at = (e: UiohookMouseEvent): { x: number; y: number } | null =>
+        Number.isFinite(e.x) && Number.isFinite(e.y) ? { x: e.x / scale, y: e.y / scale } : null
       this.onMouseDown = (e) => {
         const p = screen.getCursorScreenPoint()
         const t = Date.now()
         const button = buttonOf(e)
         this.clicks.push({ t, x: p.x, y: p.y, button })
-        this.input.push({ t, type: 'down', button, x: p.x, y: p.y, clicks: e.clicks })
+        const q = at(e) ?? p
+        this.input.push({ t, type: 'down', button, x: q.x, y: q.y, clicks: e.clicks })
       }
       this.onMouseUp = (e) => {
-        const p = screen.getCursorScreenPoint()
-        this.input.push({ t: Date.now(), type: 'up', button: buttonOf(e), x: p.x, y: p.y })
+        const t = Date.now()
+        const q = at(e) ?? screen.getCursorScreenPoint()
+        this.input.push({ t, type: 'up', button: buttonOf(e), x: q.x, y: q.y })
       }
       this.onWheel = () => {
         this.input.push({ t: Date.now(), type: 'wheel' })

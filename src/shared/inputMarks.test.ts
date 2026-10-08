@@ -29,6 +29,11 @@ const KEY = {
   F5: 63,
   Delete: 3667,
   ArrowDown: 57424,
+  ArrowLeft: 57419,
+  Num0: 82,
+  Num1: 79,
+  Num6: 77,
+  Num9: 73,
   Ctrl: 29,
   CtrlRight: 3613,
   Alt: 56,
@@ -164,15 +169,36 @@ describe('buildInputMarks: keyboard', () => {
     ])
   })
 
-  it('special keys get a mark without a modifier and end a typing burst', () => {
-    const marks = buildInputMarks([...typeKeys(1000, 3), ...press(1500, KEY.Enter), ...press(1700, KEY.A), ...press(4000, KEY.F5), ...press(6000, KEY.Escape), ...press(8000, KEY.Tab, { shift: true })])
+  it('special keys outside a typing burst get a mark without a modifier', () => {
+    const marks = buildInputMarks([...typeKeys(1000, 3), ...press(3000, KEY.Enter), ...press(3200, KEY.A), ...press(6000, KEY.F5), ...press(8000, KEY.Escape), ...press(10000, KEY.Tab, { shift: true })])
     expect(marks.map((m) => [m.kind, m.label ?? null, m.t])).toEqual([
       ['type', null, 1000],
-      ['key', 'Enter', 1500],
-      ['type', null, 1700],
-      ['key', 'F5', 4000],
-      ['key', 'Esc', 6000],
-      ['key', 'Shift+Tab', 8000]
+      ['key', 'Enter', 3000],
+      ['type', null, 3200],
+      ['key', 'F5', 6000],
+      ['key', 'Esc', 8000],
+      ['key', 'Shift+Tab', 10000]
+    ])
+  })
+
+  it('Enter, Tab, Delete and arrows pressed while typing stay in the burst; Esc and F-keys end it', () => {
+    const marks = buildInputMarks([
+      ...typeKeys(1000, 3), // .. 1300
+      ...press(1500, KEY.Enter), // a new line
+      ...typeKeys(1700, 2), // .. 1880
+      ...press(2300, KEY.ArrowLeft), // fixing a typo
+      ...press(2500, KEY.Delete),
+      ...press(2700, KEY.Tab), // the next field
+      ...press(2900, KEY.A), // .. 2960
+      ...press(3200, KEY.Escape),
+      ...press(3400, KEY.S),
+      ...press(3600, KEY.F5)
+    ])
+    expect(marks).toEqual([
+      { t: 1000, end: 2960, kind: 'type' },
+      { t: 3200, end: 3260, kind: 'key', label: 'Esc' },
+      { t: 3400, end: 3460, kind: 'type' },
+      { t: 3600, end: 3660, kind: 'key', label: 'F5' }
     ])
   })
 
@@ -235,6 +261,38 @@ describe('buildInputMarks: keyboard', () => {
     expect(marks).toEqual([{ t: 1100, end: 1560, kind: 'type' }])
   })
 
+  it('an Alt code and Ctrl+Alt on a character key (AltGr on many layouts) type: no key is named', () => {
+    const marks = buildInputMarks([
+      // Alt+0169 types a character
+      kd(1000, KEY.Alt, { alt: true }),
+      ...press(1100, KEY.Num0, { alt: true }),
+      ...press(1250, KEY.Num1, { alt: true }),
+      ...press(1400, KEY.Num6, { alt: true }),
+      ...press(1550, KEY.Num9, { alt: true }),
+      ku(1700, KEY.Alt),
+      // left Ctrl + left Alt + A: "ą" on the Polish layout
+      kd(5000, KEY.Ctrl, { ctrl: true }),
+      kd(5010, KEY.Alt, { ctrl: true, alt: true }),
+      ...press(5100, KEY.A, { ctrl: true, alt: true }),
+      ku(5300, KEY.Alt),
+      ku(5310, KEY.Ctrl)
+    ])
+    expect(marks).toEqual([
+      { t: 1100, end: 1610, kind: 'type' },
+      { t: 5100, end: 5160, kind: 'type' }
+    ])
+  })
+
+  it('Alt or Win with a character key, and Ctrl+Alt on a key that types nothing, stay combinations', () => {
+    const marks = buildInputMarks([
+      ...combo(1000, KEY.T, { alt: true }),
+      ...combo(3000, KEY.T, { ctrl: true, alt: true, meta: true }),
+      ...combo(5000, KEY.Delete, { ctrl: true, alt: true }),
+      ...combo(7000, KEY.Tab, { alt: true })
+    ])
+    expect(marks.map((m) => m.label)).toEqual(['Alt+T', 'Ctrl+Win+Alt+T', 'Ctrl+Alt+Delete', 'Alt+Tab'])
+  })
+
   it('keycode 0 (text injected with KEYEVENTF_UNICODE, e.g. a scenario replay) is typing', () => {
     const events: RawHookEvent[] = []
     for (let i = 0; i < 10; i++) events.push(kd(2000 + i * 40, 0), ku(2010 + i * 40, 0))
@@ -272,6 +330,12 @@ describe('buildInputMarks: time window', () => {
       ['type', 100],
       ['click', 4000]
     ])
+  })
+
+  it('a button held across the cutoff: let go far away it is a drag up to the cutoff, else a click', () => {
+    expect(buildInputMarks([down(1000), up(6000, 400, 300)], { cutoffMs: 5000 })).toEqual([{ t: 1000, end: 5000, kind: 'drag' }])
+    expect(buildInputMarks([down(1000), up(6000)], { cutoffMs: 5000 })).toEqual([{ t: 1000, end: 1000, kind: 'click' }])
+    expect(buildInputMarks([down(1000)], { cutoffMs: 5000 })).toEqual([{ t: 1000, end: 1000, kind: 'click' }])
   })
 
   it('returns marks sorted by start even when a press closes after a later one', () => {

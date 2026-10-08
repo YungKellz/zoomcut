@@ -15,8 +15,9 @@ import { isModifierKey } from './scenario'
 import type { ClickEvent, InputMark, InputMarkKind, MouseButton } from './types'
 
 // ---- raw hook events ----
-// Times are recording-relative ms (the tracker subtracts the recording start); positions are
-// DIP screen coordinates, only used for the drag / double-click distances.
+// Times are recording-relative ms (the tracker subtracts the recording start); positions are in
+// DIP-sized screen pixels (the hook's own event position over the display's scale factor), only
+// used for the drag / double-click distances.
 
 export interface RawPointerDown {
   t: number
@@ -76,12 +77,26 @@ const KEY_HELD_MERGE_MS = 5000
 const KEY_HOLD_MS = 1500
 /** a keydown of a key that is still down is auto-repeat only this close to its previous press, else a lost keyup */
 const KEY_REPEAT_MS = 1500
-// Backspace, PC/AT set-1 scancode 0x0E, never extended.
-const BACKSPACE_SCAN = 14
 
 /** uiohook keycode -> set-1 scancode; every extended key has a 0x0E00 or 0xE000 prefix (see scenario/capture.ts). */
 function decodeKeycode(keycode: number): { scan: number; extended: boolean } {
   return keycode < 256 ? { scan: keycode, extended: false } : { scan: keycode & 0xff, extended: true }
+}
+
+/**
+ * Keys that edit the text being typed: pressed inside a typing burst they stay in it (a new line,
+ * the next field, fixing a typo), outside one they are marks of their own. Backspace, Tab, Enter,
+ * Delete, Home, End and the arrows.
+ */
+function isEditingKey(scan: number, extended: boolean): boolean {
+  if (scan === 28) return true // Enter, main and numpad
+  if (!extended) return scan === 14 || scan === 15 // Backspace, Tab
+  return scan === 83 || scan === 71 || scan === 79 || scan === 72 || scan === 75 || scan === 77 || scan === 80
+}
+
+/** The numpad digits (NumLock on): with Alt held they type an Alt code (Alt+0169), they are no shortcut. */
+function isNumpadDigit(scan: number, extended: boolean): boolean {
+  return !extended && ((scan >= 71 && scan <= 73) || (scan >= 75 && scan <= 77) || (scan >= 79 && scan <= 82))
 }
 
 /** Keys that type a character (letters, digits, punctuation, space, the numpad). */
@@ -184,10 +199,11 @@ interface LastClick {
  * Rules: a left down+up moving 6px or more is a drag (down -> up), less is a click; a second
  * click within 400ms and 6px (or the hook's own `clicks === 2`, distance still gating) makes it a
  * doubleClick. Right / middle presses are rightClick / middleClick. Wheel events less than 400ms
- * apart are one scroll. Typing keys without Ctrl/Alt/Win (AltGr counts as typing; keycode 0 is
- * text injected with KEYEVENTF_UNICODE, e.g. a scenario replay) less than 1.5s apart are one
- * `type` burst, a Backspace inside a burst stays in it. Any other key with Ctrl/Alt/Win held,
- * and Enter / Tab / Esc / Backspace / Delete / arrows / F-keys / ... without, is a `key` mark
+ * apart are one scroll. Typing keys without Ctrl/Alt/Win (AltGr, Ctrl+Alt without Win and Alt
+ * codes count as typing; keycode 0 is text injected with KEYEVENTF_UNICODE, e.g. a scenario
+ * replay) less than 1.5s apart are one `type` burst; Backspace / Tab / Enter / Delete / Home / End
+ * / arrows inside a burst stay in it. Any other key with Ctrl/Alt/Win held, and Esc / F-keys /
+ * PageUp / ... (or one of those editing keys outside a burst) without, is a `key` mark
  * labelled like "Ctrl+Shift+T"; pressing it again within 1s (5s while its Ctrl/Alt/Win stay down)
  * extends it, and it lasts until its key (or, soon after, its modifiers) is released. Bare modifier
  * presses, lock keys and unknown keys without a modifier leave no mark. A mouse press or wheel
@@ -195,7 +211,8 @@ interface LastClick {
  */
 export function buildInputMarks(raw: RawHookEvent[], opts: BuildInputMarksOptions = {}): InputMark[] {
   const cutoff = opts.cutoffMs ?? Number.POSITIVE_INFINITY
-  const events = raw.filter((e) => e.t >= 0 && e.t < cutoff).sort((a, b) => a.t - b.t)
+  const sorted = [...raw].sort((a, b) => a.t - b.t)
+  const events = sorted.filter((e) => e.t >= 0 && e.t < cutoff)
 
   const marks: InputMark[] = []
   const push = (kind: InputMarkKind, t: number, end = t, label?: string): InputMark => {
@@ -247,16 +264,21 @@ export function buildInputMarks(raw: RawHookEvent[], opts: BuildInputMarksOption
       return
     }
 
-    // AltGr shows up as Ctrl+Alt with the right Alt down: that types a character, it is no shortcut
-    const altgr = e.ctrl && e.alt && rightAltHeld
-    const mods = { ctrl: e.ctrl && !altgr, alt: e.alt && !altgr, meta: e.meta, shift: e.shift }
+    const typingKey = e.keycode === 0 || isTypingKey(scan, extended)
+    // These type a character, they are no shortcut - and naming their keys would spell out what was
+    // typed: AltGr (Ctrl+Alt with the right Alt down), any Ctrl+Alt without Win on a character key
+    // (Windows takes it for AltGr: left Ctrl + left Alt + A types "ą" on the Polish layout) and Alt
+    // with the numpad digits (an Alt code such as Alt+0169).
+    const altgr = e.ctrl && e.alt && (rightAltHeld || (!e.meta && typingKey))
+    const altCode = e.alt && !e.ctrl && !e.meta && isNumpadDigit(scan, extended)
+    const text = altgr || altCode
+    const mods = { ctrl: e.ctrl && !text, alt: e.alt && !text, meta: e.meta, shift: e.shift }
     const chord = mods.ctrl || mods.alt || mods.meta
     scroll = null
     lastClick = null
 
     const inBurst = typing !== null && e.t - typing.lastT <= TYPE_MERGE_MS
-    const backspace = scan === BACKSPACE_SCAN && !extended
-    if (!chord && (e.keycode === 0 || isTypingKey(scan, extended) || (backspace && inBurst))) {
+    if (!chord && (typingKey || (inBurst && isEditingKey(scan, extended)))) {
       keyRun = null
       if (typing && inBurst) {
         typing.lastT = e.t
@@ -336,8 +358,14 @@ export function buildInputMarks(raw: RawHookEvent[], opts: BuildInputMarksOption
         break
     }
   }
-  // a button still down at the stop: its press still happened (it is in `clicks` too)
-  for (const down of Object.values(downs)) if (down) release(down, down.t, down.x, down.y)
+  // a button still down at the cutoff: its press still happened (it is in `clicks` too); when it is
+  // let go after the cutoff, that release tells a drag (which then ends at the cutoff) from a click
+  for (const down of Object.values(downs)) {
+    if (!down) continue
+    const late = sorted.find((e): e is RawPointerUp => e.type === 'up' && e.button === down.button && e.t >= cutoff)
+    if (late) release(down, cutoff, late.x, late.y)
+    else release(down, down.t, down.x, down.y)
+  }
 
   return marks.sort((a, b) => a.t - b.t)
 }
