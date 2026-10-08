@@ -917,7 +917,7 @@ input.name-input:focus {
 .win-outline {
   position: absolute;
   border: 1px dashed rgba(255, 255, 255, 0.55);
-  cursor: pointer;
+  pointer-events: none;
   z-index: 2;
   box-sizing: border-box;
 }
@@ -2734,6 +2734,74 @@ input.scenario-pause-input {
 
 
 /* ---------- 0.4.1 track E: windows / crop ---------- */
+
+/* crop mode: the outlines are only a picture; this layer (under the crop rectangle) takes the clicks */
+.win-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.win-hit.over {
+  cursor: pointer;
+}
+
+/* a browser window's page (without the tab strip and the address bar), inside its window outline */
+.win-page {
+  position: absolute;
+  border: 1px dotted rgba(124, 176, 255, 0.75);
+  pointer-events: none;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+.win-page span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: rgba(31, 61, 117, 0.85);
+  color: #fff;
+}
+
+.win-page.hover {
+  border: 2px solid var(--accent-2);
+  background: rgba(79, 140, 255, 0.15);
+}
+
+.clip-panel .section-body > .btn {
+  margin: 4px 0;
+}
+
+.windows-list .list-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.windows-list .list-main svg {
+  flex: none;
+}
+
+.window-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.windows-list .window-page {
+  flex: none;
+  margin-right: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
 
 
 /* ---------- 0.4.1 track F: timeline lanes, input tags ---------- */

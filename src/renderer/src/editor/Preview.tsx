@@ -8,7 +8,7 @@ import type { FollowPath } from '../engine/cursor'
 import { zoomAreas } from '../engine/camera'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
-import { uniqueWindows, windowToCrop } from '../engine/windows'
+import { pageToCrop, uniqueWindows, windowAt, windowToCrop } from '../engine/windows'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
 import { useT } from '../i18n'
@@ -91,7 +91,9 @@ export function Preview({ followPath }: Props): JSX.Element {
   const standby = useRef<{ segIndex: number; ready: boolean }>({ segIndex: -1, ready: false })
   const [readyCount, setReadyCount] = useState(0)
   const ready = readyCount >= 2
-  const [hoverWindow, setHoverWindow] = useState<number | null>(null)
+  // crop mode: the window (or a browser's page) a click would crop to
+  const [hoverWindow, setHoverWindow] = useState<WindowHit | null>(null)
+  const windowHitRef = useRef<HTMLDivElement>(null)
 
   const activeVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoARef.current : videoBRef.current), [])
   const standbyVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoBRef.current : videoARef.current), [])
@@ -394,9 +396,24 @@ export function Preview({ followPath }: Props): JSX.Element {
     setPickRect(clampCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
   }
 
-  const cropToWindow = (w: WindowRect): void => {
+  // Crop mode: a click anywhere on a window crops to it – on a browser's page to the page only – also
+  // inside the crop rectangle, which covers the whole picture until something is cropped (a drag there
+  // still moves the rectangle). The outlines are only a picture; the hit layer and the rectangle ask here.
+  const windowAtClient = (clientX: number, clientY: number): WindowHit | null => {
+    const rect = windowHitRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0 || rect.height === 0) return null
+    return windowAt(windows, (clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height)
+  }
+  const hoverWindowAt = (clientX: number, clientY: number): void => {
+    const next = windowAtClient(clientX, clientY)
+    setHoverWindow((cur) => (cur?.index === next?.index && cur?.page === next?.page ? cur : next))
+  }
+  const cropToWindowAt = (clientX: number, clientY: number): void => {
+    const hit = windowAtClient(clientX, clientY)
+    if (!hit) return
+    const w = windows[hit.index]
     checkpoint()
-    setCrop(windowToCrop(w), false)
+    setCrop((hit.page ? pageToCrop(w) : null) ?? windowToCrop(w), false)
   }
 
   const cropPx: PxRect = { x: project.crop.x * size.outW, y: project.crop.y * size.outH, w: project.crop.w * size.outW, h: project.crop.h * size.outH }
@@ -459,24 +476,30 @@ export function Preview({ followPath }: Props): JSX.Element {
           )}
 
           {mode === 'crop' && <CropShade crop={cropPx} stage={size} />}
-          {mode === 'crop' &&
-            windows.map((w, i) => (
-              <div
-                key={i}
-                className={'win-outline' + (hoverWindow === i ? ' hover' : '')}
-                style={{ left: w.x * size.outW, top: w.y * size.outH, width: w.w * size.outW, height: w.h * size.outH }}
-                title={w.title}
-                onPointerEnter={() => setHoverWindow(i)}
-                onPointerLeave={() => setHoverWindow((cur) => (cur === i ? null : cur))}
-                onPointerDown={(e) => {
-                  e.stopPropagation()
-                  cropToWindow(w)
-                }}
-              >
-                <span>{w.title}</span>
-              </div>
-            ))}
-          {mode === 'crop' && <CropEditor crop={project.crop} size={size} onChange={(c, commit) => setCrop(c, commit)} onBegin={checkpoint} />}
+          {mode === 'crop' && windows.length > 0 && (
+            <div
+              ref={windowHitRef}
+              className={'win-hit' + (hoverWindow ? ' over' : '')}
+              onPointerMove={(e) => hoverWindowAt(e.clientX, e.clientY)}
+              onPointerLeave={() => setHoverWindow(null)}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                cropToWindowAt(e.clientX, e.clientY)
+              }}
+            />
+          )}
+          {mode === 'crop' && <WindowOutlines windows={windows} size={size} hover={hoverWindow} pageLabel={t('clip.pageOnly')} />}
+          {mode === 'crop' && (
+            <CropEditor
+              crop={project.crop}
+              size={size}
+              onChange={(c, commit) => setCrop(c, commit)}
+              onBegin={checkpoint}
+              onTap={windows.length > 0 ? cropToWindowAt : undefined}
+              onHover={windows.length > 0 ? hoverWindowAt : undefined}
+              onHoverEnd={() => setHoverWindow(null)}
+            />
+          )}
         </div>
       </div>
 
@@ -522,7 +545,7 @@ export function Preview({ followPath }: Props): JSX.Element {
         )}
         {mode === 'crop' && (
           <span className="hint">
-            {windows.length > 0 ? t('preview.cropWindowHint') + ' ' : ''}
+            {windows.length > 0 ? t(windows.some((w) => w.content) ? 'clip.cropPageHint' : 'preview.cropWindowHint') + ' ' : ''}
             {t('preview.cropHint')}{' '}
             <button className="link" onClick={() => setMode('normal')}>
               {t('common.done')}
@@ -550,6 +573,42 @@ function CropShade({ crop, stage }: { crop: PxRect; stage: OutputSize }): JSX.El
   )
 }
 
+/** A window under the pointer in crop mode, and whether it is over that browser window's page. */
+type WindowHit = { index: number; page: boolean }
+
+/**
+ * Crop mode: outlines of the windows on the recording, with the page of browser windows as an inner
+ * outline. Back to front, so the frontmost window is drawn last. Only a picture – the clicks go to the
+ * hit layer and the crop rectangle, which pick the window through `windowAt`.
+ */
+function WindowOutlines({ windows, size, hover, pageLabel }: { windows: WindowRect[]; size: OutputSize; hover: WindowHit | null; pageLabel: string }): JSX.Element {
+  const W = size.outW
+  const H = size.outH
+  const order = windows.map((w, i) => ({ w, i })).reverse()
+  return (
+    <>
+      {order.flatMap(({ w, i }) => [
+        <div
+          key={`w${i}`}
+          className={'win-outline' + (hover?.index === i && !hover.page ? ' hover' : '')}
+          style={{ left: w.x * W, top: w.y * H, width: w.w * W, height: w.h * H }}
+        >
+          <span>{w.title}</span>
+        </div>,
+        w.content && (
+          <div
+            key={`p${i}`}
+            className={'win-page' + (hover?.index === i && hover.page ? ' hover' : '')}
+            style={{ left: w.content.x * W, top: w.content.y * H, width: w.content.w * W, height: w.content.h * H }}
+          >
+            <span>{pageLabel}</span>
+          </div>
+        )
+      ])}
+    </>
+  )
+}
+
 interface CropEditorProps {
   crop: CropRect
   size: OutputSize
@@ -558,11 +617,16 @@ interface CropEditorProps {
   /** smallest width/height, normalized to the stage */
   min?: number
   className?: string
+  /** a click on the rectangle that did not drag it (crop mode: crops to the window under the pointer) */
+  onTap?: (clientX: number, clientY: number) => void
+  /** the pointer moving over the rectangle with no button down, and leaving it */
+  onHover?: (clientX: number, clientY: number) => void
+  onHoverEnd?: () => void
 }
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
-function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'crop-rect' }: CropEditorProps): JSX.Element {
+function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'crop-rect', onTap, onHover, onHoverEnd }: CropEditorProps): JSX.Element {
   const W = size.outW
   const H = size.outH
   const MIN = min
@@ -576,7 +640,9 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
     const sx = e.clientX
     const sy = e.clientY
     const o = { ...crop }
+    let dragged = false
     const move = (ev: PointerEvent): void => {
+      if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 3) dragged = true
       const dx = (ev.clientX - sx) / W
       const dy = (ev.clientY - sy) / H
       let { x, y, w, h } = o
@@ -599,9 +665,10 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
       }
       onChange({ x, y, w, h }, false)
     }
-    const up = (): void => {
+    const up = (ev: PointerEvent): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
+      if (handle === 'move' && !dragged) onTap?.(ev.clientX, ev.clientY)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
@@ -613,7 +680,21 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
   const height = crop.h * H
   const handles: Handle[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
   return (
-    <div className={className} style={{ left, top, width, height }} onPointerDown={start('move')}>
+    <div
+      className={className}
+      style={{ left, top, width, height }}
+      onPointerDown={start('move')}
+      onPointerMove={
+        onHover &&
+        ((e) => {
+          if (e.buttons !== 0) return
+          // a handle resizes, a click on it picks nothing
+          if ((e.target as HTMLElement).classList.contains('crop-handle')) onHoverEnd?.()
+          else onHover(e.clientX, e.clientY)
+        })
+      }
+      onPointerLeave={onHoverEnd}
+    >
       {handles.map((h) => (
         <div key={h} className={`crop-handle crop-${h}`} onPointerDown={start(h)} />
       ))}
