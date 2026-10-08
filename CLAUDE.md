@@ -10,8 +10,8 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 | --- | --- |
 | `npm run dev` | dev app with hot reload; restart it after changes in `src/main` or `src/preload` |
 | `npm run typecheck` | main/preload/shared (`tsconfig.node.json`) and renderer (`tsconfig.json`) |
-| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine, composition layout, GIF converter args, formatting helpers |
-| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing), zoom parts (`zoom-parts.spec.ts`, synthetic), delete / record again / home list (`lifecycle.spec.ts`); needs a display, ~7 min |
+| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine (incl. frame stepping), pick-area math, store zoom/playback actions, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine + dry run, input tags, window visibility, composition layout, GIF converter args + video file intake, formatting helpers |
+| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing), zoom steps (`zoom-parts.spec.ts`, synthetic), delete / record again / home layout (`lifecycle.spec.ts`), playback end + frame step (`playback.spec.ts`, synthetic), timeline lanes + input tags (`timeline-lanes.spec.ts`, synthetic), Clip tab windows (`windows.spec.ts`, synthetic); needs a display, ~20 min |
 | `npm run dist` | installer + portable exe + `latest.yml` + `.blockmap` in `release/`; never publishes |
 
 - `ZOOMCUT_EXE=release/win-unpacked/ZoomCut.exe npm run e2e` runs the e2e tests against the packaged app.
@@ -104,8 +104,27 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   handed to the screen that owns the recorder through `store.pendingStart`) and how Home nests recordings under their
   scenario (`home/items.ts`). Deleting a scenario keeps its recordings; project and scenario deletes run on the same
   per-id queue as their autosaves.
-- Zoom parts: a `fixed` zoom can hold `parts` (further areas, each from its `start` boundary); the zoom's own
-  target/scale is area 0. `cameraAt` glides between areas (`engine/camera.ts`: `zoomAreas`, `normalizeZoomParts`).
+- Zoom parts ("Steps" in the UI since 0.4.1): a `fixed` zoom can hold `parts` (further areas, each from its `start`
+  boundary); the zoom's own target/scale is area 0. `cameraAt` glides between areas (`engine/camera.ts`: `zoomAreas`,
+  `normalizeZoomParts`). Every step can be removed except a lone one; removing area 0 promotes `parts[0]`. Picking an
+  area (`mode: 'pickTarget'`) is modal: `editor/PickOverlay.tsx` covers the inspector with Apply / Cancel, `select()`
+  ignores other items meanwhile; `engine/pickRect.ts` holds the move / Shift centre magnet / Alt symmetric resize math.
+  Times derived from the playhead are stored as whole ms (no `439.20300000000003`).
+- Editor chrome: inactive inspector tabs are icon-only (`.tab[data-tab="<id>"]` in e2e, never `:has-text`);
+  `store.stepFrame` steps one frame in OUTPUT time (`engine/timeline.ts` `stepFrames`, cut pieces skipped) for the
+  step buttons and ←/→; playback stops at the last kept frame and Play there restarts from the first one
+  (`playStartTime`) - an ended `<video>` is never `play()`ed (it would restart from 0 and loop).
+- Confirmations: `components/ConfirmPopover.tsx` `confirmAt(anchor, message, opts)` opens above the clicked button
+  (never `window.confirm()`); e2e confirms through `acceptConfirm()`. Side-panel blocks use `components/Section.tsx`.
+- Timeline: the ruler and the Video lane always, the Zoom / Text / Blur / Audio lanes only when they have items.
+  Input tags on the Video lane come from `cursorData.input` (`shared/inputMarks.ts`, built at `CursorTracker.stop()`
+  from the shared hook's button / wheel / key events): typing bursts, drags, scrolls, double / right / middle clicks,
+  key combos. Privacy rule: typed characters are never stored or logged - a `type` mark is only its span, `label`
+  only names combos / special keys. Older projects derive click tags from `clicks`.
+- Clip tab windows: snapshots (`main/recorder/windowsSnapshot.ts`) keep only windows that were really visible
+  (z-order occlusion with every painting window as an occluder, invisible overlays ignored; geometry in
+  `shared/windows.ts`) and add `content` (the page rect, without tabs and address bar) for browsers via
+  `Chrome_RenderWidgetHostHWND` / UI Automation. Old snapshots are filtered in the editor (`visibleWindows`).
 - Home screen: a header (brand), two equal columns that scroll on their own (left = new recording, compositions,
   the MP4 → GIF card; right = recordings and scenarios as tinted blocks; stacked below ~900 px) and a footer row
   (language, version + updates, recordings folder). The page itself never scrolls. A video file dropped anywhere on

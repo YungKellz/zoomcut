@@ -814,13 +814,6 @@ input.name-input:focus {
   flex: none;
 }
 
-/* Delete / Record again, right after the name (editor and scenario review headers) */
-.editor-top-file {
-  display: flex;
-  gap: 2px;
-  flex: none;
-}
-
 .editor-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1525,10 +1518,12 @@ input.name-input:focus {
   z-index: 2;
 }
 
+/* inside the end line: the end pad after it is narrower than the label, which got cut off once the
+   timeline fits its real width */
 .timeline-end span {
   position: absolute;
   top: 5px;
-  left: 5px;
+  right: 6px;
   font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
