@@ -155,6 +155,7 @@ export const en = {
   'zoom.autoTitle': 'Create follow-cursor zooms around recorded clicks',
   'zoom.noClicks': 'No clicks were recorded, so there is nothing to build zooms from.',
   'zoom.replaceConfirm': 'Replace the existing {n} zoom(s) with {m} generated from clicks?',
+  'zoom.replace': 'Replace',
   'zoom.selected': 'Selected zoom',
   'zoom.scale': 'Zoom',
   'zoom.focus': 'Focus',

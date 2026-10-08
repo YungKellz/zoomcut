@@ -39,6 +39,7 @@ import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
 import { clipIcon, clipLabel } from '../audio/clipLabel'
 import { formatElapsed, formatTimecode } from '../util/format'
 import { useT, type Translate, type TKey } from '../i18n'
+import { confirmAt } from '../components/ConfirmPopover'
 
 type Tab = 'clip' | 'zoom' | 'text' | 'blur' | 'audio' | 'cursor' | 'style'
 
@@ -275,13 +276,14 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
   // no point in an "edit" button when the zoom under the playhead is the one being edited
   const showAddEdit = !(zoomAtPlayhead && zoom && zoomAtPlayhead.id === zoom.id)
 
-  const autoZooms = (): void => {
+  const autoZooms = async (anchor: Element): Promise<void> => {
     const generated = generateZoomsFromClicks(project.cursorData.clicks, duration, project.cuts)
     if (generated.length === 0) {
       alert(t('zoom.noClicks'))
       return
     }
-    if (project.zooms.length > 0 && !confirm(t('zoom.replaceConfirm', { n: project.zooms.length, m: generated.length }))) return
+    if (project.zooms.length > 0 && !(await confirmAt(anchor, t('zoom.replaceConfirm', { n: project.zooms.length, m: generated.length }), { confirmLabel: t('zoom.replace'), danger: false })))
+      return
     setZooms(generated)
   }
 
@@ -293,7 +295,7 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
             <ZoomIn size={14} /> {zoomAtPlayhead ? t('zoom.edit') : t('zoom.add')}
           </button>
         )}
-        <button className="btn btn-small" onClick={autoZooms} title={t('zoom.autoTitle')}>
+        <button className="btn btn-small" onClick={(e) => void autoZooms(e.currentTarget)} title={t('zoom.autoTitle')}>
           <Sparkles size={14} /> {t('zoom.auto')}
         </button>
       </div>

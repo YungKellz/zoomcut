@@ -6,6 +6,7 @@ import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
 import { buildHomeItems } from '../home/items'
 import { confirmDeleteProject, confirmDeleteScenario } from '../recording/lifecycle'
+import { confirmAt } from '../components/ConfirmPopover'
 import { useRecorder } from '../recording/useRecorder'
 import { useScenarioCapture } from '../recording/useScenarioCapture'
 import { formatDuration } from '../util/format'
@@ -144,8 +145,8 @@ export function Home(): JSX.Element {
     }
   }
 
-  const remove = async (p: ProjectSummary): Promise<void> => {
-    if (await confirmDeleteProject(p.id, p.name)) await refreshLibrary()
+  const remove = async (p: ProjectSummary, anchor: Element): Promise<void> => {
+    if (await confirmDeleteProject(p.id, p.name, anchor)) await refreshLibrary()
   }
 
   const newComposition = async (): Promise<void> => {
@@ -170,8 +171,8 @@ export function Home(): JSX.Element {
     }
   }
 
-  const removeComposition = async (c: CompositionSummary): Promise<void> => {
-    if (!confirm(t('composition.deleteConfirm', { name: c.name }))) return
+  const removeComposition = async (c: CompositionSummary, anchor: Element): Promise<void> => {
+    if (!(await confirmAt(anchor, t('composition.deleteConfirm', { name: c.name })))) return
     try {
       await window.zc.compositions.remove(c.id)
     } catch (err) {
@@ -192,8 +193,8 @@ export function Home(): JSX.Element {
   }
 
   // the scenario's recordings stay and move to the top level of the list
-  const removeScenario = async (s: ScenarioSummary): Promise<void> => {
-    if (await confirmDeleteScenario(s.id, s.name)) await refreshLibrary()
+  const removeScenario = async (s: ScenarioSummary, anchor: Element): Promise<void> => {
+    if (await confirmDeleteScenario(s.id, s.name, anchor)) await refreshLibrary()
   }
 
   const items = useMemo(() => buildHomeItems(projects, scenarios), [projects, scenarios])
@@ -209,7 +210,7 @@ export function Home(): JSX.Element {
       <button className="btn btn-ghost" title={t('home.showFolder')} onClick={() => void window.zc.projects.reveal(p.id)}>
         <FolderOpen size={15} />
       </button>
-      <button className="btn btn-ghost danger" title={t('common.delete')} onClick={() => void remove(p)}>
+      <button className="btn btn-ghost danger" title={t('common.delete')} onClick={(e) => void remove(p, e.currentTarget)}>
         <Trash2 size={15} />
       </button>
     </li>
@@ -366,7 +367,7 @@ export function Home(): JSX.Element {
                   <span className="project-name">{c.name}</span>
                   <span className="muted">{t('composition.summary', { n: c.items, date: new Date(c.updatedAt).toLocaleString() })}</span>
                 </button>
-                <button className="btn btn-ghost danger scenario-delete" title={t('common.delete')} disabled={compositionBusy || recording || capturing} onClick={() => void removeComposition(c)}>
+                <button className="btn btn-ghost danger scenario-delete" title={t('common.delete')} disabled={compositionBusy || recording || capturing} onClick={(e) => void removeComposition(c, e.currentTarget)}>
                   <Trash2 size={15} />
                 </button>
               </li>
@@ -405,7 +406,7 @@ export function Home(): JSX.Element {
                       className="btn btn-ghost danger scenario-delete"
                       title={t('common.delete')}
                       disabled={scenarioBusy !== null || recording || capturing}
-                      onClick={() => void removeScenario(item.scenario)}
+                      onClick={(e) => void removeScenario(item.scenario, e.currentTarget)}
                     >
                       <Trash2 size={15} />
                     </button>

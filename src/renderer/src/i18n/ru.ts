@@ -146,6 +146,7 @@ export const ru: Record<TKey, string> = {
   'zoom.autoTitle': 'Создать зумы за мышкой вокруг записанных кликов',
   'zoom.noClicks': 'Клики не были записаны, зумы строить не из чего.',
   'zoom.replaceConfirm': 'Заменить существующие зумы ({n}) на {m}, построенных по кликам?',
+  'zoom.replace': 'Заменить',
   'zoom.selected': 'Выбранный зум',
   'zoom.scale': 'Приближение',
   'zoom.focus': 'Фокус',

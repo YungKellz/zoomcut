@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ffmpegStatic from 'ffmpeg-static'
-import { launch, projectIds, readProject, record, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
+import { acceptConfirm, launch, projectIds, readProject, record, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
 
 /**
  * Delete / Record again in the editor and the scenario review, and the unified home list
@@ -84,6 +84,7 @@ test('Delete in the editor removes the recording and returns to Home', async () 
   const [id] = projectIds(h.recordingsDir)
   expect(id).toBeTruthy()
   await h.win.click('.editor-top-file button:has-text("Delete")')
+  await acceptConfirm(h.win)
   await h.win.waitForSelector('.home')
   expect(projectIds(h.recordingsDir)).toEqual([])
   await expect(h.win.locator('.project-list > *')).toHaveCount(0)
@@ -98,6 +99,7 @@ test('Record again deletes the recording and starts a new one under the same con
   expect(before!.scenarioId).toBeNull()
 
   await h.win.click('.editor-top-file button:has-text("Record again")')
+  await acceptConfirm(h.win)
   const bar = await waitForBar(h.app)
   await bar.waitForSelector('.bar-dot-live', { timeout: 30_000 })
   await sleep(2500)
@@ -145,6 +147,7 @@ test('a scenario block nests its recordings and deleting the scenario keeps them
   await expect(h.win.locator('.project-list > .project-row:has-text("Synthetic childRec")')).toHaveCount(0)
 
   await block.locator('.scenario-delete').click()
+  await acceptConfirm(h.win)
   await expect(h.win.locator('.scenario-block')).toHaveCount(0)
   await expect(h.win.locator('.project-list > .project-row:has-text("Synthetic childRec")')).toHaveCount(1)
   expect(existsSync(join(h.scenariosDir, 'synthScenario'))).toBe(false)
@@ -157,6 +160,7 @@ test('Record again in the scenario review replaces the scenario and starts a new
   await h.win.click('.scenario-open:has-text("Synthetic synthScenario2")')
   await h.win.waitForSelector('.scenario-review')
   await h.win.click('.editor-top-file button:has-text("Record again")')
+  await acceptConfirm(h.win)
   // Home takes the queued capture over: the bar counts down for a scenario capture
   const bar = await waitForBar(h.app)
   await expect(bar.locator('.bar-label')).toContainText(/actions/i, { timeout: 15_000 })

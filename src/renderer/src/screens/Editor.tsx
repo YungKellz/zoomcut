@@ -114,10 +114,16 @@ export function Editor(): JSX.Element {
         </button>
         <input className="name-input" value={project.name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label={t('editor.projectName')} />
         <div className="editor-top-file">
-          <button className="btn btn-ghost btn-small danger" onClick={() => void runLifecycle(() => deleteOpenProject(project))} disabled={lifecycleBusy} title={t('editor.deleteTitle')}>
+          <button className="btn btn-ghost btn-small danger" onClick={(e) => {
+              const anchor = e.currentTarget
+              void runLifecycle(() => deleteOpenProject(project, anchor))
+            }} disabled={lifecycleBusy} title={t('editor.deleteTitle')}>
             <Trash2 size={14} /> {t('common.delete')}
           </button>
-          <button className="btn btn-ghost btn-small" onClick={() => void runLifecycle(() => recordProjectAgain(project))} disabled={lifecycleBusy} title={t('editor.recordAgainTitle')}>
+          <button className="btn btn-ghost btn-small" onClick={(e) => {
+              const anchor = e.currentTarget
+              void runLifecycle(() => recordProjectAgain(project, anchor))
+            }} disabled={lifecycleBusy} title={t('editor.recordAgainTitle')}>
             <RotateCcw size={14} /> {t('editor.recordAgain')}
           </button>
         </div>

@@ -212,10 +212,10 @@ export function ScenarioReview(): JSX.Element {
           aria-label={t('scenario.nameLabel')}
         />
         <div className="editor-top-file">
-          <button className="btn btn-ghost btn-small danger" onClick={() => void deleteOpenScenario(scenario)} disabled={busy} title={t('editor.deleteScenarioTitle')}>
+          <button className="btn btn-ghost btn-small danger" onClick={(e) => void deleteOpenScenario(scenario, e.currentTarget)} disabled={busy} title={t('editor.deleteScenarioTitle')}>
             <Trash2 size={14} /> {t('common.delete')}
           </button>
-          <button className="btn btn-ghost btn-small" onClick={() => void recaptureScenario(scenario)} disabled={busy} title={t('editor.recaptureTitle')}>
+          <button className="btn btn-ghost btn-small" onClick={(e) => void recaptureScenario(scenario, e.currentTarget)} disabled={busy} title={t('editor.recaptureTitle')}>
             <RotateCcw size={14} /> {t('editor.recordAgain')}
           </button>
         </div>

@@ -125,10 +125,87 @@ input[type='color'] {
   background: transparent;
 }
 
+/* custom checkbox: same box everywhere, vertically centred with the icon/text next to it */
 input[type='checkbox'] {
-  accent-color: var(--accent);
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
   width: 16px;
   height: 16px;
+  margin: 0;
+  border: 1.5px solid #4a525e;
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+input[type='checkbox']::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transform: scale(0);
+  transition: transform 0.1s ease-out;
+}
+
+input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input[type='checkbox']:checked::before {
+  transform: scale(1);
+}
+
+input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--accent-2);
+}
+
+input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* scrollbars: thin rounded thumb on a transparent track, everywhere */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #353b45;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4a525e;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: #5a6372;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .btn {
@@ -194,6 +271,17 @@ input[type='checkbox'] {
 
 .btn.danger:hover:not(:disabled) {
   color: var(--record);
+}
+
+.btn-danger {
+  background: var(--record);
+  border-color: var(--record);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #ff5f55;
+  border-color: #ff5f55;
 }
 
 .btn-row {
@@ -521,7 +609,9 @@ body.bar-window {
   background: rgba(20, 22, 27, 0.96);
   border: 1px solid #3a414b;
   border-radius: 999px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  /* the window is only 8px bigger than the pill on every side: a wider shadow is cut off at the
+     window's rectangle and shows up as a dark box around the pill */
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 
 .bar-drag {
@@ -1154,19 +1244,6 @@ input.name-input:focus {
   overflow-y: hidden;
   position: relative;
   background: #0b0c0f;
-}
-
-.timeline-scroll::-webkit-scrollbar {
-  height: 9px;
-}
-
-.timeline-scroll::-webkit-scrollbar-track {
-  background: #0b0c0f;
-}
-
-.timeline-scroll::-webkit-scrollbar-thumb {
-  background: #3a414b;
-  border-radius: 5px;
 }
 
 .timeline-content {
@@ -2533,3 +2610,133 @@ input.scenario-pause-input {
   background: #000;
   border-radius: 8px;
 }
+
+/* ---------- confirm popover (components/ConfirmPopover.tsx) ---------- */
+
+.confirm-pop {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid #3a414b;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  animation: confirm-pop-in 0.12s ease-out;
+}
+
+.confirm-pop::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--arrow-x, 50%) - 6px);
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: var(--panel-2);
+  border-right: 1px solid #3a414b;
+  border-bottom: 1px solid #3a414b;
+  transform: rotate(45deg);
+}
+
+.confirm-pop.below::after {
+  bottom: auto;
+  top: -7px;
+  transform: rotate(225deg);
+}
+
+.confirm-pop.no-arrow::after {
+  display: none;
+}
+
+.confirm-pop-msg {
+  margin: 0 0 10px;
+  line-height: 1.4;
+  white-space: pre-line;
+  user-select: text;
+}
+
+.confirm-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+@keyframes confirm-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- section block (components/Section.tsx) ---------- */
+
+.section {
+  margin: 0 0 10px;
+  padding: 10px 12px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.section-body > :first-child {
+  margin-top: 0;
+}
+
+.section-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ====================================================================================
+   0.4.1 tracks: each track adds its NEW rules under its own marker below (keeps merges
+   conflict-free); edits of existing rules stay where those rules are.
+   ==================================================================================== */
+
+/* ---------- 0.4.1 track A: home ---------- */
+
+
+/* ---------- 0.4.1 track B: scenario review ---------- */
+
+
+/* ---------- 0.4.1 track C: editor top bar, tabs, playback ---------- */
+
+
+/* ---------- 0.4.1 track D: zoom area editing, inspector sections ---------- */
+
+
+/* ---------- 0.4.1 track E: windows / crop ---------- */
+
+
+/* ---------- 0.4.1 track F: timeline lanes, input tags ---------- */
+
+
+/* ---------- 0.4.1 end of track markers ---------- */

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { launch, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
+import { acceptConfirm, launch, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
 
 /**
  * Scenario recorder: capture real input (injected through the app's own test-only helper over a
@@ -245,8 +245,8 @@ test('a saved scenario can be deleted from Home', async () => {
   await h.win.waitForSelector('.home')
   const recordingIds = projectIds(h.recordingsDir)
   expect(recordingIds).toHaveLength(1)
-  h.win.on('dialog', (d) => void d.accept())
   await h.win.click('.scenario-delete')
+  await acceptConfirm(h.win)
   await expect(h.win.locator('.scenario-block')).toHaveCount(0)
   await sleep(500)
   expect(await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())).toHaveLength(0)
