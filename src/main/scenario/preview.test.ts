@@ -19,16 +19,19 @@ const h = vi.hoisted(() => {
     removeListener: vi.fn(),
     isDestroyed: vi.fn(() => false)
   }
-  return { displays, win, create: vi.fn() }
+  const shortcuts = { register: vi.fn((_accelerator: string, _cb: () => void) => true), unregister: vi.fn() }
+  return { displays, win, shortcuts, create: vi.fn(), isAnyActive: vi.fn(() => false) }
 })
 
 vi.mock('electron', () => ({
-  screen: { getAllDisplays: () => h.displays, getPrimaryDisplay: () => h.displays[0] }
+  screen: { getAllDisplays: () => h.displays, getPrimaryDisplay: () => h.displays[0] },
+  globalShortcut: h.shortcuts
 }))
 vi.mock('../windows', () => ({ getMainWindow: () => h.win }))
-vi.mock('./replay', () => ({ ReplaySession: { create: h.create } }))
+vi.mock('./replay', () => ({ ReplaySession: { create: h.create, isAnyActive: h.isAnyActive } }))
 
-import { PREVIEW_GO_LEAD_MS, ScenarioPreview } from './preview'
+import { scenarioEnd } from '@shared/scenario'
+import { PREVIEW_GO_LEAD_MS, PREVIEW_STOP_SHORTCUT, PREVIEW_WATCHDOG_MARGIN_MS, ScenarioPreview } from './preview'
 
 const NO_MODS = { ctrl: false, shift: false, alt: false, meta: false }
 
@@ -55,6 +58,7 @@ function scenario(actions: ScenarioAction[] = [click('a'), click('b', { hoverOnl
 class FakeSession {
   go = vi.fn()
   dispose = vi.fn()
+  whenOverlayReady = vi.fn(async (_timeoutMs: number) => undefined)
   abort = vi.fn(async (reason: string) => {
     this.callbacks.onAbort(reason)
     return true
@@ -79,14 +83,16 @@ function createResolving(): void {
 
 /** lets start() get past its awaits */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 5; i++) await Promise.resolve()
+  for (let i = 0; i < 10; i++) await Promise.resolve()
 }
 
 beforeEach(() => {
   sessions = []
   h.create.mockReset()
   createResolving()
-  for (const fn of [h.win.hide, h.win.show, h.win.focus, h.win.once, h.win.removeListener]) fn.mockClear()
+  h.isAnyActive.mockReset()
+  h.isAnyActive.mockReturnValue(false)
+  for (const fn of [h.win.hide, h.win.show, h.win.focus, h.win.once, h.win.removeListener, h.shortcuts.register, h.shortcuts.unregister]) fn.mockClear()
 })
 
 afterEach(() => {
@@ -116,6 +122,30 @@ describe('ScenarioPreview: the same replay as a recording', () => {
     expect(h.win.show).not.toHaveBeenCalled()
   })
 
+  it('waits for the overlay page before the schedule starts, so its HUD and first effects are not lost', async () => {
+    vi.useFakeTimers({ now: 2_000_000 })
+    let overlayLoaded: () => void = () => undefined
+    h.create.mockImplementationOnce(async (display: unknown, sc: Scenario, callbacks: ReplaySessionCallbacks, options?: ReplaySessionOptions) => {
+      const s = new FakeSession(display, sc, callbacks, options)
+      s.whenOverlayReady.mockImplementation(() => new Promise<undefined>((resolve) => (overlayLoaded = () => resolve(undefined))))
+      sessions.push(s)
+      return s
+    })
+    const preview = new ScenarioPreview()
+    void preview.start(scenario())
+    await settle()
+    const [s] = sessions
+    // the window is already out of the way, the overlay is loading
+    expect(h.win.hide).toHaveBeenCalledTimes(1)
+    expect(s.whenOverlayReady).toHaveBeenCalledTimes(1)
+    expect(s.go).not.toHaveBeenCalled()
+    vi.setSystemTime(2_000_400)
+    overlayLoaded()
+    await settle()
+    // the lead counts from the moment the overlay is up
+    expect(s.go).toHaveBeenCalledWith(2_000_400 + PREVIEW_GO_LEAD_MS)
+  })
+
   it('falls back to the primary display when the scenario display is gone', async () => {
     const preview = new ScenarioPreview()
     void preview.start(scenario(undefined, 99))
@@ -135,9 +165,9 @@ describe('ScenarioPreview: the same replay as a recording', () => {
 })
 
 describe('ScenarioPreview: every way out cleans up', () => {
-  async function running(): Promise<{ preview: ScenarioPreview; result: Promise<unknown>; session: FakeSession }> {
+  async function running(sc: Scenario = scenario()): Promise<{ preview: ScenarioPreview; result: Promise<unknown>; session: FakeSession }> {
     const preview = new ScenarioPreview()
-    const result = preview.start(scenario())
+    const result = preview.start(sc)
     await settle()
     return { preview, result, session: sessions[0] }
   }
@@ -197,6 +227,62 @@ describe('ScenarioPreview: every way out cleans up', () => {
     await expect(preview.start(scenario())).rejects.toThrow()
   })
 
+  it('Ctrl+Alt+R stops it too (Escape needs the input hook), and the shortcut goes away with the run', async () => {
+    const { result, session } = await running()
+    expect(h.shortcuts.register).toHaveBeenCalledTimes(1)
+    const [accelerator, onShortcut] = h.shortcuts.register.mock.calls[0]
+    expect(accelerator).toBe(PREVIEW_STOP_SHORTCUT)
+    onShortcut()
+    await expect(result).resolves.toEqual({ outcome: 'aborted' })
+    expect(session.abort).toHaveBeenCalledTimes(1)
+    expect(session.dispose).toHaveBeenCalledTimes(1)
+    expect(h.shortcuts.unregister).toHaveBeenLastCalledWith(PREVIEW_STOP_SHORTCUT)
+    expect(h.win.show).toHaveBeenCalledTimes(1)
+  })
+
+  it('a run that does not end in time is cut short, reported as an error, and the window comes back', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const sc = scenario()
+    const { preview, result, session } = await running(sc)
+    const limit = PREVIEW_GO_LEAD_MS + scenarioEnd(sc.actions) + PREVIEW_WATCHDOG_MARGIN_MS
+    await vi.advanceTimersByTimeAsync(limit - 1)
+    expect(session.abort).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(session.abort).toHaveBeenCalledWith('timeout')
+    await expect(result).resolves.toEqual({ outcome: 'error', message: 'The replay did not finish in time' })
+    expect(session.dispose).toHaveBeenCalledTimes(1)
+    expect(h.win.show).toHaveBeenCalledTimes(1)
+    expect(preview.isActive()).toBe(false)
+  })
+
+  it('a run that finishes in time leaves no watchdog behind', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const { result, session } = await running()
+    session.callbacks.onDone()
+    await expect(result).resolves.toEqual({ outcome: 'done' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('stopped while the overlay page loads: never started', async () => {
+    let overlayLoaded: () => void = () => undefined
+    h.create.mockImplementationOnce(async (display: unknown, sc: Scenario, callbacks: ReplaySessionCallbacks, options?: ReplaySessionOptions) => {
+      const s = new FakeSession(display, sc, callbacks, options)
+      s.whenOverlayReady.mockImplementation(() => new Promise<undefined>((resolve) => (overlayLoaded = () => resolve(undefined))))
+      sessions.push(s)
+      return s
+    })
+    const preview = new ScenarioPreview()
+    const result = preview.start(scenario())
+    await settle()
+    await preview.abort()
+    await expect(result).resolves.toEqual({ outcome: 'aborted' })
+    overlayLoaded()
+    await settle()
+    expect(sessions[0].go).not.toHaveBeenCalled()
+    expect(sessions[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.win.show).toHaveBeenCalledTimes(1)
+  })
+
   it('ends only once, whatever arrives after the first way out', async () => {
     const { result, session } = await running()
     session.callbacks.onDone()
@@ -228,6 +314,14 @@ describe('ScenarioPreview: starting', () => {
     void preview.start(scenario())
     // busy from the very start, before the helper is even ready
     expect(preview.isActive()).toBe(true)
+  })
+
+  it("refuses while another replay is still starting (a recording's prepare(), before the recorder reports active)", async () => {
+    h.isAnyActive.mockReturnValue(true)
+    const preview = new ScenarioPreview()
+    await expect(preview.start(scenario())).rejects.toThrow(/in progress/)
+    expect(h.create).not.toHaveBeenCalled()
+    expect(preview.isActive()).toBe(false)
   })
 
   it('refuses an empty or a too long scenario without starting anything', async () => {

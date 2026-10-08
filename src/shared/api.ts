@@ -155,6 +155,8 @@ export interface ZcApi {
   overlay: {
     onEffect(cb: (e: OverlayEffect) => void): Unsubscribe
     onReplayState(cb: (s: ReplayState) => void): Unsubscribe
+    /** the overlay page is subscribed: its replay session answers with the current state */
+    ready(): void
   }
   // ---- composition ----
   compositions: {

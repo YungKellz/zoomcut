@@ -412,7 +412,7 @@ export const ru: Record<TKey, string> = {
   'scenario.validation.tooLong': 'Сценарий длиннее 10 минут; сократите его перед воспроизведением.',
   'scenario.timelineHint': 'Перетащите действие, чтобы сдвинуть его между соседними · Shift+перетаскивание сдвигает и следующие · первое остаётся на 0',
   'scenario.overlayHud': 'Воспроизведение сценария {index}/{total} · Esc – прервать · Ctrl+Alt+R – остановить и сохранить',
-  'scenario.overlayHudPreview': 'Предпросмотр {index}/{total} · без записи · Esc – остановить',
+  'scenario.overlayHudPreview': 'Предпросмотр {index}/{total} · без записи · Esc или Ctrl+Alt+R – остановить',
   'scenario.displayMissingWarning': 'Записано на дисплее, который сейчас не подключён; воспроизведение будет на основном дисплее.',
   'scenario.kind.click': 'Клик',
   'scenario.kind.doubleClick': 'Двойной клик',

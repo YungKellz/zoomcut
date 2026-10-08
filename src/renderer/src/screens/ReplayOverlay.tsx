@@ -33,9 +33,9 @@ const HOVER_TTL_MS = 900
  * keycap badge for shortcuts, and a HUD with the replay progress. Fed by two IPC streams from the
  * main process - overlay:effect (one event per captured action as replay.ps1 reaches it, carrying
  * toX/toY for a drag, deltaY/deltaX for a scroll and hoverOnly for a "position only" click) and
- * recording:replay-state (for the HUD). Effects are a small array pruned by plain timers (their
- * ids tracked so an early unmount cannot leave one firing into stale state), never a per-frame
- * animation loop.
+ * recording:replay-state (for the HUD; on mount, overlay:ready asks for the current state). Effects
+ * are a small array pruned by plain timers (their ids tracked so an early unmount cannot leave one
+ * firing into stale state), never a per-frame animation loop.
  */
 export function ReplayOverlay(): JSX.Element {
   const t = useT()
@@ -63,6 +63,8 @@ export function ReplayOverlay(): JSX.Element {
           : null
       )
     })
+    // subscribed: the session answers with its current state (sent before this page loaded, it was lost)
+    window.zc.overlay.ready()
     return () => {
       offEffect()
       offState()

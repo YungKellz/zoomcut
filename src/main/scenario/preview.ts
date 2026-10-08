@@ -1,13 +1,22 @@
-import { screen, type BrowserWindow } from 'electron'
+import { globalShortcut, screen, type BrowserWindow } from 'electron'
 import type { Scenario, ScenarioPreviewResult } from '@shared/types'
-import { migrateScenario, validateScenario } from '@shared/scenario'
+import { migrateScenario, scenarioEnd, validateScenario } from '@shared/scenario'
 import { getMainWindow } from '../windows'
 import { ReplaySession } from './replay'
 
-/** From the helper being ready to the first step: the main window gets out of the way and the
- * overlay shows up before anything moves (a recording's replay gets the same 800ms after its
- * first frame, see RecordingController.started()). */
+/** From the overlay being up to the first step: the HUD is on screen before anything moves (a
+ * recording's replay gets the same 800ms after its first frame, see RecordingController.started()). */
 export const PREVIEW_GO_LEAD_MS = 800
+/** How long the preview waits for the overlay page before it runs without it. */
+export const PREVIEW_OVERLAY_TIMEOUT_MS = 3000
+/** The run is cut short this long after the schedule should have ended: a stuck helper never keeps
+ * the app window hidden. */
+export const PREVIEW_WATCHDOG_MARGIN_MS = 30_000
+/** Stops a preview besides Escape - the recording's own stop shortcut (the two never run at once), so
+ * a preview can be stopped even when the input hook, and with it Escape, is unavailable. */
+export const PREVIEW_STOP_SHORTCUT = 'CommandOrControl+Alt+R'
+/** the abort reason of the watchdog: reported as an error, not as a stop */
+const TIMEOUT_REASON = 'timeout'
 
 interface PreviewRun {
   /** null while ReplaySession.create() is still starting the helper */
@@ -20,6 +29,9 @@ interface PreviewRun {
   /** the main window this run hid, to show again at the end */
   hidden: BrowserWindow | null
   onWindowClosed: () => void
+  /** PREVIEW_STOP_SHORTCUT is registered for this run */
+  shortcut: boolean
+  watchdog: NodeJS.Timeout | null
 }
 
 /**
@@ -27,13 +39,14 @@ interface PreviewRun {
  * drives (replay.ts: the same compiled steps, helper, overlay and Escape abort) without any
  * RecordingController around it - nothing is captured and no project is made. The main window
  * hides for the run, like for a recording, and comes back afterwards. One at a time, and never next
- * to a recording or a scenario capture: main/index.ts wires the three busy checks together.
+ * to a recording or a scenario capture: main/index.ts wires the three busy checks together, and a
+ * replay still starting inside a recording's prepare() counts too (ReplaySession.isAnyActive()).
  *
- * Every way out goes through end(): the schedule finished, Escape or abort(), the helper failed,
- * the main window closed, the app quits (dispose()). ReplaySession.dispose() then releases input
- * by the helper's own rules (exactly what it pressed, or after a hard kill only what Windows reports
- * as held - never an up for something that is not down), closes the overlay and releases the shared
- * hook.
+ * Every way out goes through end(): the schedule finished, Escape, Ctrl+Alt+R or abort(), the
+ * helper failed, the watchdog, the main window closed, the app quits (dispose()).
+ * ReplaySession.dispose() then releases input by the helper's own rules (exactly what it pressed, or
+ * after a hard kill only what Windows reports as held - never an up for something that is not
+ * down), closes the overlay and releases the shared hook.
  */
 export class ScenarioPreview {
   private run: PreviewRun | null = null
@@ -52,7 +65,7 @@ export class ScenarioPreview {
   async start(input: Scenario): Promise<ScenarioPreviewResult> {
     if (this.disposed) throw new Error('The app is quitting')
     if (this.run) throw new Error('A scenario preview is already running')
-    if (this.otherBusyCheck?.()) throw new Error('A recording or a scenario capture is in progress')
+    if (this.otherBusyCheck?.() || ReplaySession.isAnyActive()) throw new Error('A recording or a scenario capture is in progress')
     // the review screen's copy, possibly with edits not saved yet: normalized like a saved one
     const scenario = migrateScenario(input)
     const invalid = validateScenario(scenario.actions)
@@ -67,7 +80,9 @@ export class ScenarioPreview {
       ended: false,
       abortRequested: false,
       hidden: null,
-      onWindowClosed: () => void this.abortRun(run, 'window closed')
+      onWindowClosed: () => void this.abortRun(run, 'window closed'),
+      shortcut: false,
+      watchdog: null
     }
     const result = new Promise<ScenarioPreviewResult>((resolve) => {
       run.resolve = resolve
@@ -83,7 +98,8 @@ export class ScenarioPreview {
           // the overlay HUD and the main window's preview-state events already carry the progress
           onProgress: () => undefined,
           onDone: () => this.end(run, { outcome: 'done' }),
-          onAbort: () => this.end(run, { outcome: 'aborted' }),
+          onAbort: (reason) =>
+            this.end(run, reason === TIMEOUT_REASON ? { outcome: 'error', message: 'The replay did not finish in time' } : { outcome: 'aborted' }),
           onError: (message) => this.end(run, { outcome: 'error', message })
         },
         { preview: true }
@@ -111,8 +127,22 @@ export class ScenarioPreview {
       win.once('closed', run.onWindowClosed)
       win.hide()
     }
-    session.go(Date.now() + PREVIEW_GO_LEAD_MS)
+    globalShortcut.unregister(PREVIEW_STOP_SHORTCUT)
+    run.shortcut = globalShortcut.register(PREVIEW_STOP_SHORTCUT, () => void this.abortRun(run, 'shortcut'))
+    void this.launch(run, session, scenario)
     return result
+  }
+
+  /** The overlay page loads only now: waits for its HUD, so nothing the replay shows is lost, then
+   * starts the schedule. A run that ends meanwhile (Escape, Stop, ...) is never started. */
+  private async launch(run: PreviewRun, session: ReplaySession, scenario: Scenario): Promise<void> {
+    await session.whenOverlayReady(PREVIEW_OVERLAY_TIMEOUT_MS)
+    if (run.ended) return
+    session.go(Date.now() + PREVIEW_GO_LEAD_MS)
+    run.watchdog = setTimeout(
+      () => void this.abortRun(run, TIMEOUT_REASON),
+      PREVIEW_GO_LEAD_MS + scenarioEnd(scenario.actions) + PREVIEW_WATCHDOG_MARGIN_MS
+    )
   }
 
   /** Stop from the review screen: the same as Escape. A no-op when no preview runs. */
@@ -143,6 +173,14 @@ export class ScenarioPreview {
     if (run.ended) return
     run.ended = true
     if (this.run === run) this.run = null
+    if (run.watchdog) {
+      clearTimeout(run.watchdog)
+      run.watchdog = null
+    }
+    if (run.shortcut) {
+      run.shortcut = false
+      globalShortcut.unregister(PREVIEW_STOP_SHORTCUT)
+    }
     run.session?.dispose()
     const win = run.hidden
     run.hidden = null

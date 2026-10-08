@@ -86,7 +86,8 @@ const api: ZcApi = {
   },
   overlay: {
     onEffect: (cb) => subscribe('overlay:effect', cb),
-    onReplayState: (cb) => subscribe('recording:replay-state', cb)
+    onReplayState: (cb) => subscribe('recording:replay-state', cb),
+    ready: () => ipcRenderer.send('overlay:ready')
   },
   compositions: {
     list: () => ipcRenderer.invoke('compositions:list'),

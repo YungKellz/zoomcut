@@ -425,7 +425,7 @@ export const en = {
   'scenario.validation.tooLong': 'The scenario is longer than 10 minutes; shorten it before replaying.',
   'scenario.timelineHint': 'Drag an action to move it between its neighbours · Shift+drag moves the following actions too · the first one stays at 0',
   'scenario.overlayHud': 'Replaying scenario {index}/{total} · Esc – abort · Ctrl+Alt+R – stop and keep',
-  'scenario.overlayHudPreview': 'Preview {index}/{total} · nothing is recorded · Esc – stop',
+  'scenario.overlayHudPreview': 'Preview {index}/{total} · nothing is recorded · Esc or Ctrl+Alt+R – stop',
   'scenario.displayMissingWarning': 'Recorded on a display that is not connected; the replay will use the primary display.',
   'scenario.kind.click': 'Click',
   'scenario.kind.doubleClick': 'Double-click',

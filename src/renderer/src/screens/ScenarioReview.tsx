@@ -84,6 +84,10 @@ export function ScenarioReview(): JSX.Element {
   const [audioDefaults, setAudioDefaults] = useState<AudioCaptureOptions | null>(null)
   /** a dry run is on screen (main hides this window meanwhile) */
   const [previewing, setPreviewing] = useState(false)
+  /** the dry run reported its last state: main shows this window again before its result arrives */
+  const [previewOver, setPreviewOver] = useState(false)
+  /** "Record video from scenario" is looking up the display and settings, before the recorder says 'starting' */
+  const [startingReplay, setStartingReplay] = useState(false)
 
   const recorder = useRecorder(
     (project) => {
@@ -95,7 +99,7 @@ export function ScenarioReview(): JSX.Element {
     },
     () => setNotice(t('scenario.replayAborted'))
   )
-  const busy = (recorder.phase !== 'idle' && recorder.phase !== 'error') || previewing
+  const busy = (recorder.phase !== 'idle' && recorder.phase !== 'error') || previewing || startingReplay
 
   // same audio sources the home screen's checkboxes remember - just for the "Record video"
   // hint below; startReplay() re-reads settings fresh at the moment it actually starts
@@ -126,7 +130,10 @@ export function ScenarioReview(): JSX.Element {
     // a recording's replay and a preview report the same states, each on its own channel
     const show = (s: ReplayState): void => setReplay(s.phase === 'running' ? { index: s.index + 1, total: s.total } : null)
     const offRecording = window.zc.recording.onReplayState(show)
-    const offPreview = window.zc.scenario.onPreviewState(show)
+    const offPreview = window.zc.scenario.onPreviewState((s) => {
+      show(s)
+      if (s.phase === 'done' || s.phase === 'aborted' || s.phase === 'error') setPreviewOver(true)
+    })
     return () => {
       offRecording()
       offPreview()
@@ -204,18 +211,25 @@ export function ScenarioReview(): JSX.Element {
     // this one - NoticeBar (App.tsx) shows store.notice across screens, so it otherwise outlives
     // this component
     useStore.getState().setNotice(null)
-    const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
-    const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
-    if (target === undefined) return
-    // the replay recording captures the same audio sources the user picked on the home screen
-    const audio = audioOverride === undefined ? settings.audioDefaults : audioOverride
-    await recorder.start(target, { scenario, audio: audio ?? undefined })
+    // busy from the click on: Preview must not start next to a recording that is still starting
+    setStartingReplay(true)
+    try {
+      const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
+      const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
+      if (target === undefined) return
+      // the replay recording captures the same audio sources the user picked on the home screen
+      const audio = audioOverride === undefined ? settings.audioDefaults : audioOverride
+      await recorder.start(target, { scenario, audio: audio ?? undefined })
+    } finally {
+      setStartingReplay(false)
+    }
   }
 
   // "Preview": the replay of a recording, on the same display, with nothing recorded. Main hides
   // this window for the run and answers once it is over (finished, Escape / Stop, failed).
   const startPreview = async (): Promise<void> => {
     setNotice(null)
+    setPreviewOver(false)
     setPreviewing(true)
     try {
       const result = await window.zc.scenario.preview(scenario)
@@ -354,7 +368,8 @@ export function ScenarioReview(): JSX.Element {
         </div>
       </footer>
 
-      {busy && (
+      {/* a finished preview's window is back a moment before its result: no "Preparing" card then */}
+      {busy && !(previewing && previewOver) && (
         <div className="overlay">
           <div className="overlay-card">
             {previewing && (
@@ -365,7 +380,9 @@ export function ScenarioReview(): JSX.Element {
                 </button>
               </>
             )}
-            {recorder.phase === 'starting' && <p>{t('home.preparing')}</p>}
+            {(recorder.phase === 'starting' || (startingReplay && (recorder.phase === 'idle' || recorder.phase === 'error'))) && (
+              <p>{t('home.preparing')}</p>
+            )}
             {recorder.phase === 'countdown' && <p>{t('home.countdown')}</p>}
             {recorder.phase === 'recording' && (
               <p>{t('scenario.replaying', { index: replay?.index ?? 1, total: replay?.total ?? scenario.actions.length })}</p>
