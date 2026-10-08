@@ -3198,6 +3198,95 @@ input.scenario-pause-input {
 
 /* ---------- 0.4.1 track D: zoom area editing, inspector sections ---------- */
 
+/* the pick overlay (editor/PickOverlay.tsx) positions against the whole inspector */
+.inspector {
+  position: relative;
+}
+
+/* while a zoom area is picked: hint + Apply / Cancel over tabs and panel, which cannot be clicked */
+.pick-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.pick-overlay-card {
+  padding: 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  outline: none;
+}
+
+.pick-overlay-title {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.pick-overlay-hint {
+  margin: 0 0 12px;
+  color: var(--accent-2);
+  line-height: 1.45;
+}
+
+.pick-overlay-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pick-overlay-keys {
+  margin: 12px 0 0;
+}
+
+/* a light cross through the middle of the pick rectangle (and faint thirds) shows where its centre is */
+.pick-grid {
+  --pick-line: rgba(255, 255, 255, 0.55);
+  --pick-third: rgba(255, 255, 255, 0.2);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--pick-line), var(--pick-line)) 50% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--pick-line), var(--pick-line)) 0 50% / 100% 1px no-repeat,
+    linear-gradient(var(--pick-third), var(--pick-third)) 33.333% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--pick-third), var(--pick-third)) 66.667% 0 / 1px 100% no-repeat,
+    linear-gradient(var(--pick-third), var(--pick-third)) 0 33.333% / 100% 1px no-repeat,
+    linear-gradient(var(--pick-third), var(--pick-third)) 0 66.667% / 100% 1px no-repeat;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
+}
+
+/* the frame's centre lines, lit while Shift holds the rectangle's centre on them */
+.pick-guide {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--accent-2);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.pick-guide-v {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+}
+
+.pick-guide-h {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  margin-top: -0.5px;
+}
+
 
 /* ---------- 0.4.1 track E: windows / crop ---------- */
 

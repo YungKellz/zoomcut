@@ -1,11 +1,11 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Pause, Play, RotateCcw, SkipBack, StepBack, StepForward, X } from 'lucide-react'
+import { Pause, Play, RotateCcw, SkipBack, StepBack, StepForward } from 'lucide-react'
 import type { BlurRegion, CropRect, Project, WindowRect } from '@shared/types'
-import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
+import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore } from '../store'
 import type { FollowPath } from '../engine/cursor'
-import { zoomAreas } from '../engine/camera'
+import { clampPickCenter, pickSnapThreshold, resizePickRect, snapPickCenter, type PickCorner } from '../engine/pickRect'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
 import { displayTime, keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
@@ -62,8 +62,6 @@ function pastMediaEnd(video: HTMLVideoElement, tMs: number): boolean {
   return Number.isFinite(video.duration) && tMs >= video.duration * 1000 - 1
 }
 
-type Corner = 'nw' | 'ne' | 'sw' | 'se'
-
 /**
  * Preview player. Two <video> elements share the source: while one plays a kept
  * segment, the other is already seeked to the start of the next one, so jumping over
@@ -78,9 +76,7 @@ export function Preview({ followPath }: Props): JSX.Element {
   const selection = useStore((s) => s.selection)
   const playheadMs = useStore((s) => s.playheadMs)
   const pickRect = useStore((s) => s.pickRect)
-  const pickArea = useStore((s) => s.pickArea)
   const setPickRect = useStore((s) => s.setPickRect)
-  const applyPick = useStore((s) => s.applyPick)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const togglePlay = useStore((s) => s.togglePlay)
@@ -102,6 +98,7 @@ export function Preview({ followPath }: Props): JSX.Element {
   const [readyCount, setReadyCount] = useState(0)
   const ready = readyCount >= 2
   const [hoverWindow, setHoverWindow] = useState<number | null>(null)
+  const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
 
   const activeVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoARef.current : videoBRef.current), [])
   const standbyVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoBRef.current : videoARef.current), [])
@@ -311,7 +308,6 @@ export function Preview({ followPath }: Props): JSX.Element {
   }
 
   // ---- pick area (zoom target) ----
-  const pickedZoom = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const pickPx: PxRect | null = pickRect
     ? {
         x: (pickRect.cx - pickRect.size / 2) * size.outW,
@@ -321,60 +317,81 @@ export function Preview({ followPath }: Props): JSX.Element {
       }
     : null
 
-  const clampCenter = (r: PickRect): PickRect => ({
-    ...r,
-    cx: clamp(r.cx, r.size / 2, 1 - r.size / 2),
-    cy: clamp(r.cy, r.size / 2, 1 - r.size / 2)
-  })
+  /** the frame's centre guide lines that are lit while Shift pulls the rectangle onto them */
+  const showSnapGuide = (x: boolean, y: boolean): void => setSnapGuide((cur) => (cur.x === x && cur.y === y ? cur : { x, y }))
 
+  /**
+   * One drag of the pick rectangle: pointer capture on the pressed element, `apply` runs on every
+   * pointer move and again whenever Shift or Alt is pressed or released mid-drag (with the last
+   * pointer position), so a held modifier takes effect without having to wiggle the mouse.
+   */
+  const trackPickDrag = (e: React.PointerEvent, apply: (pointer: { x: number; y: number }, mods: { shift: boolean; alt: boolean }) => void): void => {
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    let pointer = { x: e.clientX, y: e.clientY }
+    let mods = { shift: e.shiftKey, alt: e.altKey }
+    const move = (ev: PointerEvent): void => {
+      pointer = { x: ev.clientX, y: ev.clientY }
+      mods = { shift: ev.shiftKey, alt: ev.altKey }
+      apply(pointer, mods)
+    }
+    const key = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Shift' && ev.key !== 'Alt') return
+      mods = { shift: ev.shiftKey, alt: ev.altKey }
+      apply(pointer, mods)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      window.removeEventListener('keydown', key)
+      window.removeEventListener('keyup', key)
+      showSnapGuide(false, false)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+    window.addEventListener('keydown', key)
+    window.addEventListener('keyup', key)
+  }
+
+  /** Moving: with Shift the centre snaps to the frame's vertical / horizontal centre lines. */
   const startPickMove = (e: React.PointerEvent): void => {
     if (!pickRect) return
     e.preventDefault()
     e.stopPropagation()
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
     const origin = { ...pickRect }
     const sx = e.clientX
     const sy = e.clientY
-    const move = (ev: PointerEvent): void => {
-      setPickRect(clampCenter({ ...origin, cx: origin.cx + (ev.clientX - sx) / size.outW, cy: origin.cy + (ev.clientY - sy) / size.outH }))
-    }
-    const up = (): void => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', up)
-    }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', up)
+    trackPickDrag(e, (pointer, mods) => {
+      const moved = clampPickCenter({ ...origin, cx: origin.cx + (pointer.x - sx) / size.outW, cy: origin.cy + (pointer.y - sy) / size.outH })
+      if (!mods.shift) {
+        setPickRect(moved)
+        showSnapGuide(false, false)
+        return
+      }
+      const snapped = snapPickCenter(moved, pickSnapThreshold(size.outW), pickSnapThreshold(size.outH))
+      setPickRect(snapped.rect)
+      showSnapGuide(snapped.x, snapped.y)
+    })
   }
 
-  const startPickResize = (corner: Corner) => (e: React.PointerEvent) => {
+  /**
+   * Resizing by a corner: the opposite corner stays put; with Alt the centre stays put instead and
+   * the rectangle grows or shrinks in every direction. (Shift's magnet is for moving only: the
+   * rectangle is square in frame units, so one size cannot put the centre on both lines.)
+   */
+  const startPickResize = (corner: PickCorner) => (e: React.PointerEvent) => {
     if (!pickRect) return
     e.preventDefault()
     e.stopPropagation()
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
-    const stage = el.closest('.preview-stage')?.getBoundingClientRect()
+    const stage = (e.currentTarget as HTMLElement).closest('.preview-stage')?.getBoundingClientRect()
     if (!stage) return
-    const half = pickRect.size / 2
-    // the opposite corner stays where it is
-    const ax = corner.includes('w') ? pickRect.cx + half : pickRect.cx - half
-    const ay = corner.includes('n') ? pickRect.cy + half : pickRect.cy - half
-    const sxDir = corner.includes('w') ? -1 : 1
-    const syDir = corner.includes('n') ? -1 : 1
-    const move = (ev: PointerEvent): void => {
-      const px = (ev.clientX - stage.left) / size.outW
-      const py = (ev.clientY - stage.top) / size.outH
-      const avail = Math.min(sxDir > 0 ? 1 - ax : ax, syDir > 0 ? 1 - ay : ay)
-      const wanted = Math.max((px - ax) * sxDir, (py - ay) * syDir)
-      const s = clamp(wanted, PICK_MIN_SIZE, Math.min(PICK_MAX_SIZE, avail))
-      setPickRect({ cx: ax + (sxDir * s) / 2, cy: ay + (syDir * s) / 2, size: s })
-    }
-    const up = (): void => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', up)
-    }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', up)
+    const start = { ...pickRect }
+    trackPickDrag(e, (pointer, mods) => {
+      const at = { x: (pointer.x - stage.left) / size.outW, y: (pointer.y - stage.top) / size.outH }
+      setPickRect(resizePickRect(start, corner, at, PICK_MIN_SIZE, PICK_MAX_SIZE, mods.alt))
+    })
   }
 
   // ---- blur regions ----
@@ -416,7 +433,7 @@ export function Preview({ followPath }: Props): JSX.Element {
     }
     if (mode !== 'pickTarget' || !pickRect) return
     const rect = e.currentTarget.getBoundingClientRect()
-    setPickRect(clampCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
+    setPickRect(clampPickCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
   }
 
   const cropToWindow = (w: WindowRect): void => {
@@ -450,11 +467,14 @@ export function Preview({ followPath }: Props): JSX.Element {
 
           {mode === 'pickTarget' && pickPx && (
             <div className="pick-rect" style={{ left: pickPx.x, top: pickPx.y, width: pickPx.w, height: pickPx.h }} onPointerDown={startPickMove}>
-              {(['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+              <div className="pick-grid" />
+              {(['nw', 'ne', 'sw', 'se'] as PickCorner[]).map((c) => (
                 <div key={c} className={`pick-handle pick-${c}`} onPointerDown={startPickResize(c)} />
               ))}
             </div>
           )}
+          {mode === 'pickTarget' && snapGuide.x && <div className="pick-guide pick-guide-v" />}
+          {mode === 'pickTarget' && snapGuide.y && <div className="pick-guide pick-guide-h" />}
 
           {blurMode &&
             otherBlurs.map((b) => {
@@ -535,17 +555,6 @@ export function Preview({ followPath }: Props): JSX.Element {
         <span className="timecode">{formatTimecode(srcToOut(playheadMs, segments))}</span>
         <span className="muted">/ {formatTimecode(outDur)}</span>
         <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>
-        {mode === 'pickTarget' && (
-          <span className="hint">
-            {pickedZoom && zoomAreas(pickedZoom).length > 1 ? t('preview.pickPartHint', { n: pickArea + 1 }) : t('preview.pickHint')}{' '}
-            <button className="btn btn-small btn-primary" onClick={applyPick}>
-              <Check size={13} /> {t('common.apply')}
-            </button>{' '}
-            <button className="btn btn-small" onClick={() => setMode('normal')}>
-              <X size={13} /> {t('common.cancel')}
-            </button>
-          </span>
-        )}
         {blurMode && (
           <span className="hint">
             {selectedBlur && !blurIsActive(selectedBlur, playheadMs) ? t('blur.inactiveHint') + ' ' : ''}

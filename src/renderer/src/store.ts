@@ -63,6 +63,23 @@ export const PICK_MAX_SIZE = 1 / 1.2
 
 const HISTORY_LIMIT = 60
 
+/**
+ * Time fields (start, end, ease, fade, ...) are stored as whole milliseconds. The playhead comes
+ * off `video.currentTime * 1000` and a drag off a pixel position, so left alone a project ends up
+ * with values like 439.20300000000003 ms (and the sliders print them). Returns `patch` itself when
+ * every listed field is already whole or absent.
+ */
+function wholeMs<T extends object>(patch: T, keys: ReadonlyArray<keyof T>): T {
+  let out = patch
+  for (const key of keys) {
+    const v = patch[key]
+    if (typeof v !== 'number' || !Number.isFinite(v) || Number.isInteger(v)) continue
+    if (out === patch) out = { ...patch }
+    ;(out as Record<PropertyKey, unknown>)[key] = Math.round(v)
+  }
+  return out
+}
+
 /** snapshot taken by checkpoint(), committed by the first unrecorded mutation that changes something */
 let pendingCheckpoint: Project | null = null
 
@@ -210,6 +227,9 @@ export const useStore = create<EditorState>((set, get) => ({
       screen: get().composition ? 'composition' : 'home',
       project: null,
       playing: false,
+      // leaving the editor mid-pick must not leave the pick lock behind (select() ignores changes while picking)
+      mode: 'normal',
+      pickRect: null,
       history: [],
       future: [],
       audioMuted: false,
@@ -257,14 +277,25 @@ export const useStore = create<EditorState>((set, get) => ({
     const playheadMs = stepFrames(get().playheadMs, direction, frameMs, keepSegments(p.recording.durationMs, p.cuts))
     set({ playing: false, playheadMs, seekSeq: get().seekSeq + 1 })
   },
-  select: (selection) =>
+  select: (selection) => {
+    // Picking an area is modal (PickOverlay covers the inspector): the selection is the zoom being
+    // picked, so a click on the timeline or the hotkeys must not drop it - Apply would then have
+    // nothing to write to and the mode would stay stuck. Seeking still works; the pick ends with
+    // Apply / Enter or Cancel / Esc only.
+    const { mode, selection: current } = get()
+    if (mode === 'pickTarget' && !(selection?.kind === 'zoom' && current?.kind === 'zoom' && selection.id === current.id)) return
     set({
       selection,
       range: selection ? null : get().range,
       // the blur editor edits the selected region: selecting anything else leaves it
-      ...(get().mode === 'blur' && selection?.kind !== 'blur' ? { mode: 'normal' as const } : {})
-    }),
-  setRange: (range) => set({ range, selection: range ? null : get().selection }),
+      ...(mode === 'blur' && selection?.kind !== 'blur' ? { mode: 'normal' as const } : {})
+    })
+  },
+  setRange: (range) => {
+    // a range replaces the selection, see select()
+    if (range && get().mode === 'pickTarget') return
+    set({ range, selection: range ? null : get().selection })
+  },
   setMode: (mode) => set({ mode, playing: mode === 'normal' ? get().playing : false, pickRect: mode === 'pickTarget' ? get().pickRect : null }),
 
   beginPick: (zoomId, area = 0) => {
@@ -300,7 +331,11 @@ export const useStore = create<EditorState>((set, get) => ({
 
   applyPick: () => {
     const { project: p, pickRect: r, selection } = get()
-    if (!p || !r || selection?.kind !== 'zoom') return
+    if (!p || !r || selection?.kind !== 'zoom') {
+      // nothing to write to (the zoom is gone): never leave the editor stuck in pick mode
+      if (get().mode === 'pickTarget') set({ mode: 'normal', pickRect: null })
+      return
+    }
     const crop = p.crop
     const target = { x: crop.x + r.cx * crop.w, y: crop.y + r.cy * crop.h }
     const scale = clamp(Math.round((1 / r.size) * 10) / 10, 1.2, 5)
@@ -381,8 +416,10 @@ export const useStore = create<EditorState>((set, get) => ({
 
   addZoom: (at) => {
     const p = get().project
-    if (!p) return null
-    const t = at ?? get().playheadMs
+    // picking an area is modal, see select(); the Z hotkey must not start another zoom meanwhile
+    if (!p || get().mode === 'pickTarget') return null
+    // whole ms: the playhead is fractional (video.currentTime * 1000), and the ease-in / end below derive from it
+    const t = Math.round(at ?? get().playheadMs)
     const existing = findZoom(p.zooms, t)
     if (existing) {
       set({ selection: { kind: 'zoom', id: existing.id } })
@@ -402,14 +439,16 @@ export const useStore = create<EditorState>((set, get) => ({
   },
 
   updateZoom: (id, patch, record = true) => {
+    const whole = wholeMs(patch, ['start', 'end', 'easeInMs', 'easeOutMs'])
     get().mutate((p) => {
       const zooms = p.zooms.map((z) => {
         if (z.id !== id) return z
-        const next = { ...z, ...patch }
+        const next = { ...z, ...whole }
         // dragging the whole region (both edges move alike) carries its parts along; any other
-        // change is normalized by resolveZoomOverlaps, which drops the parts that no longer fit
+        // change is normalized by resolveZoomOverlaps, which drops the parts that no longer fit.
+        // Both edges are rounded on their own, so "alike" allows the 1 ms that rounding can add.
         const ds = next.start - z.start
-        return Math.abs(ds - (next.end - z.end)) < 0.5 ? shiftZoomParts(next, ds) : next
+        return Math.abs(ds - (next.end - z.end)) <= 1 ? shiftZoomParts(next, ds) : next
       })
       return { ...p, zooms: resolveZoomOverlaps(zooms, id, p.recording.durationMs) }
     }, record)
@@ -422,32 +461,44 @@ export const useStore = create<EditorState>((set, get) => ({
 
   addZoomPart: (zoomId, at) => {
     const z = get().project?.zooms.find((x) => x.id === zoomId)
-    const res = z ? insertZoomPart(z, at, uid('part')) : null
+    // the boundary is a whole ms, like every other time in the project
+    const res = z ? insertZoomPart(z, Math.round(at), uid('part')) : null
     if (!res) return null
     get().mutate((p) => ({ ...p, zooms: p.zooms.map((x) => (x.id === zoomId ? res.zoom : x)) }))
     return res.index
   },
 
-  removeZoomPart: (zoomId, area) =>
+  removeZoomPart: (zoomId, area) => {
+    const before = get().project?.zooms.find((x) => x.id === zoomId)
     get().mutate((p) => {
       const z = p.zooms.find((x) => x.id === zoomId)
       const next = z && removeZoomPart(z, area)
       return z && next !== z ? { ...p, zooms: p.zooms.map((x) => (x === z ? next! : x)) } : p
-    }),
+    })
+    // a pick in progress keeps pointing at a real area: later areas move down by one
+    const after = get().project?.zooms.find((x) => x.id === zoomId)
+    if (get().mode === 'pickTarget' && before && after && after !== before) {
+      const pickArea = get().pickArea
+      set({ pickArea: clamp(pickArea > area ? pickArea - 1 : pickArea, 0, zoomAreas(after).length - 1) })
+    }
+  },
 
-  updateZoomPart: (zoomId, area, patch, record = true) =>
+  updateZoomPart: (zoomId, area, patch, record = true) => {
+    const whole = wholeMs(patch, ['start'])
     get().mutate((p) => {
       const z = p.zooms.find((x) => x.id === zoomId)
-      const next = z && patchZoomArea(z, area, patch)
+      const next = z && patchZoomArea(z, area, whole)
       return z && next !== z ? { ...p, zooms: p.zooms.map((x) => (x === z ? next! : x)) } : p
-    }, record),
+    }, record)
+  },
 
   setZooms: (zooms) => get().mutate((p) => ({ ...p, zooms: [...zooms].sort((a, b) => a.start - b.start) })),
 
   addText: (at) => {
     const p = get().project
-    if (!p) return null
-    const time = at ?? get().playheadMs
+    // picking an area is modal, see select()
+    if (!p || get().mode === 'pickTarget') return null
+    const time = Math.round(at ?? get().playheadMs)
     const id = uid('text')
     const duration = p.recording.durationMs
     const at0 = Math.max(0, Math.min(time, duration - 500))
@@ -468,7 +519,8 @@ export const useStore = create<EditorState>((set, get) => ({
   },
 
   updateText: (id, patch, record = true) => {
-    get().mutate((p) => ({ ...p, texts: p.texts.map((t) => (t.id === id ? { ...t, ...patch } : t)) }), record)
+    const whole = wholeMs(patch, ['start', 'end', 'animationMs'])
+    get().mutate((p) => ({ ...p, texts: p.texts.map((t) => (t.id === id ? { ...t, ...whole } : t)) }), record)
   },
 
   removeText: (id) => {
@@ -478,8 +530,9 @@ export const useStore = create<EditorState>((set, get) => ({
 
   addBlur: () => {
     const p = get().project
-    if (!p) return null
-    const duration = p.recording.durationMs
+    // picking an area is modal, see select()
+    if (!p || get().mode === 'pickTarget') return null
+    const duration = Math.round(p.recording.durationMs)
     const id = uid('blur')
     // centered in the current crop, so a new rectangle is always on screen
     const c = p.crop
@@ -499,8 +552,10 @@ export const useStore = create<EditorState>((set, get) => ({
     return id
   },
 
-  updateBlur: (id, patch, record = true) =>
-    get().mutate((p) => ({ ...p, blurs: p.blurs.map((b) => (b.id === id ? { ...b, ...patch } : b)) }), record),
+  updateBlur: (id, patch, record = true) => {
+    const whole = wholeMs(patch, ['start', 'end'])
+    get().mutate((p) => ({ ...p, blurs: p.blurs.map((b) => (b.id === id ? { ...b, ...whole } : b)) }), record)
+  },
 
   removeBlur: (id) => {
     get().mutate((p) => ({ ...p, blurs: p.blurs.filter((b) => b.id !== id) }))
@@ -536,7 +591,9 @@ export const useStore = create<EditorState>((set, get) => ({
   setName: (name) => get().mutate((p) => ({ ...p, name }), false),
 
   deleteSelected: () => {
-    const { selection, range } = get()
+    const { selection, range, mode } = get()
+    // picking an area is modal, see select(): Delete must not remove the zoom being picked
+    if (mode === 'pickTarget') return
     if (selection?.kind === 'cut') get().removeCut(selection.id)
     else if (selection?.kind === 'zoom') get().removeZoom(selection.id)
     else if (selection?.kind === 'text') get().removeText(selection.id)
@@ -550,8 +607,10 @@ export const useStore = create<EditorState>((set, get) => ({
     set({ selection: { kind: 'audio', id: clip.id } })
   },
 
-  updateAudioClip: (id, patch, record = true) =>
-    get().mutate((p) => ({ ...p, audio: p.audio.map((c) => (c.id === id ? { ...c, ...patch } : c)) }), record),
+  updateAudioClip: (id, patch, record = true) => {
+    const whole = wholeMs(patch, ['start', 'fadeInMs', 'fadeOutMs'])
+    get().mutate((p) => ({ ...p, audio: p.audio.map((c) => (c.id === id ? { ...c, ...whole } : c)) }), record)
+  },
 
   removeAudioClip: (id) => {
     // the underlying file is NOT deleted here: this change is undoable (Ctrl+Z), and deleting

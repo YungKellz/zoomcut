@@ -397,15 +397,19 @@ test('pick area mode: click, Escape, Enter and Apply', async () => {
   console.log('[pick] target before', JSON.stringify(targetBefore))
 
   // Escape leaves pick mode without changing anything
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(1)
-  await expect(h.win.locator('.preview-controls .btn >> nth=2')).toBeDisabled()
+  await expect(h.win.locator('.preview-controls button[title^="Play / pause"]')).toBeDisabled()
+  // the hint and Apply / Cancel live in the inspector overlay, not in the preview controls
+  await expect(h.win.locator('.pick-overlay')).toHaveCount(1)
+  await expect(h.win.locator('.preview-controls button:has-text("Apply")')).toHaveCount(0)
   await h.win.keyboard.press('Escape')
   await expect(h.win.locator('.pick-rect')).toHaveCount(0)
+  await expect(h.win.locator('.pick-overlay')).toHaveCount(0)
   expect((await flushedProject(h.recordingsDir, id)).zooms[0].target).toEqual(targetBefore)
 
   // click on the frame moves the rectangle, Enter applies
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(1)
   const canvas = (await h.win.locator('.preview-canvas').boundingBox())!
   await h.win.mouse.click(canvas.x + canvas.width * 0.22, canvas.y + canvas.height * 0.25)
@@ -418,10 +422,10 @@ test('pick area mode: click, Escape, Enter and Apply', async () => {
   expect(afterEnter.target.y).toBeLessThan(0.45)
 
   // and once more with the Apply button
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   const canvas2 = (await h.win.locator('.preview-canvas').boundingBox())!
   await h.win.mouse.click(canvas2.x + canvas2.width * 0.8, canvas2.y + canvas2.height * 0.8)
-  await h.win.click('.preview-controls button:has-text("Apply")')
+  await h.win.click('.pick-overlay [data-action="apply"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(0)
   const afterApply = (await flushedProject(h.recordingsDir, id)).zooms[0]
   console.log('[pick] target after Apply', JSON.stringify(afterApply.target))
