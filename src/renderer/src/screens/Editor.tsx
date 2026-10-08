@@ -8,7 +8,7 @@ import { AudioPlayer } from '../editor/AudioPlayer'
 import { Timeline } from '../editor/Timeline'
 import { Inspector } from '../editor/Inspector'
 import { ExportDialog } from '../editor/ExportDialog'
-import { keepSegments, outputDuration } from '../engine/timeline'
+import { firstKeptTime, keepSegments, outputDuration } from '../engine/timeline'
 import { formatDuration } from '../util/format'
 import { deleteOpenProject, recordProjectAgain } from '../recording/lifecycle'
 import { useT } from '../i18n'
@@ -91,12 +91,17 @@ export function Editor(): JSX.Element {
         if (end - start >= 10) s.setRange({ start, end })
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
-        const step = e.shiftKey ? 1000 : 1000 / (s.project?.recording.fps || 30)
-        s.setPlaying(false)
-        s.setPlayhead(s.playheadMs + (e.key === 'ArrowLeft' ? -step : step), true)
+        const dir = e.key === 'ArrowLeft' ? -1 : 1
+        if (e.shiftKey) {
+          s.setPlaying(false)
+          s.setPlayhead(s.playheadMs + dir * 1000, true)
+        } else {
+          s.stepFrame(dir)
+        }
       } else if (e.key === 'Home') {
+        // the same place as the go-to-start button: the first frame of the output, not a removed head
         s.setPlaying(false)
-        s.setPlayhead(0, true)
+        s.setPlayhead(firstKeptTime(keepSegments(s.project!.recording.durationMs, s.project!.cuts)), true)
       } else if (e.key === 'End') {
         s.setPlaying(false)
         s.setPlayhead(s.project!.recording.durationMs, true)
@@ -113,20 +118,6 @@ export function Editor(): JSX.Element {
           <ArrowLeft size={16} /> {t('editor.back')}
         </button>
         <input className="name-input" value={project.name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label={t('editor.projectName')} />
-        <div className="editor-top-file">
-          <button className="btn btn-ghost btn-small danger" onClick={(e) => {
-              const anchor = e.currentTarget
-              void runLifecycle(() => deleteOpenProject(project, anchor))
-            }} disabled={lifecycleBusy} title={t('editor.deleteTitle')}>
-            <Trash2 size={14} /> {t('common.delete')}
-          </button>
-          <button className="btn btn-ghost btn-small" onClick={(e) => {
-              const anchor = e.currentTarget
-              void runLifecycle(() => recordProjectAgain(project, anchor))
-            }} disabled={lifecycleBusy} title={t('editor.recordAgainTitle')}>
-            <RotateCcw size={14} /> {t('editor.recordAgain')}
-          </button>
-        </div>
         <div className="editor-top-info muted">
           {t('editor.info', {
             w: project.recording.width,
@@ -142,6 +133,19 @@ export function Editor(): JSX.Element {
           </button>
           <button className="btn btn-ghost" onClick={redo} disabled={!canRedo} title={t('editor.redo')}>
             <Redo2 size={16} />
+          </button>
+          <span className="editor-top-sep" />
+          <button className="btn btn-ghost btn-small" data-action="record-again" onClick={(e) => {
+              const anchor = e.currentTarget
+              void runLifecycle(() => recordProjectAgain(project, anchor))
+            }} disabled={lifecycleBusy} title={t('editor.recordAgainTitle')}>
+            <RotateCcw size={14} /> {t('editor.recordAgain')}
+          </button>
+          <button className="btn btn-ghost btn-small danger" data-action="delete" onClick={(e) => {
+              const anchor = e.currentTarget
+              void runLifecycle(() => deleteOpenProject(project, anchor))
+            }} disabled={lifecycleBusy} title={t('editor.deleteTitle')}>
+            <Trash2 size={14} /> {t('common.delete')}
           </button>
           <button className="btn btn-primary" onClick={() => setExportOpen(true)}>
             <Download size={16} /> {t('editor.export')}

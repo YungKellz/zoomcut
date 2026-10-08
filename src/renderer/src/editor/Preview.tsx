@@ -1,13 +1,13 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Pause, Play, RotateCcw, SkipBack, X } from 'lucide-react'
+import { Check, Pause, Play, RotateCcw, SkipBack, StepBack, StepForward, X } from 'lucide-react'
 import type { BlurRegion, CropRect, Project, WindowRect } from '@shared/types'
 import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
 import type { FollowPath } from '../engine/cursor'
 import { zoomAreas } from '../engine/camera'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
-import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
+import { displayTime, keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
@@ -53,6 +53,15 @@ function nextSegmentIndex(segments: Segment[], t: number): number {
   return segments.findIndex((s) => s.start > t - 1)
 }
 
+/**
+ * `tMs` is at or past the end of the video file. The file can be a hair shorter than the duration
+ * stored in the project (the probed length is rounded), and playing an ended <video> restarts it from 0,
+ * so nothing may ever be played from such a time.
+ */
+function pastMediaEnd(video: HTMLVideoElement, tMs: number): boolean {
+  return Number.isFinite(video.duration) && tMs >= video.duration * 1000 - 1
+}
+
 type Corner = 'nw' | 'ne' | 'sw' | 'se'
 
 /**
@@ -76,6 +85,7 @@ export function Preview({ followPath }: Props): JSX.Element {
   const setPlaying = useStore((s) => s.setPlaying)
   const togglePlay = useStore((s) => s.togglePlay)
   const playFromStart = useStore((s) => s.playFromStart)
+  const stepFrame = useStore((s) => s.stepFrame)
   const updateText = useStore((s) => s.updateText)
   const setCrop = useStore((s) => s.setCrop)
   const checkpoint = useStore((s) => s.checkpoint)
@@ -153,7 +163,8 @@ export function Preview({ followPath }: Props): JSX.Element {
   useEffect(() => {
     const video = activeVideo()
     if (!video || !ready) return
-    const tSec = useStore.getState().playheadMs / 1000
+    const { segments: segs, project: p } = latest.current
+    const tSec = displayTime(useStore.getState().playheadMs, 1000 / (p.recording.fps || 30), segs) / 1000
     if (Math.abs(video.currentTime - tSec) > 0.001) video.currentTime = tSec
     standby.current = { segIndex: -1, ready: false }
   }, [seekSeq, ready, activeVideo])
@@ -175,6 +186,18 @@ export function Preview({ followPath }: Props): JSX.Element {
         }
         target = segs[idx].start
       }
+      if (pastMediaEnd(video, target)) {
+        // the playhead sits between the end of the file and the project's duration: there is nothing left
+        // to play from here, so start over like Play at the end does (play() on an ended video would
+        // restart it from 0 behind the playhead's back)
+        idx = 0
+        target = segs[0].start
+        if (pastMediaEnd(video, target)) {
+          setPlaying(false)
+          return
+        }
+        setPlayhead(target)
+      }
       if (Math.abs(video.currentTime * 1000 - target) > 30) video.currentTime = target / 1000
       void video.play().catch(() => setPlaying(false))
       prepareStandby(idx + 1)
@@ -182,7 +205,7 @@ export function Preview({ followPath }: Props): JSX.Element {
       videoARef.current?.pause()
       videoBRef.current?.pause()
     }
-  }, [playing, ready, setPlaying, activeVideo, prepareStandby])
+  }, [playing, ready, setPlaying, setPlayhead, activeVideo, prepareStandby])
 
   // render loop
   useEffect(() => {
@@ -204,7 +227,9 @@ export function Preview({ followPath }: Props): JSX.Element {
         const idx = segmentIndexAt(segs, vt)
         if (idx === -1) {
           const nextIdx = nextSegmentIndex(segs, vt)
-          if (nextIdx === -1 || active.ended) {
+          // the rest of the output lies past the end of the file: swapping to a player that is seeked
+          // there would play an ended video, which restarts from 0 and loops the preview
+          if (nextIdx === -1 || active.ended || pastMediaEnd(active, segs[nextIdx].start)) {
             active.pause()
             useStore.getState().setPlaying(false)
             useStore.getState().setPlayhead(lastKeptTime(segs), true)
@@ -481,22 +506,32 @@ export function Preview({ followPath }: Props): JSX.Element {
       </div>
 
       <div className="preview-controls">
-        <button
-          className="btn btn-ghost"
-          onClick={() => {
-            setPlaying(false)
-            setPlayhead(segments[0]?.start ?? 0, true)
-          }}
-          title={t('preview.goStart')}
-        >
-          <SkipBack size={16} />
-        </button>
-        <button className="btn btn-ghost" onClick={playFromStart} disabled={mode !== 'normal'} title={t('preview.playFromStart')}>
-          <RotateCcw size={16} />
-        </button>
-        <button className="btn btn-ghost" onClick={togglePlay} disabled={mode !== 'normal'} title={t('preview.playPause')}>
-          {playing ? <Pause size={18} /> : <Play size={18} />}
-        </button>
+        <div className="transport">
+          <button
+            className="btn btn-ghost"
+            data-action="go-start"
+            onClick={() => {
+              setPlaying(false)
+              setPlayhead(segments[0]?.start ?? 0, true)
+            }}
+            title={t('preview.goStart')}
+          >
+            <SkipBack size={16} />
+          </button>
+          <button className="btn btn-ghost" data-action="play-from-start" onClick={playFromStart} disabled={mode !== 'normal'} title={t('preview.playFromStart')}>
+            <RotateCcw size={16} />
+          </button>
+          <span className="transport-sep" />
+          <button className="btn btn-ghost" data-action="step-back" onClick={() => stepFrame(-1)} disabled={mode !== 'normal'} title={t('preview.stepBack')}>
+            <StepBack size={16} />
+          </button>
+          <button className="btn btn-ghost" data-action="play" data-playing={playing} onClick={togglePlay} disabled={mode !== 'normal'} title={t('preview.playPause')}>
+            {playing ? <Pause size={18} /> : <Play size={18} />}
+          </button>
+          <button className="btn btn-ghost" data-action="step-forward" onClick={() => stepFrame(1)} disabled={mode !== 'normal'} title={t('preview.stepForward')}>
+            <StepForward size={16} />
+          </button>
+        </div>
         <span className="timecode">{formatTimecode(srcToOut(playheadMs, segments))}</span>
         <span className="muted">/ {formatTimecode(outDur)}</span>
         <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>

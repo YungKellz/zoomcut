@@ -93,6 +93,8 @@ export const en = {
   'preview.goStart': 'Go to start (Home)',
   'preview.playFromStart': 'Play from start',
   'preview.playPause': 'Play / pause (Space)',
+  'preview.stepBack': 'Previous frame (←)',
+  'preview.stepForward': 'Next frame (→)',
   'preview.sourceTime': 'source {time}',
   'preview.pickHint': 'Move and resize the rectangle, then press Apply · Enter applies, Esc cancels',
   'preview.cropWindowHint': 'Click a window outline to crop to it ·',

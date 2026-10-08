@@ -97,6 +97,62 @@ export function firstKeptTime(segments: Segment[]): number {
   return segments.length ? segments[0].start : 0
 }
 
+/**
+ * Where playback starts when Play is pressed with the playhead at `tSrc`: the next kept frame,
+ * or the first kept frame when nothing is left to play (the end was reached) - Play at the end
+ * starts over, like in any other player. Less than a millisecond of footage counts as the end.
+ */
+export function playStartTime(tSrc: number, segments: Segment[]): number {
+  const t = resolvePlayableTime(tSrc, segments)
+  if (t === null || lastKeptTime(segments) - t < 1) return firstKeptTime(segments)
+  return t
+}
+
+/**
+ * `tSrc` moved by `frames` frames of `frameMs` along the OUTPUT timeline, so removed pieces are
+ * jumped over; the result stays inside the kept range (the start of the output .. its end).
+ *
+ * Two positions are not on a frame of their own, and a step starts from the frame they show:
+ * - the end of the output shows the last frame (see displayTime), which starts a frame earlier, so
+ *   the first step back from the end already shows the frame before it;
+ * - a playhead inside a removed piece sits where the first frame after the piece begins, so a step
+ *   forward lands on that frame rather than on the one behind it.
+ */
+export function stepFrames(tSrc: number, frames: number, frameMs: number, segments: Segment[]): number {
+  const total = outputDuration(segments)
+  const last = segments[segments.length - 1]
+  let from = srcToOut(tSrc, segments)
+  if (frameMs > 0) {
+    // a position that is a whole number of frames from the start of the output is exactly that: the
+    // microsecond rounding below would otherwise add up over many steps (60 steps at 30 fps stop at 1999.99998)
+    const k = Math.round(from / frameMs)
+    if (Math.abs(from - k * frameMs) < 1e-3) from = k * frameMs
+  }
+  if (last && tSrc >= last.end) from = Math.max(0, total - frameMs)
+  else if (frames > 0 && segmentAt(tSrc, segments) === null) from -= frameMs
+  // float noise must not decide on which side of a cut the step ends
+  const out = Math.round((from + frames * frameMs) * 1e6) / 1e6
+  // the sub-microsecond drift that rounding leaves behind over many steps must not stop a step short of the end
+  return outToSrc(out > total - 1e-3 ? total : Math.max(0, out), segments)
+}
+
+/** A hair past the instant: see displayTime. */
+const SEEK_BIAS_MS = 0.05
+
+/**
+ * Source time the player is asked to show for a playhead at `tSrc`. A video shows the frame that
+ * starts at or before the time it is asked for, so the time lands 50 µs past the playhead: a
+ * frame step that float noise left a few nanoseconds short of the next frame would otherwise show
+ * the previous frame. The end of the output is the end of its last frame, not a frame of its own
+ * (the source there is a removed piece, or nothing at all), so it shows the last frame that is
+ * really part of the output.
+ */
+export function displayTime(tSrc: number, frameMs: number, segments: Segment[]): number {
+  const last = segments[segments.length - 1]
+  if (!last || tSrc < last.end) return tSrc + SEEK_BIAS_MS
+  return Math.max(last.start, last.end - frameMs / 2)
+}
+
 export interface TimedRegion {
   start: number
   end: number

@@ -70,8 +70,17 @@ export function Inspector(): JSX.Element {
     <aside className="inspector">
       <div className="tabs">
         {tabs.map((x) => (
-          <button key={x.id} className={'tab' + (tab === x.id ? ' active' : '')} onClick={() => setTab(x.id)}>
-            {x.icon} {x.label}
+          <button
+            key={x.id}
+            className={'tab' + (tab === x.id ? ' active' : '')}
+            data-tab={x.id}
+            title={x.label}
+            aria-label={x.label}
+            onClick={() => setTab(x.id)}
+          >
+            {x.icon}
+            {/* only the open tab keeps its name: seven of them do not fit side by side */}
+            {tab === x.id && x.label}
           </button>
         ))}
       </div>
