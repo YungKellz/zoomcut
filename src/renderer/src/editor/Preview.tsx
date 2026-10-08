@@ -493,6 +493,8 @@ export function Preview({ followPath }: Props): JSX.Element {
             <CropEditor
               crop={project.crop}
               size={size}
+              // nothing cropped yet: the rectangle cannot move, so over a window a click is all it does
+              className={'crop-rect' + (hoverWindow && project.crop.w >= 1 && project.crop.h >= 1 ? ' pick-window' : '')}
               onChange={(c, commit) => setCrop(c, commit)}
               onBegin={checkpoint}
               onTap={windows.length > 0 ? cropToWindowAt : undefined}

@@ -2742,7 +2742,8 @@ input.scenario-pause-input {
   z-index: 2;
 }
 
-.win-hit.over {
+.win-hit.over,
+.crop-rect.pick-window {
   cursor: pointer;
 }
 
