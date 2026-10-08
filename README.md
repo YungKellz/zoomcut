@@ -40,8 +40,8 @@ pick the file name and folder.
   plays with its current edits (cuts, zooms, texts, blurs, audio); reorder them, jump into the editor for one and
   back, pick the output frame (like the first recording, 1080p, 720p, square, vertical) and the background around
   recordings of a different shape, then export MP4 or GIF with the usual dialog.
-- **MP4 → GIF**: a separate converter on the home screen turns any video file (MP4, MOV, WebM, MKV, AVI) into a GIF
-  with trim, width, frame rate and the same palette / dithering presets as the export.
+- **MP4 → GIF**: a separate block on the home screen (drop a file anywhere on the window, or pick one) turns any video
+  file (MP4, MOV, WebM, MKV, AVI) into a GIF with trim, width, frame rate and the same palette / dithering presets as the export.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
   The home screen lists recordings and scenarios together, with each scenario's recordings nested under it; both
   editors have Delete and "Record again" (same display, audio and scenario).
@@ -158,7 +158,7 @@ for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CH
    `B` или кнопка **Размытие** добавляет прямоугольник размытия/пикселизации: пока он редактируется, превью
    показывает весь кадр кропа без зума; в видео область привязана к картинке и следует за зумом.
    **Композиции** на главном экране склеивают несколько записей (каждую с её текущей обработкой) в одно видео.
-   Кнопка **MP4 → GIF** в шапке главного экрана конвертирует любой видеофайл в GIF.
+   Блок **MP4 → GIF** на главном экране конвертирует любой видеофайл в GIF: перетащите файл в окно или нажмите «Выбрать файл».
 4. **Экспорт** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Чёткий UI**;
    для градиентов – **Плавные градиенты**. Диалог показывает ориентировочный вес файла. Имя файла и папка
    задаются там же. Прозрачный фон (вкладка **Стиль**) экспортируется в GIF.

@@ -157,6 +157,10 @@ export interface ZcApi {
   converter: {
     /** native file picker for a video; probes the chosen file. null when cancelled. */
     chooseVideo(): Promise<VideoFileInfo | null>
+    /** the disk path of a File dropped onto the window (File.path no longer exists); '' when it has none */
+    pathForFile(file: File): string
+    /** validates and probes a video file given by path (a file dropped onto the app); rejects when it is not a usable video */
+    probe(path: string): Promise<VideoFileInfo>
     /** converts a video file into a GIF with ffmpeg's two-pass palette (one conversion at a time) */
     toGif(req: GifConvertRequest): Promise<ExportFinishResult>
     cancel(): Promise<void>

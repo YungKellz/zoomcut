@@ -3,13 +3,13 @@ import { randomUUID } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import { dialog, type WebContents } from 'electron'
 import type { ExportFinishResult, GifConvertProgress, GifConvertRequest, VideoFileInfo } from '@shared/types'
+import { VIDEO_EXTENSIONS } from '@shared/videoFiles'
 import { encodeGif, gifConvertInputArgs, gifConvertPrefilter, probeVideo } from './ffmpeg'
 import { exportTempDir, updateSettings } from '../storage'
 import { sanitizeFileName, uniquePath } from '../exportManager'
 import { allowMediaRoot } from '../mediaProtocol'
 import { getMainWindow } from '../windows'
-
-const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi']
+import { checkVideoFile } from './videoFile'
 
 /**
  * The standalone "MP4 → GIF" converter: any video file the user picks is run through the same
@@ -28,6 +28,15 @@ export class GifConverter {
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     const path = result.canceled ? null : result.filePaths[0]
     if (!path) return null
+    return this.describe(path)
+  }
+
+  /** A video file dropped on the app: validated first, then described exactly like a picked one. */
+  async probe(path: unknown): Promise<VideoFileInfo> {
+    return this.describe(await checkVideoFile(path))
+  }
+
+  private async describe(path: string): Promise<VideoFileInfo> {
     const probe = await probeVideo(path)
     // only this one file becomes servable through zc-media:// (for the preview player)
     allowMediaRoot(path)

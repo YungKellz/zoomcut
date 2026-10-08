@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { ZcApi } from '@shared/api'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -94,6 +94,8 @@ const api: ZcApi = {
   },
   converter: {
     chooseVideo: () => ipcRenderer.invoke('converter:choose-video'),
+    pathForFile: (file) => webUtils.getPathForFile(file),
+    probe: (path) => ipcRenderer.invoke('converter:probe', path),
     toGif: (req) => ipcRenderer.invoke('converter:to-gif', req),
     cancel: () => ipcRenderer.invoke('converter:cancel'),
     onProgress: (cb) => subscribe('converter:progress', cb)

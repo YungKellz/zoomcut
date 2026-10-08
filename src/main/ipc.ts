@@ -170,6 +170,7 @@ export function registerIpc({ recorder, scenarioCapture, exporter, updater, conv
 
   // ---- gif converter ----
   ipcMain.handle('converter:choose-video', () => converter.chooseVideo())
+  ipcMain.handle('converter:probe', (_e, path: string) => converter.probe(path))
   ipcMain.handle('converter:to-gif', (e, req: GifConvertRequest) => converter.toGif(req, e.sender))
   ipcMain.handle('converter:cancel', () => converter.cancel())
 

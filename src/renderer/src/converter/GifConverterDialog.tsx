@@ -5,9 +5,12 @@ import type { ExportFinishResult, GifConvertProgress, GifSettings, VideoFileInfo
 import { DEFAULT_GIF_SETTINGS, GIF_FPS_OPTIONS } from '@shared/defaults'
 import { formatBytes, formatDuration } from '../util/format'
 import { useT, type TKey } from '../i18n'
+import { ipcErrorMessage } from './intake'
 
 interface Props {
   onClose(): void
+  /** a video that was already picked or dropped: the dialog opens with it instead of the empty "choose a video" state */
+  initialVideo?: VideoFileInfo
 }
 
 /** Output widths offered for the GIF (only those not larger than the video are shown). */
@@ -47,12 +50,23 @@ function dirname(path: string): string {
   return i > 0 ? path.slice(0, i) : path
 }
 
+/** Starting values for a freshly chosen video: 15 fps, a sane width, the whole clip. */
+function startOptions(info: VideoFileInfo): Options {
+  return {
+    fps: 15,
+    width: Math.min(info.width, info.width > 1400 ? 960 : info.width),
+    startMs: 0,
+    endMs: info.durationMs,
+    gif: { ...DEFAULT_GIF_SETTINGS }
+  }
+}
+
 /** Standalone "MP4 → GIF": picks any video file and runs it through ffmpeg's two-pass GIF encode. */
-export function GifConverterDialog({ onClose }: Props): JSX.Element {
+export function GifConverterDialog({ onClose, initialVideo }: Props): JSX.Element {
   const t = useT()
-  const [video, setVideo] = useState<VideoFileInfo | null>(null)
-  const [options, setOptions] = useState<Options | null>(null)
-  const [fileName, setFileName] = useState('')
+  const [video, setVideo] = useState<VideoFileInfo | null>(initialVideo ?? null)
+  const [options, setOptions] = useState<Options | null>(initialVideo ? startOptions(initialVideo) : null)
+  const [fileName, setFileName] = useState(initialVideo?.name ?? '')
   const [folder, setFolder] = useState('')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<GifConvertProgress | null>(null)
@@ -63,6 +77,14 @@ export function GifConverterDialog({ onClose }: Props): JSX.Element {
   runningRef.current = running
 
   useEffect(() => window.zc.converter.onProgress(setProgress), [])
+
+  // an initial video skips choose(), so the output folder is resolved here: the last export folder, else next to the video
+  useEffect(() => {
+    if (!initialVideo) return
+    void window.zc.app.getSettings().then((settings) => setFolder((cur) => cur || settings.lastExportFolder || dirname(initialVideo.path)))
+    // once, on open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -87,13 +109,7 @@ export function GifConverterDialog({ onClose }: Props): JSX.Element {
       setProgress(null)
       setFileName(info.name)
       setFolder((cur) => cur || settings.lastExportFolder || dirname(info.path))
-      setOptions({
-        fps: 15,
-        width: Math.min(info.width, info.width > 1400 ? 960 : info.width),
-        startMs: 0,
-        endMs: info.durationMs,
-        gif: { ...DEFAULT_GIF_SETTINGS }
-      })
+      setOptions(startOptions(info))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -132,7 +148,7 @@ export function GifConverterDialog({ onClose }: Props): JSX.Element {
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      if (!/cancelled/i.test(message)) setError(message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))
+      if (!/cancelled/i.test(message)) setError(ipcErrorMessage(err))
     } finally {
       setRunning(false)
     }
