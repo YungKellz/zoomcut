@@ -17,6 +17,8 @@ export interface McpConfigInput {
   userData: string
   /** the portable exe as the user launched it (electron-builder's PORTABLE_EXECUTABLE_FILE) */
   portableExe?: string
+  /** ZOOMCUT_USER_DATA of this run: the bridge must look for agent-control.json in the same folder */
+  userDataOverride?: string
 }
 
 /** Where the built bridge is shipped: next to the exe once packaged, in out/ when running from source. */
@@ -33,15 +35,23 @@ export function portableBridgePath(userData: string): string {
  * What the "AI agents (MCP)" dialog shows. Installed copies run the bridge under ZoomCut.exe
  * itself in Node mode (ELECTRON_RUN_AS_NODE), so no Node install is needed; a portable copy and a
  * source checkout use `node`. The portable config also passes the exe's real path so the bridge
- * can start ZoomCut when it is closed.
+ * can start ZoomCut when it is closed, and a ZOOMCUT_USER_DATA override is handed on so the
+ * bridge reads the discovery file of the same run.
  */
 export function buildMcpConfig(i: McpConfigInput): AgentMcpConfig {
   const runsInApp = i.packaged && !i.portable
   const bridge = i.portable ? portableBridgePath(i.userData) : bridgeSourcePath(i)
   const command = runsInApp ? i.execPath : 'node'
-  const env: Record<string, string> = runsInApp ? { ELECTRON_RUN_AS_NODE: '1' } : i.portable && i.portableExe ? { ZOOMCUT_EXE: i.portableExe } : {}
+  // a trailing separator would escape the closing quote of the command line below
+  const userData = i.userDataOverride?.replace(/([^:\\/])[\\/]+$/, '$1')
+  const env: Record<string, string> = {
+    ...(runsInApp ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    ...(i.portable && i.portableExe ? { ZOOMCUT_EXE: i.portableExe } : {}),
+    ...(userData ? { ZOOMCUT_USER_DATA: userData } : {})
+  }
   const server: { command: string; args: string[]; env?: Record<string, string> } = { command, args: [bridge] }
   if (Object.keys(env).length > 0) server.env = env
+  // --env takes any number of values, so it must come after the server name, which it would swallow otherwise
   const envFlags = Object.entries(env)
     .map(([k, v]) => `--env "${k}=${v}" `)
     .join('')
@@ -50,10 +60,11 @@ export function buildMcpConfig(i: McpConfigInput): AgentMcpConfig {
     bridge,
     portable: i.portable,
     json: JSON.stringify({ mcpServers: { zoomcut: server } }, null, 2),
-    claudeCode: `claude mcp add --transport stdio ${envFlags}zoomcut -- ${quote(command)} ${quote(bridge)}`
+    claudeCode: `claude mcp add --transport stdio zoomcut ${envFlags}-- ${runsInApp ? quote(command) : command} ${quote(bridge)}`
   }
 }
 
-function quote(arg: string): string {
-  return /[\s"]/.test(arg) ? `"${arg}"` : arg
+/** Paths always go in double quotes: Git Bash drops the backslashes of a bare Windows path, spaces or not. */
+function quote(path: string): string {
+  return `"${path}"`
 }
