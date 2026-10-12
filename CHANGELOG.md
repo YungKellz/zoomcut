@@ -3,8 +3,14 @@
 Notable changes per version, English first, Russian below. The section of a version becomes the body of its
 GitHub release (`node scripts/release-notes.cjs <version>`, run by `.github/workflows/release.yml`).
 
-## 0.4.1 (2026-10-08)
+## 0.5.0 (2026-10-12)
 
+- **Control from AI agents (MCP)**: Claude Code, Claude Desktop, Cursor and other MCP clients can drive ZoomCut –
+  record a display, take a screenshot, read and edit a recording (cuts, zooms, texts, blurs), export an MP4 or GIF,
+  write a scenario of clicks and keystrokes and record ZoomCut replaying it. **AI agents (MCP)** on the home screen
+  shows the ready-made config for your installation with a Copy button. It is off until an agent connects, listens
+  only on 127.0.0.1 with a random token, and everything stays on your machine. Updating the app ends running MCP
+  sessions.
 - **Home screen, rearranged**: two columns that scroll on their own – new recording, compositions and the MP4 → GIF
   converter on the left, recordings and scenarios on the right (recordings and scenarios are now tinted blocks
   with a hover effect) – and a footer with the language, the version and the recordings folder. The audio
@@ -32,6 +38,12 @@ GitHub release (`node scripts/release-notes.cjs <version>`, run by `.github/work
 
 **RU**
 
+- **Управление из ИИ-агентов (MCP)**: Claude Code, Claude Desktop, Cursor и другие MCP-клиенты могут управлять
+  ZoomCut – записать экран, сделать скриншот, прочитать и отредактировать запись (вырезки, зумы, тексты, размытие),
+  экспортировать MP4 или GIF, написать сценарий из кликов и нажатий клавиш и записать, как ZoomCut его проигрывает.
+  Кнопка **ИИ-агенты (MCP)** на главной показывает готовую конфигурацию для вашей установки с кнопкой «Копировать».
+  Управление выключено, пока агент не подключится, слушает только 127.0.0.1 со случайным токеном, и всё остаётся на
+  вашем компьютере. Обновление приложения завершает запущенные MCP-сессии.
 - **Главная, новая раскладка**: две колонки со своим скроллом – слева новая запись, композиции и конвертер MP4 → GIF,
   справа записи и сценарии (теперь это цветные блоки с ховер-эффектом), – и футер с языком, версией и папкой
   записей. Чекбоксы звука стали аккуратными переключателями, «Записать сценарий» – того же размера, что и «Начать
