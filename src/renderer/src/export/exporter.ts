@@ -23,6 +23,8 @@ export interface RenderProgress {
   percent: number
   frame?: number
   frames?: number
+  /** the main-process export this progress belongs to (ExportProgress.exportId), set once it has begun */
+  exportId?: string
 }
 
 export interface ExportRunOptions {
@@ -148,11 +150,6 @@ async function encodeParts({ parts, width, height, totalOutMs, settings, alpha, 
     canvas.height = height
     const ctx = canvas.getContext('2d', { alpha: useRaw, willReadFrequently: useRaw })
     if (!ctx) throw new Error('Could not create a 2D canvas context.')
-    const report = (index: number): void => {
-      if ((index + 1) % 4 === 0 || index + 1 === totalFrames) {
-        onProgress({ phase: 'render', percent: ((index + 1) / totalFrames) * 100, frame: index + 1, frames: totalFrames })
-      }
-    }
 
     begun = await window.zc.export.begin({
       fileName: settings.fileName,
@@ -163,6 +160,13 @@ async function encodeParts({ parts, width, height, totalOutMs, settings, alpha, 
     const exportId = begun.exportId
     // cancelling while ffmpeg runs in the main process has to kill it there
     signal.addEventListener('abort', () => void window.zc.export.cancel(exportId).catch(() => undefined))
+    // tells the progress listener which export is this one: several can run at once (a dialog and an agent)
+    onProgress({ phase: 'render', percent: 0, frame: 0, frames: totalFrames, exportId })
+    const report = (index: number): void => {
+      if ((index + 1) % 4 === 0 || index + 1 === totalFrames) {
+        onProgress({ phase: 'render', percent: ((index + 1) / totalFrames) * 100, frame: index + 1, frames: totalFrames, exportId })
+      }
+    }
 
     let source: CanvasSource | null = null
     if (!useRaw) {
@@ -214,7 +218,7 @@ async function encodeParts({ parts, width, height, totalOutMs, settings, alpha, 
       output = null
     }
 
-    onProgress({ phase: 'finalize', percent: 0 })
+    onProgress({ phase: 'finalize', percent: 0, exportId })
     return await window.zc.export.finish(exportId, settings, { durationMs: totalOutMs, alpha, audio })
   } catch (err) {
     if (output) await output.cancel().catch(() => undefined)
