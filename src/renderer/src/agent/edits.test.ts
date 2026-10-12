@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Project, ZoomSegment } from '@shared/types'
 import { AgentError, type AgentEditOp } from '@shared/agent'
 import { BLUR_DEFAULTS, DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
-import { applyAgentEdits, toAgentProjectView } from './edits'
+import { applyAgentEdits } from './edits'
 
 function project(patch: Partial<Project> = {}): Project {
   return {
@@ -49,16 +49,19 @@ const zoom = (patch: Partial<ZoomSegment> = {}): ZoomSegment => ({
 })
 
 /** the error an edit must throw */
-function badParams(p: Project, ops: unknown[]): AgentError {
+function failing(p: Project, ops: unknown[], code: 'bad_params' | 'not_found'): AgentError {
   try {
     applyAgentEdits(p, ops as AgentEditOp[])
   } catch (err) {
     expect(err).toBeInstanceOf(AgentError)
-    expect((err as AgentError).code).toBe('bad_params')
+    expect((err as AgentError).code).toBe(code)
     return err as AgentError
   }
-  throw new Error('expected bad_params')
+  throw new Error(`expected ${code}`)
 }
+const badParams = (p: Project, ops: unknown[]): AgentError => failing(p, ops, 'bad_params')
+/** an id that does not exist */
+const notFound = (p: Project, ops: unknown[]): AgentError => failing(p, ops, 'not_found')
 
 describe('applyAgentEdits: general', () => {
   it('returns the same project for no operations and never mutates its input', () => {
@@ -149,8 +152,9 @@ describe('applyAgentEdits: cuts', () => {
   it('removes a cut by id and rejects an unknown id naming the known ones', () => {
     const p0 = project({ cuts: [{ id: 'c1', start: 1000, end: 2000 }] })
     expect(applyAgentEdits(p0, [{ op: 'removeCut', id: 'c1' }]).cuts).toEqual([])
-    expect(badParams(p0, [{ op: 'removeCut', id: 'nope' }]).message).toMatch(/unknown cut id "nope" \(existing: c1\)/)
-    expect(badParams(project(), [{ op: 'removeCut', id: 'nope' }]).message).toMatch(/the project has none/)
+    expect(notFound(p0, [{ op: 'removeCut', id: 'nope' }]).message).toMatch(/unknown cut id "nope" \(existing: c1\)/)
+    expect(notFound(project(), [{ op: 'removeCut', id: 'nope' }]).message).toMatch(/the project has none/)
+    // a missing id is a malformed call, not an unknown id
     badParams(p0, [{ op: 'removeCut' }])
   })
 })
@@ -179,10 +183,11 @@ describe('applyAgentEdits: zooms', () => {
     expect(q.zooms[0].scale).toBe(1.2)
   })
 
-  it('needs a mode, and a target for fixed zooms', () => {
+  it('needs a mode; a fixed zoom without a target aims at the centre', () => {
     expect(badParams(project(), [{ op: 'addZoom', start: 1000, end: 3000 }]).message).toMatch(/mode is required/)
-    expect(badParams(project(), [{ op: 'addZoom', start: 1000, end: 3000, mode: 'fixed' }]).message).toMatch(/needs a target/)
     expect(badParams(project(), [{ op: 'addZoom', start: 1000, end: 3000, mode: 'sideways' }]).message).toMatch(/mode must be one of follow, fixed/)
+    const p = applyAgentEdits(project(), [{ op: 'addZoom', start: 1000, end: 3000, mode: 'fixed' }])
+    expect(p.zooms[0]).toMatchObject({ mode: 'fixed', target: { x: 0.5, y: 0.5 } })
   })
 
   it('rejects a target that looks like pixels', () => {
@@ -225,12 +230,12 @@ describe('applyAgentEdits: zooms', () => {
     badParams(p0, [{ op: 'updateZoom', id: 'z1', end: 1050 }])
     badParams(p0, [{ op: 'updateZoom', id: 'z1', start: 2000, end: 1000 }])
     expect(badParams(p0, [{ op: 'updateZoom', id: 'z1' }]).message).toMatch(/nothing to change/)
-    expect(badParams(p0, [{ op: 'updateZoom', id: 'zz', scale: 2 }]).message).toMatch(/unknown zoom id "zz" \(existing: z1, z2\)/)
+    expect(notFound(p0, [{ op: 'updateZoom', id: 'zz', scale: 2 }]).message).toMatch(/unknown zoom id "zz" \(existing: z1, z2\)/)
   })
 
   it('removes a zoom', () => {
     expect(applyAgentEdits(project({ zooms: [zoom()] }), [{ op: 'removeZoom', id: 'z1' }]).zooms).toEqual([])
-    badParams(project(), [{ op: 'removeZoom', id: 'z1' }])
+    notFound(project(), [{ op: 'removeZoom', id: 'z1' }])
   })
 })
 
@@ -254,7 +259,8 @@ describe('applyAgentEdits: texts', () => {
     expect(badParams(project(), [{ op: 'addText', start: 0, end: 1000 }]).message).toMatch(/text is required/)
     badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: '  ' }])
     badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'x'.repeat(501) }])
-    expect(badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'a', color: 'red' }]).message).toMatch(/color must be a hex color/)
+    expect(badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'a', color: '#12' }]).message).toMatch(/color must be an opaque CSS color/)
+    badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'a', color: 42 }])
     expect(badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'a', x: 540 }]).message).toMatch(/x must be between 0 and 1/)
     badParams(project(), [{ op: 'addText', start: 0, end: 1000, text: 'a', animation: 'spin' }])
     badParams(project(), [{ op: 'addText', start: 0, end: 50, text: 'a' }])
@@ -268,7 +274,8 @@ describe('applyAgentEdits: texts', () => {
     badParams(p1, [{ op: 'updateText', id, start: 3000, end: 2000 }])
     badParams(p1, [{ op: 'updateText', id }])
     expect(applyAgentEdits(p1, [{ op: 'removeText', id }]).texts).toEqual([])
-    badParams(p1, [{ op: 'removeText', id: 'nope' }])
+    notFound(p1, [{ op: 'removeText', id: 'nope' }])
+    notFound(p1, [{ op: 'updateText', id: 'nope', text: 'x' }])
   })
 })
 
@@ -296,7 +303,7 @@ describe('applyAgentEdits: blurs', () => {
   it('removes a blur', () => {
     const p0 = applyAgentEdits(project(), [{ op: 'addBlur', start: 0, end: 1000, x: 0, y: 0, w: 0.5, h: 0.5 }])
     expect(applyAgentEdits(p0, [{ op: 'removeBlur', id: p0.blurs[0].id }]).blurs).toEqual([])
-    badParams(p0, [{ op: 'removeBlur', id: 'nope' }])
+    notFound(p0, [{ op: 'removeBlur', id: 'nope' }])
   })
 })
 
@@ -337,65 +344,5 @@ describe('applyAgentEdits: crop, frame, cursor', () => {
     expect(p.cursor).toMatchObject({ highlight: true, clicks: false, followSmoothing: 1, followDeadZone: 0.1, clickRadius: DEFAULT_CURSOR_SETTINGS.clickRadius })
     badParams(project(), [{ op: 'setCursor' }])
     badParams(project(), [{ op: 'setCursor', highlight: 1 }])
-  })
-})
-
-describe('toAgentProjectView', () => {
-  it('summarizes the project', () => {
-    const p = project({
-      cuts: [{ id: 'c', start: 1000, end: 3000 }],
-      audio: [
-        {
-          id: 'a1',
-          kind: 'mic',
-          file: 'mic.m4a',
-          name: 'Microphone',
-          start: -40,
-          durationMs: 10000,
-          volume: 1,
-          muted: false,
-          loop: false,
-          fadeInMs: 0,
-          fadeOutMs: 0
-        }
-      ],
-      origin: { displayId: 2, audio: null, scenarioId: 's1' }
-    })
-    const v = toAgentProjectView(p)
-    expect(v).toMatchObject({
-      id: 'p1',
-      name: 'Demo',
-      createdAt: 1700000000000,
-      dir: 'C:\\Videos\\ZoomCut\\p1',
-      width: 1920,
-      height: 1080,
-      fps: 30,
-      sourceDurationMs: 10000,
-      outputDurationMs: 8000,
-      origin: { displayId: 2, audio: null, scenarioId: 's1' },
-      audio: [{ id: 'a1', kind: 'mic', name: 'Microphone' }]
-    })
-    expect(v.cuts).toBe(p.cuts)
-    expect(v.crop).toBe(p.crop)
-    expect(v.export).toBe(p.export)
-    expect(toAgentProjectView(project()).origin).toBeNull()
-  })
-
-  it('caps the clicks at 500, spread over the whole recording', () => {
-    const clicks = Array.from({ length: 2000 }, (_, i) => ({ t: i * 5, x: 0.5, y: 0.5, button: 'left' as const }))
-    const v = toAgentProjectView(project({ cursorData: { samples: [], clicks, source: 'uiohook' } }))
-    expect(v.clicks).toHaveLength(500)
-    expect(v.clicks[0].t).toBe(0)
-    expect(v.clicks[499].t).toBeGreaterThan(9000)
-    for (let i = 1; i < v.clicks.length; i++) expect(v.clicks[i].t).toBeGreaterThan(v.clicks[i - 1].t)
-    const few = toAgentProjectView(project({ cursorData: { samples: [], clicks: clicks.slice(0, 3), source: 'uiohook' } }))
-    expect(few.clicks).toHaveLength(3)
-  })
-
-  it('reflects edits made through applyAgentEdits', () => {
-    const edited = applyAgentEdits(project(), [{ op: 'addCut', start: 0, end: 4000 }, { op: 'addText', start: 5000, end: 6000, text: 'Done' }])
-    const v = toAgentProjectView(edited)
-    expect(v.outputDurationMs).toBe(6000)
-    expect(v.texts).toHaveLength(1)
   })
 })

@@ -22,6 +22,7 @@ const h = vi.hoisted(() => {
 vi.mock('../export/exporter', () => ({ runExport: vi.fn() }))
 
 import { useStore } from '../store'
+import { useI18n } from '../i18n'
 import { runExport } from '../export/exporter'
 import { installAgentExecutor } from './executor'
 
@@ -102,10 +103,13 @@ let seq = 0
 /** a fake disk: projects.load / projects.save */
 let disk: Map<string, Project>
 
+/** replies by request id, so commands that run at the same time get their own answer */
+const waiting = new Map<string, (r: AgentReply) => void>()
+
 /** Sends one command and resolves with the reply the executor produced. */
 function call(method: AgentRendererMethod, params: unknown, requestId = `r${++seq}`): Promise<AgentReply> {
   return new Promise((resolve) => {
-    zc.agent.reply.mockImplementationOnce(async (r: AgentReply) => resolve(r))
+    waiting.set(requestId, resolve)
     handler({ requestId, method, params })
   })
 }
@@ -132,8 +136,12 @@ function fakeScreenTakingStarts(taken: unknown[]): () => void {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // reset, not just clear: an unused mockXOnce from an earlier test must not leak into the next
+  vi.resetAllMocks()
+  waiting.clear()
   disk = new Map()
+  // the notices are asserted in English whatever the language of the machine running the tests
+  useI18n.getState().apply('en')
   useStore.setState({
     screen: 'home',
     notice: null,
@@ -150,7 +158,9 @@ beforeEach(() => {
     handler = cb
     return () => undefined
   })
-  zc.agent.reply.mockResolvedValue(undefined)
+  zc.agent.reply.mockImplementation(async (r: AgentReply) => {
+    waiting.get(r.requestId)?.(r)
+  })
   zc.agent.pushStatus.mockResolvedValue(undefined)
   zc.projects.load.mockImplementation(async (id: string) => {
     const p = disk.get(id)
@@ -186,6 +196,33 @@ describe('status', () => {
   it('survives a main process that does not answer', () => {
     zc.agent.pushStatus.mockRejectedValue(new Error('no handler'))
     expect(() => useStore.getState().openProject(makeProject())).not.toThrow()
+  })
+
+  it('listens for commands before it announces itself, and repeats a first push that failed', async () => {
+    dispose()
+    vi.useFakeTimers()
+    vi.resetAllMocks()
+    const order: string[] = []
+    zc.agent.onCommand.mockImplementation((cb: (c: AgentCommand) => void) => {
+      order.push('listen')
+      handler = cb
+      return () => undefined
+    })
+    zc.agent.pushStatus.mockImplementationOnce(async () => {
+      order.push('push')
+      throw new Error('main is not ready')
+    })
+    zc.agent.pushStatus.mockImplementation(async () => {
+      order.push('push')
+    })
+    dispose = installAgentExecutor()
+    expect(order).toEqual(['listen', 'push'])
+    await vi.advanceTimersByTimeAsync(500)
+    expect(order).toEqual(['listen', 'push', 'push'])
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'home', openProjectId: null })
+    // once it got through nothing is repeated
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(zc.agent.pushStatus).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -243,7 +280,7 @@ describe('projects.edit', () => {
     const before = useStore.getState().project
     const reply = await call('projects.edit', {
       projectId: 'p1',
-      operations: [{ op: 'addCut', start: 1000, end: 2000 }, { op: 'addZoom', start: 0, end: 1000, mode: 'fixed' }]
+      operations: [{ op: 'addCut', start: 1000, end: 2000 }, { op: 'addZoom', start: 0, end: 1000, mode: 'sideways' }]
     })
     expect(errorOf(reply)).toMatchObject({ code: 'bad_params' })
     expect(errorOf(reply).message).toMatch(/^operations\[1\] \(addZoom\)/)
@@ -279,6 +316,13 @@ describe('projects.edit', () => {
     expect(okResult<AgentProjectView>(reply).name).toBe('Renamed')
     expect(disk.get('p2')?.name).toBe('Renamed')
     expect(useStore.getState().project).toBeNull()
+  })
+
+  it('answers not_found for an unknown cut, zoom, text or blur id', async () => {
+    useStore.getState().openProject(makeProject())
+    const reply = await call('projects.edit', { projectId: 'p1', operations: [{ op: 'removeZoom', id: 'ghost' }] })
+    expect(errorOf(reply).code).toBe('not_found')
+    expect(errorOf(reply).message).toMatch(/^operations\[0\] \(removeZoom\): unknown zoom id "ghost"/)
   })
 
   it('answers not_found for an unknown project', async () => {

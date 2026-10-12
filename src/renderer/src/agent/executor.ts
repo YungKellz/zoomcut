@@ -1,12 +1,13 @@
 import type { AppSettings, ExportFinishResult, ExportSettings, Project, Scenario } from '@shared/types'
 import { AgentError, type AgentCommand, type AgentProjectView, type AgentReply, type AgentUiStatus } from '@shared/agent'
+import { toAgentProjectView } from '@shared/agentProject'
 import { validateScenario } from '@shared/scenario'
 import { useStore, type PendingStart, type Selection } from '../store'
 import { followPathFor } from '../engine/cursor'
 import { keepSegments, outputDuration } from '../engine/timeline'
 import { runExport } from '../export/exporter'
 import { t } from '../i18n'
-import { applyAgentEdits, toAgentProjectView } from './edits'
+import { applyAgentEdits } from './edits'
 import {
   errorPayload,
   parseCaptureParams,
@@ -36,8 +37,9 @@ import {
 const HANDOVER_TIMEOUT_MS = 10_000
 
 export function installAgentExecutor(): () => void {
-  const offStatus = pushStatusOnChange()
+  // listening comes first: the status push below doubles as main's "renderer is ready" signal
   const offCommand = window.zc.agent.onCommand((cmd) => void run(cmd))
+  const offStatus = pushStatusOnChange()
   return () => {
     offStatus()
     offCommand()
@@ -46,19 +48,33 @@ export function installAgentExecutor(): () => void {
 
 // ---- status for get_status ----
 
+/** the first push is main's "renderer ready" signal, so a failed one is retried a few times */
+const FIRST_PUSH_RETRIES = 5
+const FIRST_PUSH_RETRY_MS = 400
+
 function pushStatusOnChange(): () => void {
   let last = ''
-  const push = (): void => {
+  let stopped = false
+  const send = (status: AgentUiStatus, retriesLeft: number): void => {
+    window.zc.agent.pushStatus(status).catch(() => {
+      // best effort: the status is only a cache in the main process
+      if (retriesLeft > 0 && !stopped) window.setTimeout(() => send(status, retriesLeft - 1), FIRST_PUSH_RETRY_MS)
+    })
+  }
+  const push = (retries = 0): void => {
     const s = useStore.getState()
     const status: AgentUiStatus = { screen: s.screen, openProjectId: s.project?.id ?? null }
     const key = `${status.screen}\n${status.openProjectId ?? ''}`
     if (key === last) return
     last = key
-    // best effort: the status is only a cache in the main process
-    void window.zc.agent.pushStatus(status).catch(() => undefined)
+    send(status, retries)
   }
-  push()
-  return useStore.subscribe(push)
+  push(FIRST_PUSH_RETRIES)
+  const off = useStore.subscribe(() => push())
+  return () => {
+    stopped = true
+    off()
+  }
 }
 
 // ---- command loop ----

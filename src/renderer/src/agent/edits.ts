@@ -1,20 +1,23 @@
-import type { BlurRegion, ClickEvent, CropRect, CursorSettings, FrameStyle, Project, TextOverlay, ZoomSegment } from '@shared/types'
-import { AgentError, type AgentEditOp, type AgentProjectView } from '@shared/agent'
+import type { BlurRegion, CropRect, CursorSettings, FrameStyle, Project, TextOverlay, ZoomSegment } from '@shared/types'
+import { AgentError, type AgentEditOp } from '@shared/agent'
 import { BLUR_DEFAULTS, GRADIENT_PRESETS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from '../engine/ids'
 import { ZOOM_MIN_MS, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN, patchZoom, resolveZoomOverlaps } from '../engine/camera'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { addCutToProject } from '../engine/projectEdits'
-import { keepSegments, outputDuration } from '../engine/timeline'
+import { keepSegments } from '../engine/timeline'
 import { clamp } from '../util/format'
+import { cssColorToHex } from './color'
 
 /**
  * What the agent's `edit_project` does to a project, as one pure function (the executor applies
- * the result as a single undo step). Parameters come from untrusted JSON: anything structurally
- * wrong (unknown id, wrong type, start >= end, a coordinate outside 0..1) is a `bad_params` error
- * that says what to fix, and the whole batch is rejected - nothing is half applied. Cosmetic
- * numbers are clamped to the range the editor's own controls offer, exactly like the UI does.
- * Times are source ms, positions are normalized (see AgentEditOp).
+ * the result as a single undo step). The control server validates the parameters against
+ * shared/agentSchemas.ts before they get here; this is the second line: it also checks what only
+ * the project can tell (an id that exists, times inside the recording, no overlapping zooms) and
+ * stays defensive about types. A value that is wrong is a `bad_params` error that says what to fix
+ * (an unknown cut / zoom / text / blur id is `not_found`), and the whole batch is rejected - nothing
+ * is half applied. Cosmetic numbers are clamped to the range the editor's own controls offer, exactly
+ * like the UI does. Times are source ms, positions are normalized (see AgentEditOp).
  */
 
 type Raw = Record<string, unknown>
@@ -31,7 +34,6 @@ export const BLUR_MIN_SIZE = 0.01
 const MAX_OPS = 500
 const MAX_NAME = 200
 const MAX_TEXT = 500
-const MAX_CLICKS = 500
 /** tolerance for coordinates that are 1.0000001 because of float math */
 const EPS = 1e-6
 
@@ -91,27 +93,25 @@ function oneOf<T extends string>(raw: Raw, key: string, options: readonly T[]): 
   return v as T
 }
 
-const HEX_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i
-
-/** "#abc" / "#AABBCC" -> "#aabbcc" */
-function hexColor(v: unknown, key: string): string {
-  const s = typeof v === 'string' ? v.trim() : ''
-  if (!HEX_COLOR.test(s)) fail(`${key} must be a hex color like #ffcc00, got ${JSON.stringify(v)}`)
-  const h = s.slice(1).toLowerCase()
-  return '#' + (h.length === 3 ? h.split('').map((c) => c + c).join('') : h)
+/** Any opaque CSS color, stored the way the editor's color fields do: "#rrggbb". */
+function color(v: unknown, key: string): string {
+  const hex = typeof v === 'string' ? cssColorToHex(v) : null
+  if (!hex) fail(`${key} must be an opaque CSS color such as #ffcc00 or "white", got ${JSON.stringify(v)}`)
+  return hex
 }
 
 function optColor(raw: Raw, key: string): string | undefined {
-  return raw[key] === undefined || raw[key] === null ? undefined : hexColor(raw[key], key)
+  return raw[key] === undefined || raw[key] === null ? undefined : color(raw[key], key)
 }
 
 function frameBackground(v: unknown): string {
   if (typeof v === 'string') {
     const s = v.trim()
     if (s === TRANSPARENT_BACKGROUND || has(GRADIENT_PRESETS, s)) return s
-    if (s.startsWith('#')) return hexColor(s, 'background')
+    const hex = cssColorToHex(s)
+    if (hex) return hex
   }
-  fail(`background must be a hex color like #111214, "${TRANSPARENT_BACKGROUND}" (GIF only) or one of ${Object.keys(GRADIENT_PRESETS).join(', ')}, got ${JSON.stringify(v)}`)
+  fail(`background must be an opaque CSS color such as #111214, "${TRANSPARENT_BACKGROUND}" (GIF only) or one of ${Object.keys(GRADIENT_PRESETS).join(', ')}, got ${JSON.stringify(v)}`)
 }
 
 /** An optional {x, y} in source-normalized coordinates. */
@@ -145,7 +145,7 @@ function existing<T extends { id: string }>(list: T[], raw: Raw, label: string):
   const found = list.find((x) => x.id === id)
   if (!found) {
     const known = list.slice(0, 12).map((x) => x.id)
-    fail(`unknown ${label} id "${id}" (${known.length > 0 ? 'existing: ' + known.join(', ') : 'the project has none'})`)
+    throw new AgentError('not_found', `unknown ${label} id "${id}" (${known.length > 0 ? 'existing: ' + known.join(', ') : 'the project has none'})`)
   }
   return found
 }
@@ -204,8 +204,8 @@ function addZoom(p: Project, raw: Raw): Project {
   const { start, end } = span(raw, p.recording.durationMs, ZOOM_MIN_MS)
   const mode = oneOf(raw, 'mode', ['follow', 'fixed'] as const)
   if (!mode) fail('mode is required: "follow" (the camera follows the cursor) or "fixed" (zooms into target)')
+  // a fixed zoom without a target aims at the centre, like a freshly added zoom in the editor
   const target = point(raw, 'target')
-  if (mode === 'fixed' && !target) fail('mode "fixed" needs a target {x, y} (source-normalized 0..1): the point to zoom into')
   const id = uid('zoom')
   const zoom: ZoomSegment = {
     ...ZOOM_DEFAULTS,
@@ -408,37 +408,4 @@ export function applyAgentEdits(project: Project, ops: readonly AgentEditOp[]): 
     fail('these cuts would remove the whole recording; keep at least part of it (use removeCut to restore a range)')
   }
   return p
-}
-
-/** At most `max` items of `list`, evenly spread over it, order kept. */
-function spread<T>(list: T[], max: number): T[] {
-  if (list.length <= max) return list
-  return Array.from({ length: max }, (_, i) => list[Math.floor((i * list.length) / max)])
-}
-
-/** What `get_project` / `edit_project` return: everything an agent needs to plan edits, nothing heavy. */
-export function toAgentProjectView(project: Project): AgentProjectView {
-  const { recording } = project
-  const clicks: ClickEvent[] = spread(project.cursorData.clicks, MAX_CLICKS)
-  return {
-    id: project.id,
-    name: project.name,
-    createdAt: recording.createdAt,
-    dir: recording.dir,
-    width: recording.width,
-    height: recording.height,
-    fps: recording.fps,
-    sourceDurationMs: recording.durationMs,
-    outputDurationMs: outputDuration(keepSegments(recording.durationMs, project.cuts)),
-    cuts: project.cuts,
-    zooms: project.zooms,
-    texts: project.texts,
-    blurs: project.blurs,
-    crop: project.crop,
-    frame: project.frame,
-    export: project.export,
-    origin: project.origin ?? null,
-    clicks,
-    audio: project.audio.map((c) => ({ id: c.id, kind: c.kind, name: c.name }))
-  }
 }
