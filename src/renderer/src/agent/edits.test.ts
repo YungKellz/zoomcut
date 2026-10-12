@@ -222,6 +222,50 @@ describe('applyAgentEdits: items inside cuts', () => {
     expect(enough.texts.map((t) => [t.start, t.end])).toEqual([[1050, 1150]])
   })
 
+  it('does not blame the call for a cut that was there before it: only a span that is hidden entirely is refused', () => {
+    // an existing cut leaves 50 ms of a valid 150 ms text and 100 ms of a valid 300 ms zoom; addText and addZoom never clipped, so both stay
+    const p0 = project({ cuts: [{ id: 'c1', start: 900, end: 1100 }] })
+    const text = applyAgentEdits(p0, [{ op: 'addText', start: 1000, end: 1150, text: 'Hi' }])
+    expect(text.texts.map((t) => [t.start, t.end])).toEqual([[1000, 1150]])
+    const zoomIn = applyAgentEdits(p0, [{ op: 'addZoom', start: 800, end: 1200, mode: 'follow' }, { op: 'addBlur', start: 1000, end: 1150, x: 0, y: 0, w: 0.5, h: 0.5 }])
+    expect(zoomIn.zooms.map((z) => [z.start, z.end])).toEqual([[800, 1200]])
+    expect(zoomIn.blurs).toHaveLength(1)
+    // the same call that holds no cut of its own, whatever else it does
+    expect(applyAgentEdits(p0, [{ op: 'rename', name: 'x' }, { op: 'addText', start: 1000, end: 1150, text: 'Hi' }]).texts).toHaveLength(1)
+    // entirely inside it is still refused
+    expect(badParams(p0, [{ op: 'addText', start: 950, end: 1050, text: 'Hi' }]).message).toMatch(/the text 950-1050 ms lies entirely inside removed ranges/)
+    // a cut the call adds is the call's: it leaves 50 ms of a 200 ms text, under the minimum
+    const addCut = { op: 'addCut', start: 2900, end: 3100 } as const
+    const addText = { op: 'addText', start: 2950, end: 3150, text: 'Hi' } as const
+    for (const ops of [[addText, addCut], [addCut, addText]]) {
+      expect(badParams(project(), ops).message).toMatch(/\(addText\): the cuts of this call would shorten the text 2950-3150 ms/)
+    }
+  })
+
+  it('does not lose an added item silently when a later removeCut lifts the cut that dropped it', () => {
+    // c1 500-1000 merges with the new cut 900-2100 into one cut (c1, 500-2100), which removeCut then lifts entirely
+    const p0 = project({ cuts: [{ id: 'c1', start: 500, end: 1000 }] })
+    const addText = { op: 'addText', start: 1000, end: 2000, text: 'Hi' } as const
+    const addCut = { op: 'addCut', start: 900, end: 2100 } as const
+    const removeCut = { op: 'removeCut', id: 'c1' } as const
+    // the cut drops the text before it is lifted: refused, naming the operation that added it, instead of a call that succeeds without it
+    const dropped = badParams(p0, [addText, addCut, removeCut]).message
+    expect(dropped).toMatch(/^operations\[0\] \(addText\): a cut of this call dropped the text 1000-2000 ms/)
+    expect(dropped).toMatch(/after the cuts/)
+    // added after the cut is the same text in the same place with the same cuts at the end: kept
+    expect(applyAgentEdits(p0, [addCut, addText, removeCut]).texts.map((t) => [t.start, t.end])).toEqual([[1000, 2000]])
+    // while the cut stays, it is the usual error in both orders (not a "dropped" one)
+    expect(badParams(p0, [addText, addCut]).message).toMatch(/^operations\[0\] \(addText\): the text 1000-2000 ms lies entirely inside removed ranges/)
+    expect(badParams(p0, [addCut, addText]).message).toMatch(/^operations\[1\] \(addText\): the text 1000-2000 ms lies entirely inside removed ranges/)
+    // the same for the other kinds
+    for (const add of [
+      { op: 'addZoom', start: 1000, end: 2000, mode: 'follow' },
+      { op: 'addBlur', start: 1000, end: 2000, x: 0, y: 0, w: 0.5, h: 0.5 }
+    ]) {
+      expect(badParams(p0, [add, addCut, removeCut]).message).toMatch(/^operations\[0\] \(add(Zoom|Blur)\): a cut of this call dropped the (zoom|blur) 1000-2000 ms/)
+    }
+  })
+
   it('leaves items that existed before the batch to the editor: a new cut drops what lies entirely inside it', () => {
     const p0 = project({
       texts: [{ ...TEXT_DEFAULTS, id: 't1', ...inside }],

@@ -1,4 +1,4 @@
-import type { BlurRegion, CropRect, CursorSettings, FrameStyle, Project, TextOverlay, ZoomSegment } from '@shared/types'
+import type { BlurRegion, CropRect, CursorSettings, CutRange, FrameStyle, Project, TextOverlay, ZoomSegment } from '@shared/types'
 import { AgentError, type AgentEditOp } from '@shared/agent'
 import { BLUR_DEFAULTS, GRADIENT_PRESETS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from '../engine/ids'
@@ -429,14 +429,16 @@ function movedSpans(before: readonly Spanned[], after: readonly Spanned[]): Span
 
 /**
  * Judged once all operations are applied, so the outcome does not depend on their order.
- * - An item the batch added must show in at least one piece that stays, and survive the cuts the way the
- *   editor lets an item survive them (a cut drops a region entirely inside it, and one it shortens below the
- *   shortest of its kind). An addCut after an addText would silently drop a text that lies inside the cut,
- *   and the same text added after the cut would be kept, invisible: both orders are an error, naming the
- *   operation that added it.
+ * - An item the batch added must still exist (a cut of the batch drops a region lying entirely inside it, or
+ *   one it shortens below the shortest of its kind, exactly like the editor's cut tool; a later removeCut does
+ *   not bring it back; no operation of the batch can remove it, its id is made here). It must show in at least
+ *   one piece that stays. And the cuts of the batch must not leave it less than the shortest of its kind:
+ *   addText after an addCut keeps what an addCut after the addText drops. All of it is an error naming the
+ *   operation that added the item, in whichever order the operations come.
  * - An item that existed before and was moved by an update must not end up hidden either.
- * Items that existed before and were not touched keep the editor's behaviour: a new cut drops them when
- * they lie entirely inside it, and shortens them at its edges (addCutToProject).
+ * Items that existed before and were not touched keep the editor's behaviour: a new cut drops them when they
+ * lie entirely inside it, and shortens them at its edges (addCutToProject). A cut that was already there
+ * before the batch only matters when it hides an added item entirely: addText and addZoom never clipped to cuts.
  */
 function assertVisible(before: Project, after: Project, added: readonly Added[]): void {
   const duration = after.recording.durationMs
@@ -452,13 +454,26 @@ function assertVisible(before: Project, after: Project, added: readonly Added[])
       if (!shows(item)) hidden(kind, item)
     }
   }
+  const survives = (s: Spanned, cuts: CutRange[], min: number): boolean => clipRegionsToCuts([s], cuts, duration, min).length > 0
   for (const a of added) {
+    const now = itemsOf(after, a.kind).find((x) => x.id === a.id)
     const where = `${a.where}: `
-    if (!shows(a)) hidden(a.kind, a, where)
-    if (clipRegionsToCuts([a], after.cuts, duration, ITEM_MIN_MS[a.kind]).length === 0) {
+    const min = ITEM_MIN_MS[a.kind]
+    // an item a cut of the batch dropped is judged by the span it was created with, the others by the one they end with
+    const span = now ?? a
+    if (!shows(span)) hidden(a.kind, span, where)
+    // against the cuts the batch changed: a cut that was there before it never dropped an added item, so one it
+    // already left under the minimum stays as accepted as it was
+    if (survives(span, before.cuts, min) && !survives(span, after.cuts, min)) {
       fail(
-        `${where}the cuts of this call would shorten the ${a.kind} ${a.start}-${a.end} ms to under ${ITEM_MIN_MS[a.kind]} ms, the shortest ${a.kind} the editor keeps, ` +
+        `${where}the cuts of this call would shorten the ${a.kind} ${span.start}-${span.end} ms to under ${min} ms, the shortest ${a.kind} the editor keeps, ` +
           'and so drop it; times are source ms, not output time (see cuts in get_project)'
+      )
+    }
+    if (!now) {
+      fail(
+        `${where}a cut of this call dropped the ${a.kind} ${a.start}-${a.end} ms (it lay entirely inside the cut, or the cut left less than ${min} ms of it), ` +
+          `and removing the cut later does not bring it back; add the ${a.kind} after the cuts. Times are source ms, not output time (see cuts in get_project)`
       )
     }
   }
