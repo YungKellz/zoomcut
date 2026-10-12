@@ -19,9 +19,11 @@ export function agentControlRequested(argv: readonly string[], env: NodeJS.Proce
  * What the running copy does when another copy was started and handed over its command line. A
  * launch that only switches agent control on (what the MCP bridge does when it finds ZoomCut closed or
  * without control) must not bring the window up: it would land in a recording that is running and in
- * the way of a replay. Any other launch shows the window, unless something is recording or replaying.
+ * the way of a replay. Any other launch shows the window (restores it from the taskbar, brings it to
+ * the front), unless it is hidden on purpose: `windowHidden` is true while a recording's bar is up or a
+ * scenario is captured or replayed, not while a finished recording is still being saved.
  */
-export function secondInstanceAction(argv: readonly string[], busy: boolean): { enableAgentControl: boolean; showWindow: boolean } {
+export function secondInstanceAction(argv: readonly string[], windowHidden: boolean): { enableAgentControl: boolean; showWindow: boolean } {
   const enableAgentControl = hasAgentControlFlag(argv)
-  return { enableAgentControl, showWindow: !enableAgentControl && !busy }
+  return { enableAgentControl, showWindow: !enableAgentControl && !windowHidden }
 }

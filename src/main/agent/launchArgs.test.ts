@@ -22,7 +22,7 @@ describe('secondInstanceAction', () => {
     expect(secondInstanceAction(['ZoomCut.exe', AGENT_CONTROL_FLAG], true)).toEqual({ enableAgentControl: true, showWindow: false })
   })
 
-  it('shows the window for an ordinary second launch, unless a recording or replay is running', () => {
+  it('shows the window for an ordinary second launch, unless it is hidden for a recording, a capture or a replay', () => {
     expect(secondInstanceAction(['ZoomCut.exe'], false)).toEqual({ enableAgentControl: false, showWindow: true })
     expect(secondInstanceAction(['ZoomCut.exe'], true)).toEqual({ enableAgentControl: false, showWindow: false })
   })
