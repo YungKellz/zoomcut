@@ -16,6 +16,20 @@ import { useT } from '../i18n'
 
 type Loaded = Record<string, Project | 'missing'>
 
+/** Loads the projects from disk; one that cannot be read (deleted, damaged) is 'missing'. */
+async function loadProjects(ids: string[]): Promise<Loaded> {
+  const pairs = await Promise.all(
+    ids.map(async (id): Promise<[string, Project | 'missing']> => {
+      try {
+        return [id, await window.zc.projects.load(id)]
+      } catch {
+        return [id, 'missing']
+      }
+    })
+  )
+  return Object.fromEntries(pairs)
+}
+
 /** Size estimate of a composition: the recordings' own estimates at the scale they are rendered at. */
 async function estimateComposition(
   entries: CompositionEntry[],
@@ -66,6 +80,25 @@ export function CompositionScreen(): JSX.Element {
     void window.zc.projects.list().then(setProjects)
   }, [])
 
+  // an AI agent edited or deleted recordings behind this screen's back (the ones not open in the
+  // editor are changed on disk): the copies loaded here are stale, so every referenced one is read again
+  useEffect(() => {
+    let latest = 0
+    const off = window.zc.agent.onDataChanged(({ what }) => {
+      if (what !== 'projects') return
+      void window.zc.projects.list().then(setProjects)
+      const mine = ++latest
+      const ids = [...new Set((useStore.getState().composition?.items ?? []).map((i) => i.projectId))]
+      void loadProjects(ids).then((fresh) => {
+        if (mine === latest) setLoaded((cur) => ({ ...cur, ...fresh }))
+      })
+    })
+    return () => {
+      latest = -1
+      off()
+    }
+  }, [])
+
   // (re)load every referenced project: on mount the latest edits count, e.g. after returning
   // from the editor; afterwards only newly added ones are loaded
   const itemIds = composition.items.map((i) => i.projectId).join('|')
@@ -73,16 +106,8 @@ export function CompositionScreen(): JSX.Element {
     let cancelled = false
     const ids = [...new Set(composition.items.map((i) => i.projectId))].filter((id) => !(id in loaded))
     if (ids.length === 0) return
-    void Promise.all(
-      ids.map(async (id): Promise<[string, Project | 'missing']> => {
-        try {
-          return [id, await window.zc.projects.load(id)]
-        } catch {
-          return [id, 'missing']
-        }
-      })
-    ).then((pairs) => {
-      if (!cancelled) setLoaded((cur) => ({ ...cur, ...Object.fromEntries(pairs) }))
+    void loadProjects(ids).then((fresh) => {
+      if (!cancelled) setLoaded((cur) => ({ ...cur, ...fresh }))
     })
     return () => {
       cancelled = true

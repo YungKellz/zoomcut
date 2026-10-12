@@ -5,6 +5,7 @@ import { FolderOpen, X } from 'lucide-react'
 import type { ExportFinishResult, ExportProgress, ExportSettings, GifSettings } from '@shared/types'
 import { SCALE_OPTIONS } from '@shared/defaults'
 import { useProject, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import type { FollowPath } from '../engine/cursor'
 import { outputSize, TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration } from '../engine/timeline'
@@ -120,6 +121,8 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
   const [estimate, setEstimate] = useState<SizeEstimate | null>(null)
   const [estimating, setEstimating] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  /** the main-process export of this dialog: the ffmpeg progress of another export (an agent's) is not ours */
+  const exportIdRef = useRef<string | null>(null)
   const latestProps = useRef(props)
   latestProps.current = props
 
@@ -131,7 +134,15 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
     }
   }, [settings.folder])
 
-  useEffect(() => window.zc.export.onProgress(setFfmpeg), [])
+  useBusy('export', running)
+
+  useEffect(
+    () =>
+      window.zc.export.onProgress((p) => {
+        if (p.exportId === exportIdRef.current) setFfmpeg(p)
+      }),
+    []
+  )
 
   // Escape closes the dialog (cancels a running export first)
   useEffect(() => {
@@ -193,10 +204,15 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
     setResult(null)
     setRender({ phase: 'render', percent: 0 })
     setFfmpeg(null)
+    exportIdRef.current = null
     const abort = new AbortController()
     abortRef.current = abort
+    const onRender = (p: RenderProgress): void => {
+      if (p.exportId) exportIdRef.current = p.exportId
+      setRender(p)
+    }
     try {
-      const res = await latestProps.current.run(effective, setRender, abort.signal)
+      const res = await latestProps.current.run(effective, onRender, abort.signal)
       setResult(res)
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {

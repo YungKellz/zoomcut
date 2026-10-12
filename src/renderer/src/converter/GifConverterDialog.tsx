@@ -4,6 +4,7 @@ import { FileVideo, FolderOpen, X } from 'lucide-react'
 import type { ExportFinishResult, GifConvertProgress, GifSettings, VideoFileInfo } from '@shared/types'
 import { DEFAULT_GIF_SETTINGS, GIF_FPS_OPTIONS } from '@shared/defaults'
 import { formatBytes, formatDuration } from '../util/format'
+import { useBusy } from '../hooks/useBusy'
 import { useT, type TKey } from '../i18n'
 import { ipcErrorMessage, videoErrorText } from './intake'
 
@@ -75,6 +76,7 @@ export function GifConverterDialog({ onClose, initialVideo }: Props): JSX.Elemen
   const [previewFailed, setPreviewFailed] = useState(false)
   const runningRef = useRef(false)
   runningRef.current = running
+  useBusy('converter', running)
 
   useEffect(() => window.zc.converter.onProgress(setProgress), [])
 

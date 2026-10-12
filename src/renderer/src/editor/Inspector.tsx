@@ -30,6 +30,7 @@ import type { AudioClip, BlurRegion, MusicTrack, TextOverlay, ZoomSegment } from
 import { DEFAULT_AUDIO_CAPTURE, GRADIENT_PRESETS } from '@shared/defaults'
 import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
 import { ZOOM_SCALE_MAX, ZOOM_SCALE_MIN, findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
@@ -38,6 +39,7 @@ import { pageToCrop, sameCrop, uniqueWindows, windowToCrop } from '../engine/win
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
 import { clipIcon, clipLabel } from '../audio/clipLabel'
+import { acquireMic } from '../audio/micRequest'
 import { formatElapsed, formatTimecode } from '../util/format'
 import { useT, type Translate, type TKey } from '../i18n'
 import { confirmAt } from '../components/ConfirmPopover'
@@ -665,8 +667,12 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
   const [recording, setRecording] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [busy, setBusy] = useState(false)
+  // the mic is being opened (getUserMedia can take a second or more): true from the click on
+  const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const sessionRef = useRef<VoiceoverSession | null>(null)
+  // set by the unmount cleanup: a mic that finishes opening after that must not be recorded on
+  const disposedRef = useRef(false)
   const discardRef = useRef(false)
   // MediaRecorder.state flips to 'inactive' SYNCHRONOUSLY inside .stop(), before the 'stop'
   // event fires – so recorder.state alone cannot tell "never started" apart from "stop() was
@@ -674,6 +680,8 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
   // (double-click, Escape racing the button) cannot re-enter and stop the mic tracks early.
   const stoppingRef = useRef(false)
   const startWallRef = useRef(0)
+  // a take that is starting, being recorded, or still being saved, is lost when the editor closes
+  useBusy('voiceover', starting || recording || busy)
 
   // the last used device is shared with Home's mic checkbox (AppSettings.audioDefaults.micDeviceId)
   useEffect(() => {
@@ -790,6 +798,13 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [recording, stopRecording])
 
+  useEffect(() => {
+    // mount resets it too: StrictMode runs the cleanup once before the component is really gone
+    disposedRef.current = false
+    return () => {
+      disposedRef.current = true
+    }
+  }, [])
   // unmounting (switching tabs, closing the project) mid-recording discards cleanly: this
   // must release the mic and reset audioMuted/playing unconditionally, even for a recorder
   // that never actually reached recorder.start() (its onstop would then never fire to do it)
@@ -817,16 +832,24 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
 
   const startRecording = useCallback(async () => {
     setError(null)
+    // busy from the click on: the editor must not close (an agent starting a recording) while
+    // the mic is still being opened, the take would start on an unmounted component
+    setStarting(true)
     let stream: MediaStream | null = null
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
-          echoCancellation: false,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      })
+      stream = await acquireMic(
+        () =>
+          navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+              echoCancellation: false,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          }),
+        () => disposedRef.current
+      )
+      if (!stream) return // the editor went away meanwhile; the stream is already released
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128_000 })
       const chunks: Blob[] = []
       recorder.ondataavailable = (e) => {
@@ -875,10 +898,14 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
       // undo everything this attempt may have already done, however far it got
       stream?.getTracks().forEach((tr) => tr.stop())
       sessionRef.current = null
+      // an unmounted component has nothing to reset, and the store now belongs to another screen
+      if (disposedRef.current) return
       setRecording(false)
       useStore.getState().setAudioMuted(false)
       useStore.getState().setPlaying(false)
       setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setStarting(false)
     }
   }, [finishSession, micDeviceId, project.cuts, project.recording.durationMs, stopRecording, t])
 
@@ -896,7 +923,7 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
       </Field>
       <button
         className={'btn btn-small btn-voiceover' + (recording ? ' recording' : '')}
-        disabled={busy}
+        disabled={busy || starting}
         onClick={() => (recording ? stopRecording(false) : void startRecording())}
       >
         {recording ? <Square size={14} fill="currentColor" /> : <Mic size={14} />}

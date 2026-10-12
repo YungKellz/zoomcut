@@ -159,6 +159,51 @@ describe('applyAgentEdits: cuts', () => {
   })
 })
 
+describe('applyAgentEdits: items inside cuts', () => {
+  const cut = { id: 'c1', start: 500, end: 2500 }
+  const inside = { start: 1000, end: 2000 }
+
+  it('rejects a new text, zoom or blur that lies entirely inside a cut', () => {
+    const p = project({ cuts: [cut] })
+    const text = badParams(p, [{ op: 'addText', ...inside, text: 'Hi' }]).message
+    expect(text).toMatch(/the text 1000-2000 ms lies entirely inside removed ranges/)
+    expect(text).toMatch(/times are source ms/)
+    expect(badParams(p, [{ op: 'addZoom', ...inside, mode: 'follow' }]).message).toMatch(/the zoom 1000-2000 ms lies entirely inside/)
+    expect(badParams(p, [{ op: 'addBlur', ...inside, x: 0, y: 0, w: 0.5, h: 0.5 }]).message).toMatch(/the blur 1000-2000 ms lies entirely inside/)
+  })
+
+  it('accepts a span that still shows in a piece that stays', () => {
+    const p = applyAgentEdits(project({ cuts: [cut] }), [{ op: 'addText', start: 1000, end: 3000, text: 'Hi' }])
+    expect(p.texts).toHaveLength(1)
+  })
+
+  it('judges the result of the whole batch, so the order of the operations does not matter', () => {
+    // [addCut, addText]: the text would be kept, invisible
+    expect(badParams(project(), [{ op: 'addCut', start: 500, end: 2500 }, { op: 'addText', ...inside, text: 'Hi' }]).message).toMatch(/lies entirely inside/)
+    // [addText, addCut]: the editor drops the text with the cut; nothing is left to complain about
+    const dropped = applyAgentEdits(project(), [{ op: 'addText', ...inside, text: 'Hi' }, { op: 'addCut', start: 500, end: 2500 }])
+    expect(dropped.texts).toEqual([])
+    // a cut that is lifted again in the same batch makes the span visible
+    const restored = applyAgentEdits(project({ cuts: [cut] }), [{ op: 'addText', ...inside, text: 'Hi' }, { op: 'removeCut', id: 'c1' }])
+    expect(restored.texts).toHaveLength(1)
+  })
+
+  it('rejects an update that moves an item into a cut, but leaves one that stays where it is', () => {
+    const p0 = project({
+      cuts: [cut],
+      texts: [{ ...TEXT_DEFAULTS, id: 't1', start: 3000, end: 4000 }, { ...TEXT_DEFAULTS, id: 't2', start: 1000, end: 2000 }],
+      zooms: [zoom({ id: 'z1', start: 3000, end: 4000 })],
+      blurs: [{ ...BLUR_DEFAULTS, id: 'b1', start: 3000, end: 4000 }]
+    })
+    expect(badParams(p0, [{ op: 'updateText', id: 't1', ...inside }]).message).toMatch(/the text 1000-2000 ms lies entirely inside/)
+    expect(badParams(p0, [{ op: 'updateZoom', id: 'z1', ...inside }]).message).toMatch(/the zoom 1000-2000 ms/)
+    // t2 already sits in the cut (the inspector allows it): changing only its words is not a move
+    expect(applyAgentEdits(p0, [{ op: 'updateText', id: 't2', text: 'Reworded' }]).texts.find((t) => t.id === 't2')?.text).toBe('Reworded')
+    // untouched items and other kinds of edits are never judged
+    applyAgentEdits(p0, [{ op: 'rename', name: 'x' }, { op: 'setFrame', padding: 0.1 }])
+  })
+})
+
 describe('applyAgentEdits: zooms', () => {
   it('adds a follow zoom with the editor defaults', () => {
     const p = applyAgentEdits(project(), [{ op: 'addZoom', start: 1000, end: 3000, mode: 'follow' }])

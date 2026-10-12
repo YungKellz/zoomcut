@@ -2,7 +2,7 @@ import type { AppSettings, ExportFinishResult, ExportSettings, Project, Scenario
 import { AgentError, type AgentCommand, type AgentProjectView, type AgentReply, type AgentUiStatus } from '@shared/agent'
 import { toAgentProjectView } from '@shared/agentProject'
 import { validateScenario } from '@shared/scenario'
-import { useStore, type PendingStart, type Selection } from '../store'
+import { useStore, type BusyKind, type PendingStart, type Selection } from '../store'
 import { followPathFor } from '../engine/cursor'
 import { keepSegments, outputDuration } from '../engine/timeline'
 import { runExport } from '../export/exporter'
@@ -10,6 +10,7 @@ import { t } from '../i18n'
 import { applyAgentEdits } from './edits'
 import {
   errorPayload,
+  parseCancelParams,
   parseCaptureParams,
   parseEditParams,
   parseExportParams,
@@ -27,9 +28,11 @@ import {
  *   from disk) and saves it at once, so the main process, which answers get_project from disk,
  *   never sees stale data.
  * - projects.export runs the editor's own exporter, with no dialog; a store notice tells the user.
+ *   `cancel` aborts such an export by its request id (the export then replies `cancelled`).
  * - recording.start, scenarios.record and capture.start only hand the start to the screen that owns
  *   the recorder (store.pendingStart, like "Record again") and reply once that screen took it;
- *   the main process waits for the real recorder / capture phase itself.
+ *   the main process waits for the real recorder / capture phase itself. They leave the screen they
+ *   find, so they answer `busy` first while the user has something running there (assertUiIdle).
  * Nothing here ever opens a confirm() or alert(): an agent cannot click them.
  */
 
@@ -63,8 +66,13 @@ function pushStatusOnChange(): () => void {
   }
   const push = (retries = 0): void => {
     const s = useStore.getState()
-    const status: AgentUiStatus = { screen: s.screen, openProjectId: s.project?.id ?? null }
-    const key = `${status.screen}\n${status.openProjectId ?? ''}`
+    const status: AgentUiStatus = {
+      screen: s.screen,
+      openProjectId: s.project?.id ?? null,
+      openScenarioId: s.scenario?.id ?? null,
+      compositionProjectIds: [...new Set((s.composition?.items ?? []).map((i) => i.projectId))]
+    }
+    const key = JSON.stringify(status)
     if (key === last) return
     last = key
     send(status, retries)
@@ -105,13 +113,15 @@ async function dispatch(cmd: AgentCommand): Promise<unknown> {
     case 'projects.edit':
       return editProject(cmd.params)
     case 'projects.export':
-      return exportProject(cmd.params)
+      return exportProject(cmd.params, cmd.requestId)
     case 'recording.start':
       return startRecording(cmd.params)
     case 'scenarios.record':
       return recordScenario(cmd.params)
     case 'capture.start':
       return startCapture(cmd.params)
+    case 'cancel':
+      return cancelCommand(cmd.params)
     default:
       throw new AgentError('unknown_method', `the renderer does not handle "${String(cmd.method)}"`)
   }
@@ -150,8 +160,9 @@ function dropStaleSelection(): void {
   const { project, selection, mode } = useStore.getState()
   if (!project || !selection || selectionExists(project, selection)) return
   const store = useStore.getState()
-  store.select(null)
+  // leave the pick first: while picking, select() ignores everything but the zoom being picked
   if (mode === 'pickTarget') store.setMode('normal')
+  store.select(null)
 }
 
 function editProject(params: unknown): Promise<AgentProjectView> {
@@ -188,6 +199,8 @@ async function saveEdited(project: Project): Promise<void> {
 // ---- export ----
 
 let exporting = false
+/** the running agent exports by request id, so a `cancel` command can abort one */
+const exportControllers = new Map<string, AbortController>()
 /** the notice text this module put up, so it only ever clears (or updates) its own */
 let exportNotice: string | null = null
 
@@ -220,10 +233,18 @@ async function rememberExportSettings(projectId: string, settings: ExportSetting
   })
 }
 
-async function exportProject(params: unknown): Promise<ExportFinishResult> {
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw new AgentError('cancelled', 'the export was cancelled')
+}
+
+async function exportProject(params: unknown, requestId: string): Promise<ExportFinishResult> {
   const p = parseExportParams(params)
   if (exporting) throw new AgentError('busy', 'another export is already running; wait for it to finish')
   exporting = true
+  // registered before the first await: a `cancel` may arrive while the project is still loading
+  const controller = new AbortController()
+  const { signal } = controller
+  exportControllers.set(requestId, controller)
   try {
     const open = useStore.getState().project
     const isOpen = open?.id === p.projectId
@@ -232,27 +253,64 @@ async function exportProject(params: unknown): Promise<ExportFinishResult> {
       throw new AgentError('bad_params', 'nothing to export: the whole recording is cut out')
     }
     const settings = resolveExportSettings(project, p, { lastExportFolder: (await window.zc.app.getSettings()).lastExportFolder })
+    throwIfCancelled(signal)
 
     await rememberExportSettings(project.id, settings)
+    throwIfCancelled(signal)
 
     showExportProgress(0)
-    return await runExport({
-      project,
-      settings,
-      followPath: followPathFor(project),
-      onProgress: (progress) => showExportProgress(progress.phase === 'finalize' ? 100 : progress.percent),
-      signal: new AbortController().signal
-    })
+    try {
+      return await runExport({
+        project,
+        settings,
+        followPath: followPathFor(project),
+        onProgress: (progress) => showExportProgress(progress.phase === 'finalize' ? 100 : progress.percent),
+        signal
+      })
+    } catch (err) {
+      // whatever the exporter threw while it was being cancelled, the caller asked for the cancel
+      throwIfCancelled(signal)
+      throw err
+    }
   } finally {
     exporting = false
+    exportControllers.delete(requestId)
     clearExportNotice()
   }
 }
 
+/** `cancel` { requestId }: aborts that export if it still runs; an unknown or finished request is a no-op. */
+function cancelCommand(params: unknown): Record<string, never> {
+  exportControllers.get(parseCancelParams(params).requestId)?.abort()
+  return {}
+}
+
 // ---- starting a recording / replay / capture ----
+
+const BUSY_MESSAGES: Record<BusyKind, string> = {
+  export: 'the user is exporting a video in ZoomCut; wait until it has finished',
+  voiceover: 'the user is recording a voiceover in the editor; wait until they are done',
+  converter: 'a GIF conversion is running in ZoomCut; wait until it has finished',
+  replay: 'a scenario replay, preview or recording is running on the scenario screen (see get_status); wait until it ends',
+  recording: 'a recording is in progress (see get_status)',
+  capture: 'a scenario capture is in progress (see get_status)'
+}
+
+/**
+ * A start command leaves the screen it finds (closing the editor discards a voiceover take and
+ * orphans an export dialog, ...): while the user has something running there, or an agent export
+ * still encodes, it answers `busy` and changes nothing.
+ */
+function assertUiIdle(): void {
+  if (exporting) throw new AgentError('busy', 'an export is still running; wait for export_project to finish')
+  const kind = (Object.keys(useStore.getState().busy) as BusyKind[])[0]
+  if (kind) throw new AgentError('busy', BUSY_MESSAGES[kind])
+}
 
 /** Closes whatever is open (the autosaves flush as usual) and lands on Home. */
 function leaveToHome(): void {
+  // checked again here: the UI may have changed while the command looked up its settings
+  assertUiIdle()
   const store = useStore.getState()
   if (store.project) store.closeProject()
   if (useStore.getState().composition) useStore.getState().closeComposition()
@@ -293,6 +351,7 @@ async function resolveDisplay(given: number | undefined, settings: AppSettings):
 
 async function startRecording(params: unknown): Promise<Record<string, never>> {
   const { displayId, mic, systemAudio } = parseRecordParams(params)
+  assertUiIdle()
   const settings = await window.zc.app.getSettings()
   const display = await resolveDisplay(displayId, settings)
   const audio = resolveAudio(settings.audioDefaults, { mic, systemAudio })
@@ -303,6 +362,7 @@ async function startRecording(params: unknown): Promise<Record<string, never>> {
 
 async function recordScenario(params: unknown): Promise<Record<string, never>> {
   const { scenarioId, mic, systemAudio } = parseScenarioRecordParams(params)
+  assertUiIdle()
   // the scenario on screen may carry edits that are not saved yet: replay what the user sees
   const shown = useStore.getState().scenario
   let scenario: Scenario
@@ -321,6 +381,8 @@ async function recordScenario(params: unknown): Promise<Record<string, never>> {
   }
   const audio = resolveAudio((await window.zc.app.getSettings()).audioDefaults, { mic, systemAudio })
 
+  // checked again: the UI may have changed while the scenario and the settings were loaded
+  assertUiIdle()
   const store = useStore.getState()
   if (store.project) store.closeProject()
   if (useStore.getState().composition) useStore.getState().closeComposition()
@@ -332,7 +394,9 @@ async function recordScenario(params: unknown): Promise<Record<string, never>> {
 }
 
 async function startCapture(params: unknown): Promise<Record<string, never>> {
-  const displayId = await resolveDisplay(parseCaptureParams(params).displayId, await window.zc.app.getSettings())
+  const given = parseCaptureParams(params).displayId
+  assertUiIdle()
+  const displayId = await resolveDisplay(given, await window.zc.app.getSettings())
   leaveToHome()
   await handOver({ kind: 'capture', displayId })
   return {}

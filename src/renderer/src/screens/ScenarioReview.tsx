@@ -26,6 +26,7 @@ import {
 } from '@shared/scenario'
 import type { TypeSpeed } from '@shared/scenario'
 import { useScenario, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { useRecorder } from '../recording/useRecorder'
 import { deleteOpenScenario, recaptureScenario } from '../recording/lifecycle'
 import { ScenarioTimeline } from '../components/ScenarioTimeline'
@@ -100,6 +101,7 @@ export function ScenarioReview(): JSX.Element {
     () => setNotice(t('scenario.replayAborted'))
   )
   const busy = (recorder.phase !== 'idle' && recorder.phase !== 'error') || previewing || startingReplay
+  useBusy('replay', busy)
 
   // same audio sources the home screen's checkboxes remember - just for the "Record video"
   // hint below; startReplay() re-reads settings fresh at the moment it actually starts

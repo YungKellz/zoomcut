@@ -4,6 +4,7 @@ import { Bot, Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MousePo
 import type { AppInfo, AudioCaptureOptions, CompositionSummary, DisplayInfo, Language, ProjectSummary, ScenarioSummary, VideoFileInfo } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { buildHomeItems } from '../home/items'
 import { confirmDeleteProject, confirmDeleteScenario } from '../recording/lifecycle'
 import { confirmAt } from '../components/ConfirmPopover'
@@ -45,6 +46,8 @@ export function Home(): JSX.Element {
   const scenario = useScenarioCapture((s) => openScenario(s))
   const recording = recorder.phase !== 'idle' && recorder.phase !== 'error'
   const capturing = scenario.phase !== 'idle' && scenario.phase !== 'error'
+  useBusy('recording', recording)
+  useBusy('capture', capturing)
   // a file dropped anywhere on the window (or picked in the converter card) opens the converter
   const intake = useVideoIntake({ enabled: !recording && !capturing && converterVideo === null, onVideo: setConverterVideo })
 

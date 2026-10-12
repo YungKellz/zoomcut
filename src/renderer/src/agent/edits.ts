@@ -384,6 +384,45 @@ const HANDLERS: Record<AgentEditOp['op'], (p: Project, raw: Raw) => Project> = {
   setCursor
 }
 
+interface Spanned {
+  id: string
+  start: number
+  end: number
+}
+
+/** The items of `after` that are new or got another start / end than their namesake in `before`. */
+function movedSpans(before: readonly Spanned[], after: readonly Spanned[]): Spanned[] {
+  const old = new Map(before.map((x) => [x.id, x]))
+  return after.filter((x) => {
+    const was = old.get(x.id)
+    return !was || was.start !== x.start || was.end !== x.end
+  })
+}
+
+/**
+ * A zoom, text or blur that was added or moved must show in at least one piece that stays. Judged
+ * once all operations are applied, so the outcome does not depend on their order: an addCut after
+ * an addText drops a text that lies inside the cut, and the same text added after the cut would
+ * otherwise be kept, invisible. The editor never creates such items (its cut tool drops them).
+ */
+function assertVisible(before: Project, after: Project): void {
+  const kept = keepSegments(after.recording.durationMs, after.cuts)
+  const groups: Array<[string, readonly Spanned[], readonly Spanned[]]> = [
+    ['zoom', before.zooms, after.zooms],
+    ['text', before.texts, after.texts],
+    ['blur', before.blurs, after.blurs]
+  ]
+  for (const [kind, was, now] of groups) {
+    for (const item of movedSpans(was, now)) {
+      if (kept.some((s) => s.start < item.end && s.end > item.start)) continue
+      fail(
+        `the ${kind} ${item.start}-${item.end} ms lies entirely inside removed ranges (cuts) once all operations are applied, so it would never be visible; ` +
+          'times are source ms, not output time (see cuts in get_project)'
+      )
+    }
+  }
+}
+
 /**
  * Applies the operations in order and returns the edited project (the same object when `ops` is
  * empty). Throws AgentError('bad_params') naming the offending operation; the input is never mutated.
@@ -407,5 +446,6 @@ export function applyAgentEdits(project: Project, ops: readonly AgentEditOp[]): 
   if (p !== project && keepSegments(p.recording.durationMs, p.cuts).length === 0) {
     fail('these cuts would remove the whole recording; keep at least part of it (use removeCut to restore a range)')
   }
+  if (p !== project) assertVisible(project, p)
   return p
 }
