@@ -8,6 +8,7 @@ import { ReplayOverlay } from './screens/ReplayOverlay'
 import { CompositionScreen } from './screens/Composition'
 import { UpdateToast } from './components/UpdateToast'
 import { NoticeBar } from './components/NoticeBar'
+import { ConfirmHost } from './components/ConfirmPopover'
 import { useStore } from './store'
 
 export function App(): JSX.Element {
@@ -29,6 +30,7 @@ export function App(): JSX.Element {
       )}
       <NoticeBar />
       <UpdateToast />
+      <ConfirmHost />
     </>
   )
 }

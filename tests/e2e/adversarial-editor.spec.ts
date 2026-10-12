@@ -60,7 +60,7 @@ async function reset(): Promise<void> {
   await h.win.click('.project-open')
   await h.win.waitForSelector('.editor')
   await h.win.waitForSelector('.preview-loading', { state: 'detached', timeout: 60_000 })
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
 }
 
 async function timecode(): Promise<string> {
@@ -72,11 +72,19 @@ async function outTotal(): Promise<string> {
   return txt.replace('/', '').trim()
 }
 
-/** Home + n presses of Shift+Right puts the playhead at exactly n * 1000 ms. */
+/**
+ * Home + Shift+Left / Shift+Right puts the playhead at exactly n * 1000 ms of the source. Home goes to the first
+ * kept frame, which is not 0 once the start of the recording is trimmed, so the helper reads where it landed.
+ */
 async function playheadAt(seconds: number): Promise<void> {
   await h.win.click('.timeline-toolbar .timeline-hint') // move focus out of any input
   await h.win.keyboard.press('Home')
-  for (let i = 0; i < seconds; i++) await h.win.keyboard.press('Shift+ArrowRight')
+  await h.win.waitForTimeout(150)
+  const shown = (await h.win.textContent('.preview-controls .source-time')) ?? ''
+  const m = /(\d+):(\d+)\.(\d+)/.exec(shown)
+  const from = m ? Math.round(((Number(m[1]) * 60 + Number(m[2])) * 1000 + Number(m[3]) * 10) / 1000) : 0
+  const key = seconds >= from ? 'Shift+ArrowRight' : 'Shift+ArrowLeft'
+  for (let i = 0; i < Math.abs(seconds - from); i++) await h.win.keyboard.press(key)
 }
 
 async function cutSeconds(from: number, to: number): Promise<void> {
@@ -236,7 +244,7 @@ test('a zoom added in a small gap overlaps its neighbour', async () => {
   // zoom A around 1 s, then pin its end to exactly 3.00 s
   await playheadAt(1)
   await h.win.keyboard.press('z')
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   await h.win.fill('.panel input[type="number"] >> nth=1', '3')
   await h.win.locator('.panel input[type="number"] >> nth=1').blur()
 
@@ -308,7 +316,7 @@ test('texts: empty, very long, multi-line and six overlapping lanes', async () =
   for (let i = 0; i < 6; i++) await h.win.keyboard.press('t')
   await expect(h.win.locator('.region.text')).toHaveCount(6)
   await expect(h.win.locator('.track-text .lane')).toHaveCount(6)
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   await h.win.screenshot({ path: join(h.shotsDir, 'text-lanes.png') })
 
   const lanes = await h.win.locator('.track-text .lane').evaluateAll((els) => els.map((e) => (e as HTMLElement).style.top))
@@ -362,7 +370,7 @@ test('undo / redo after a cut brings the zoom and the text back', async () => {
   await h.win.keyboard.press('Control+z')
   await expect(h.win.locator('.region.zoom')).toHaveCount(1)
   await expect(h.win.locator('.region.text')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(0)
   const undone = await flushedProject(h.recordingsDir, id)
   expect(undone.zooms[0].start).toBe(before.zooms[0].start)
@@ -372,7 +380,7 @@ test('undo / redo after a cut brings the zoom and the text back', async () => {
   await h.win.click('.timeline-toolbar .timeline-hint')
   await h.win.keyboard.press('Control+y')
   await expect(h.win.locator('.region.zoom')).toHaveCount(0)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(1)
   await h.win.click('.timeline-toolbar .timeline-hint')
   await h.win.keyboard.press('Control+z')
@@ -383,21 +391,25 @@ test('pick area mode: click, Escape, Enter and Apply', async () => {
   await reset()
   await playheadAt(2)
   await h.win.keyboard.press('z')
-  await h.win.click('.tab:has-text("Zoom")')
+  await h.win.click('.tab[data-tab="zoom"]')
   await h.win.click('.seg-btn:has-text("Fixed area")')
   const targetBefore = (await flushedProject(h.recordingsDir, id)).zooms[0].target
   console.log('[pick] target before', JSON.stringify(targetBefore))
 
   // Escape leaves pick mode without changing anything
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(1)
-  await expect(h.win.locator('.preview-controls .btn >> nth=2')).toBeDisabled()
+  await expect(h.win.locator('.preview-controls button[title^="Play / pause"]')).toBeDisabled()
+  // the hint and Apply / Cancel live in the inspector overlay, not in the preview controls
+  await expect(h.win.locator('.pick-overlay')).toHaveCount(1)
+  await expect(h.win.locator('.preview-controls button:has-text("Apply")')).toHaveCount(0)
   await h.win.keyboard.press('Escape')
   await expect(h.win.locator('.pick-rect')).toHaveCount(0)
+  await expect(h.win.locator('.pick-overlay')).toHaveCount(0)
   expect((await flushedProject(h.recordingsDir, id)).zooms[0].target).toEqual(targetBefore)
 
   // click on the frame moves the rectangle, Enter applies
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(1)
   const canvas = (await h.win.locator('.preview-canvas').boundingBox())!
   await h.win.mouse.click(canvas.x + canvas.width * 0.22, canvas.y + canvas.height * 0.25)
@@ -410,10 +422,10 @@ test('pick area mode: click, Escape, Enter and Apply', async () => {
   expect(afterEnter.target.y).toBeLessThan(0.45)
 
   // and once more with the Apply button
-  await h.win.click('button:has-text("Pick area")')
+  await h.win.click('[data-pick-area="0"]')
   const canvas2 = (await h.win.locator('.preview-canvas').boundingBox())!
   await h.win.mouse.click(canvas2.x + canvas2.width * 0.8, canvas2.y + canvas2.height * 0.8)
-  await h.win.click('.preview-controls button:has-text("Apply")')
+  await h.win.click('.pick-overlay [data-action="apply"]')
   await expect(h.win.locator('.pick-rect')).toHaveCount(0)
   const afterApply = (await flushedProject(h.recordingsDir, id)).zooms[0]
   console.log('[pick] target after Apply', JSON.stringify(afterApply.target))
@@ -433,7 +445,7 @@ test('shortcuts must not fire while typing in an input or a textarea', async () 
   // …and in the text textarea
   await playheadAt(2)
   await h.win.keyboard.press('t')
-  await h.win.click('.tab:has-text("Text")')
+  await h.win.click('.tab[data-tab="text"]')
   await h.win.fill('.panel textarea', '')
   await h.win.type('.panel textarea', 'zoom z text t cut c', { delay: 15 })
   await expect(h.win.locator('.region.zoom')).toHaveCount(0)
@@ -541,9 +553,9 @@ test('edits survive closing and reopening the project', async () => {
   await playheadAt(4)
   await h.win.keyboard.press('z')
   await h.win.keyboard.press('t')
-  await h.win.click('.tab:has-text("Style")')
+  await h.win.click('.tab[data-tab="style"]')
   await h.win.click('.swatch.checker')
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   const windowsCount = await h.win.locator('.windows-list .list-item').count()
   if (windowsCount > 0) await h.win.locator('.windows-list .list-main').first().click()
   const beforeClose = await flushedProject(h.recordingsDir, id)
@@ -557,9 +569,9 @@ test('edits survive closing and reopening the project', async () => {
 
   await expect(h.win.locator('.region.zoom')).toHaveCount(1)
   await expect(h.win.locator('.region.text')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await expect(h.win.locator('.cuts-list .list-item')).toHaveCount(1)
-  await h.win.click('.tab:has-text("Style")')
+  await h.win.click('.tab[data-tab="style"]')
   await expect(h.win.locator('.swatch.checker.active')).toHaveCount(1)
   const reopened = readProject(h.recordingsDir, id)
   expect(reopened.crop).toEqual(beforeClose.crop)

@@ -8,6 +8,7 @@ import { GifConverter } from './media/gifConvert'
 import { Updater } from './updater'
 import { ensureDirs } from './storage'
 import { ScenarioCapture } from './scenario/capture'
+import { ScenarioPreview } from './scenario/preview'
 import { cleanupHelperScripts } from './scenario/inputHelper'
 
 protocol.registerSchemesAsPrivileged([
@@ -26,6 +27,7 @@ protocol.registerSchemesAsPrivileged([
 
 let recorder: RecordingController | null = null
 let scenarioCapture: ScenarioCapture | null = null
+let scenarioPreview: ScenarioPreview | null = null
 let updater: Updater | null = null
 
 // Tests launch their own instance next to a running dev app, so they skip the lock.
@@ -49,12 +51,14 @@ if (!gotLock) {
     recorder = new RecordingController()
     recorder.installDisplayMediaHandler()
     scenarioCapture = new ScenarioCapture()
-    // recording and scenario capture are mutually exclusive
-    recorder.setOtherBusyCheck(() => scenarioCapture!.isActive())
-    scenarioCapture.setOtherBusyCheck(() => recorder!.isActive())
+    scenarioPreview = new ScenarioPreview()
+    // recording, scenario capture and a scenario preview (dry run) are mutually exclusive
+    recorder.setOtherBusyCheck(() => scenarioCapture!.isActive() || scenarioPreview!.isActive())
+    scenarioCapture.setOtherBusyCheck(() => recorder!.isActive() || scenarioPreview!.isActive())
+    scenarioPreview.setOtherBusyCheck(() => recorder!.isActive() || scenarioCapture!.isActive())
     const exporter = new ExportManager()
     updater = new Updater()
-    registerIpc({ recorder, scenarioCapture, exporter, updater, converter: new GifConverter() })
+    registerIpc({ recorder, scenarioCapture, scenarioPreview, exporter, updater, converter: new GifConverter() })
 
     createMainWindow()
     updater.start()
@@ -72,6 +76,7 @@ if (!gotLock) {
     globalShortcut.unregisterAll()
     recorder?.dispose()
     scenarioCapture?.dispose()
+    scenarioPreview?.dispose()
     updater?.dispose()
     void cleanupHelperScripts()
   })

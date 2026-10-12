@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { ZcApi } from '@shared/api'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -79,11 +79,15 @@ const api: ZcApi = {
     list: () => ipcRenderer.invoke('scenario:list'),
     load: (id) => ipcRenderer.invoke('scenario:load', id),
     save: (scenario) => ipcRenderer.invoke('scenario:save', scenario),
-    remove: (id) => ipcRenderer.invoke('scenario:delete', id)
+    remove: (id) => ipcRenderer.invoke('scenario:delete', id),
+    preview: (scenario) => ipcRenderer.invoke('scenario:preview', scenario),
+    abortPreview: () => ipcRenderer.invoke('scenario:preview-abort'),
+    onPreviewState: (cb) => subscribe('scenario:preview-state', cb)
   },
   overlay: {
     onEffect: (cb) => subscribe('overlay:effect', cb),
-    onReplayState: (cb) => subscribe('recording:replay-state', cb)
+    onReplayState: (cb) => subscribe('recording:replay-state', cb),
+    ready: () => ipcRenderer.send('overlay:ready')
   },
   compositions: {
     list: () => ipcRenderer.invoke('compositions:list'),
@@ -94,6 +98,8 @@ const api: ZcApi = {
   },
   converter: {
     chooseVideo: () => ipcRenderer.invoke('converter:choose-video'),
+    pathForFile: (file) => webUtils.getPathForFile(file),
+    probe: (path) => ipcRenderer.invoke('converter:probe', path),
     toGif: (req) => ipcRenderer.invoke('converter:to-gif', req),
     cancel: () => ipcRenderer.invoke('converter:cancel'),
     onProgress: (cb) => subscribe('converter:progress', cb)

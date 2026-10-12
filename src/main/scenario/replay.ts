@@ -5,7 +5,7 @@ import { createInterface, type Interface } from 'node:readline'
 import type { ChildProcess } from 'node:child_process'
 import type { UiohookKeyboardEvent } from 'uiohook-napi'
 import type { OverlayEffect, ReplayState, Scenario, ScenarioPoint } from '@shared/types'
-import { compileScenario, describeAction, type ReplayStep } from '@shared/scenario'
+import { compileScenario, describeAction, isHoverOnly, type ReplayStep } from '@shared/scenario'
 import { createOverlayWindow, getMainWindow } from '../windows'
 import { acquireHook, releaseHook, type UioHook } from './hook'
 import { releaseAllInputs, startReplayHelper } from './inputHelper'
@@ -20,6 +20,20 @@ export interface ReplaySessionCallbacks {
   /** the helper failed; surfaced like a recording error */
   onError: (message: string) => void
 }
+
+export interface ReplaySessionOptions {
+  /** a dry run (ScenarioPreview, preview.ts): the very same replay, but no recording drives it.
+   * Its states carry `preview: true` (the overlay HUD says so) and reach the main window on
+   * 'scenario:preview-state' instead of 'recording:replay-state', so the recorder hook never
+   * mistakes a preview's abort or error for its own. */
+  preview?: boolean
+}
+
+/** where the main window hears about a replay's state (the overlay always gets 'recording:replay-state') */
+const RECORDING_STATE_CHANNEL = 'recording:replay-state'
+const PREVIEW_STATE_CHANNEL = 'scenario:preview-state'
+/** the overlay page tells its own session it is subscribed (ReplayOverlay's mount); it then gets the current state */
+const OVERLAY_READY_CHANNEL = 'overlay:ready'
 
 export function toPhysicalStep(step: ReplayStep): ReplayStep {
   if (step.op !== 'move') return step
@@ -92,9 +106,20 @@ export async function runStepsOnce(steps: ReplayStep[], convertDipToPhysical: bo
  * during the recording countdown, then (once told `go()`) lets the schedule run while
  * forwarding progress to the bar, the overlay window and the main window's HUD. Escape (real,
  * not one we just injected) or an explicit abort() stop input injection immediately, release
- * every key/button, and tell the recording to discard itself.
+ * every key/button, and tell the recording to discard itself. A dry run (ScenarioPreview,
+ * preview.ts) drives the very same session without any recording: create() with `preview`,
+ * whenOverlayReady(), go(), and its own cleanup on the same callbacks.
  */
 export class ReplaySession {
+  /** sessions from the top of create() until dispose(): a recording's replay counts from the start of
+   * RecordingController.prepare()'s create() on, before the controller itself reports active */
+  private static live = 0
+
+  /** Whether any replay - a recording's or a preview's - is starting or running. */
+  static isAnyActive(): boolean {
+    return ReplaySession.live > 0
+  }
+
   readonly total: number
   private proc: ChildProcess | null = null
   private rl: Interface | null = null
@@ -118,19 +143,44 @@ export class ReplaySession {
   private doneTimer: NodeJS.Timeout | null = null
   private readyResolve: (() => void) | null = null
   private readyReject: ((err: Error) => void) | null = null
+  /** settles once the overlay page is subscribed to the replay state, or the overlay is gone */
+  private overlayReady: Promise<void> = Promise.resolve()
 
   private constructor(
     private display: Display,
     private scenario: Scenario,
     private callbacks: ReplaySessionCallbacks,
     private stepsPath: string,
-    private abortPath: string
+    private abortPath: string,
+    private preview: boolean
   ) {
     this.total = scenario.actions.length
     this.state = { phase: 'preparing', index: 0, total: this.total }
+    // given back by dispose()
+    ReplaySession.live++
   }
 
-  static async create(display: Display, scenario: Scenario, callbacks: ReplaySessionCallbacks): Promise<ReplaySession> {
+  static async create(
+    display: Display,
+    scenario: Scenario,
+    callbacks: ReplaySessionCallbacks,
+    options: ReplaySessionOptions = {}
+  ): Promise<ReplaySession> {
+    // busy while the steps are written and the helper starts, before the session itself exists
+    ReplaySession.live++
+    try {
+      return await ReplaySession.createSession(display, scenario, callbacks, options)
+    } finally {
+      ReplaySession.live--
+    }
+  }
+
+  private static async createSession(
+    display: Display,
+    scenario: Scenario,
+    callbacks: ReplaySessionCallbacks,
+    options: ReplaySessionOptions
+  ): Promise<ReplaySession> {
     const first = scenario.actions[0]
     const startPos: ScenarioPoint =
       scenario.startPoint ?? (first ? { x: first.x, y: first.y } : { x: display.bounds.x, y: display.bounds.y })
@@ -144,7 +194,7 @@ export class ReplaySession {
     // text intact regardless of Windows PowerShell 5.1's encoding auto-detection quirks
     await fsp.writeFile(stepsPath, '﻿' + JSON.stringify(steps), 'utf8')
 
-    const session = new ReplaySession(display, scenario, callbacks, stepsPath, abortPath)
+    const session = new ReplaySession(display, scenario, callbacks, stepsPath, abortPath, options.preview === true)
     session.escapeStepTimes = dipSteps.filter((s) => s.op === 'key' && s.down && s.vk === 27).map((s) => s.t)
     try {
       await session.spawnAndWaitReady(startPos)
@@ -177,7 +227,17 @@ export class ReplaySession {
     const p = screen.dipToScreenPoint({ x: Math.round(startPos.x), y: Math.round(startPos.y) })
     this.proc.stdin?.write(`PRE ${p.x} ${p.y}\r\n`)
 
-    this.overlay = createOverlayWindow(this.display.bounds)
+    const overlay = createOverlayWindow(this.display.bounds)
+    this.overlay = overlay
+    // The page loads after this (and a recording's countdown or a preview's lead runs meanwhile):
+    // whatever state is sent before it subscribed is lost, so it asks for the current one on mount.
+    this.overlayReady = new Promise<void>((resolve) => {
+      overlay.webContents.ipc.once(OVERLAY_READY_CHANNEL, () => {
+        this.sendOverlayState()
+        resolve()
+      })
+      overlay.once('closed', () => resolve())
+    })
     this.setState({ phase: 'ready', index: 0, total: this.total })
 
     // Escape aborts the replay; a real hook (shared/ref-counted with the capture/tracker) is
@@ -187,6 +247,24 @@ export class ReplaySession {
       this.hookInstance = hook
       this.hookInstance.on('keydown', this.onRealKeyDown)
     }
+  }
+
+  /**
+   * Resolves once the overlay page shows the replay state (its HUD) and will draw every effect from
+   * here on - or once it is gone, or after `timeoutMs`, so a broken overlay never holds the replay
+   * up. A recording's countdown covers the overlay's load; a preview waits for it before go().
+   */
+  whenOverlayReady(timeoutMs: number): Promise<void> {
+    if (this.disposed || !this.overlay || this.overlay.isDestroyed()) return Promise.resolve()
+    let timer: NodeJS.Timeout | null = null
+    return Promise.race([
+      this.overlayReady,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs)
+      })
+    ]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
   }
 
   /** `meta.startedAt + 800`: the epoch the helper's Stopwatch is anchored to. */
@@ -225,6 +303,7 @@ export class ReplaySession {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    ReplaySession.live--
     if (this.doneTimer) {
       clearTimeout(this.doneTimer)
       this.doneTimer = null
@@ -349,6 +428,8 @@ export class ReplaySession {
     } else if (action.kind === 'scroll') {
       effect.deltaY = action.deltaY
       effect.deltaX = action.deltaX
+    } else if (isHoverOnly(action)) {
+      effect.hoverOnly = true
     }
     if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send('overlay:effect', effect)
   }
@@ -396,7 +477,15 @@ export class ReplaySession {
 
   private setState(state: ReplayState): void {
     this.state = state
-    getMainWindow()?.webContents.send('recording:replay-state', state)
-    if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send('recording:replay-state', state)
+    getMainWindow()?.webContents.send(this.preview ? PREVIEW_STATE_CHANNEL : RECORDING_STATE_CHANNEL, this.statePayload())
+    this.sendOverlayState()
+  }
+
+  private statePayload(): ReplayState {
+    return this.preview ? { ...this.state, preview: true } : this.state
+  }
+
+  private sendOverlayState(): void {
+    if (this.overlay && !this.overlay.isDestroyed()) this.overlay.webContents.send(RECORDING_STATE_CHANNEL, this.statePayload())
   }
 }

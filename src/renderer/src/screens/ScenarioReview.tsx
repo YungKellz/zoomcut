@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Hourglass, Play, RotateCcw, Trash2 } from 'lucide-react'
-import type { AudioCaptureOptions, DisplayInfo, ScenarioAction, ScenarioPoint, ScenarioShot } from '@shared/types'
+import { ArrowLeft, Circle, Hourglass, Play, RotateCcw, Trash2 } from 'lucide-react'
+import type { AudioCaptureOptions, DisplayInfo, ReplayState, ScenarioAction, ScenarioPoint, ScenarioPreviewResult, ScenarioShot } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE, SCENARIO_MAX_MS } from '@shared/defaults'
 import {
   DURATION_PRESETS_MS,
@@ -11,10 +11,13 @@ import {
   actionPauseMs,
   deleteAction,
   describeAction,
+  isClickAction,
+  isHoverOnly,
   moveActionStart,
   scenarioEnd,
   scenarioSchedule,
   setActionDuration,
+  setActionHoverOnly,
   setActionPause,
   setActionText,
   setAllPauses,
@@ -42,6 +45,17 @@ function shotUrl(dir: string, shot: ScenarioShot): string {
   return window.zc.media.url(`${dir}/${shot.file}`)
 }
 
+/** What a rejected IPC call says, without Electron's "Error invoking remote method ..." prefix. */
+function ipcErrorText(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+}
+
+/** The notice the review screen shows once a preview is over. */
+function previewNoticeKey(result: ScenarioPreviewResult): 'scenario.previewDone' | 'scenario.previewAborted' | 'scenario.previewFailed' {
+  return result.outcome === 'done' ? 'scenario.previewDone' : result.outcome === 'aborted' ? 'scenario.previewAborted' : 'scenario.previewFailed'
+}
+
 /** CSS-ready version of dotPositionPercent (format.ts) - the click-point dot on a thumbnail. */
 function dotStyle(shot: ScenarioShot, point: ScenarioPoint): { left: string; top: string } {
   const { left, top } = dotPositionPercent(shot, point)
@@ -50,9 +64,10 @@ function dotStyle(shot: ScenarioShot, point: ScenarioPoint): { left: string; top
 
 /**
  * Review + edit screen for a captured scenario: the action list (thumbnails, kind, timing),
- * a big preview of the selected action, the timeline below, and "Record & replay" which drives
- * a normal recording with the scenario replayed into it (screens/ReplayOverlay.tsx shows what
- * is happening on the recorded display itself).
+ * a big preview of the selected action, the timeline below, and the footer: "Record video from
+ * scenario", which drives a normal recording with the scenario replayed into it, "Preview", the
+ * same replay with nothing recorded (window.zc.scenario.preview), and Record scenario again /
+ * Delete. screens/ReplayOverlay.tsx shows what is happening on the replayed display itself.
  */
 export function ScenarioReview(): JSX.Element {
   const t = useT()
@@ -67,6 +82,12 @@ export function ScenarioReview(): JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   const [replay, setReplay] = useState<{ index: number; total: number } | null>(null)
   const [audioDefaults, setAudioDefaults] = useState<AudioCaptureOptions | null>(null)
+  /** a dry run is on screen (main hides this window meanwhile) */
+  const [previewing, setPreviewing] = useState(false)
+  /** the dry run reported its last state: main shows this window again before its result arrives */
+  const [previewOver, setPreviewOver] = useState(false)
+  /** "Record video from scenario" is looking up the display and settings, before the recorder says 'starting' */
+  const [startingReplay, setStartingReplay] = useState(false)
 
   const recorder = useRecorder(
     (project) => {
@@ -78,9 +99,9 @@ export function ScenarioReview(): JSX.Element {
     },
     () => setNotice(t('scenario.replayAborted'))
   )
-  const busy = recorder.phase !== 'idle' && recorder.phase !== 'error'
+  const busy = (recorder.phase !== 'idle' && recorder.phase !== 'error') || previewing || startingReplay
 
-  // same audio sources the home screen's checkboxes remember - just for the "Record & replay"
+  // same audio sources the home screen's checkboxes remember - just for the "Record video"
   // hint below; startReplay() re-reads settings fresh at the moment it actually starts
   useEffect(() => {
     void window.zc.app
@@ -106,10 +127,17 @@ export function ScenarioReview(): JSX.Element {
   }, [busy, refreshDisplays])
 
   useEffect(() => {
-    const off = window.zc.recording.onReplayState((s) => {
-      setReplay(s.phase === 'running' ? { index: s.index + 1, total: s.total } : null)
+    // a recording's replay and a preview report the same states, each on its own channel
+    const show = (s: ReplayState): void => setReplay(s.phase === 'running' ? { index: s.index + 1, total: s.total } : null)
+    const offRecording = window.zc.recording.onReplayState(show)
+    const offPreview = window.zc.scenario.onPreviewState((s) => {
+      show(s)
+      if (s.phase === 'done' || s.phase === 'aborted' || s.phase === 'error') setPreviewOver(true)
     })
-    return () => off()
+    return () => {
+      offRecording()
+      offPreview()
+    }
   }, [])
 
   // the right column should not be empty the moment the screen opens
@@ -159,6 +187,7 @@ export function ScenarioReview(): JSX.Element {
   const commitPause = (id: string, ms: number): void => edit(setActionPause(scenario.actions, id, ms))
   const commitText = (id: string, text: string): void => edit(setActionText(scenario.actions, id, text))
   const commitAllPauses = (ms: number): void => edit(setAllPauses(scenario.actions, ms))
+  const commitHoverOnly = (id: string, on: boolean): void => edit(setActionHoverOnly(scenario.actions, id, on))
 
   const endMs = useMemo(() => scenarioEnd(scenario.actions), [scenario.actions])
   const over = endMs > SCENARIO_MAX_MS
@@ -182,12 +211,35 @@ export function ScenarioReview(): JSX.Element {
     // this one - NoticeBar (App.tsx) shows store.notice across screens, so it otherwise outlives
     // this component
     useStore.getState().setNotice(null)
-    const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
-    const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
-    if (target === undefined) return
-    // the replay recording captures the same audio sources the user picked on the home screen
-    const audio = audioOverride === undefined ? settings.audioDefaults : audioOverride
-    await recorder.start(target, { scenario, audio: audio ?? undefined })
+    // busy from the click on: Preview must not start next to a recording that is still starting
+    setStartingReplay(true)
+    try {
+      const [list, settings] = await Promise.all([window.zc.displays.list(), window.zc.app.getSettings()])
+      const target = list.some((d) => d.id === scenario.displayId) ? scenario.displayId : (list.find((d) => d.primary) ?? list[0])?.id
+      if (target === undefined) return
+      // the replay recording captures the same audio sources the user picked on the home screen
+      const audio = audioOverride === undefined ? settings.audioDefaults : audioOverride
+      await recorder.start(target, { scenario, audio: audio ?? undefined })
+    } finally {
+      setStartingReplay(false)
+    }
+  }
+
+  // "Preview": the replay of a recording, on the same display, with nothing recorded. Main hides
+  // this window for the run and answers once it is over (finished, Escape / Stop, failed).
+  const startPreview = async (): Promise<void> => {
+    setNotice(null)
+    setPreviewOver(false)
+    setPreviewing(true)
+    try {
+      const result = await window.zc.scenario.preview(scenario)
+      setNotice(t(previewNoticeKey(result), { error: result.message ?? '' }))
+    } catch (err) {
+      setNotice(t('scenario.previewFailed', { error: ipcErrorText(err) }))
+    } finally {
+      setPreviewing(false)
+      setReplay(null)
+    }
   }
 
   // "Record again" on a recording opens its scenario with a replay already queued: start it like the button
@@ -211,14 +263,6 @@ export function ScenarioReview(): JSX.Element {
           spellCheck={false}
           aria-label={t('scenario.nameLabel')}
         />
-        <div className="editor-top-file">
-          <button className="btn btn-ghost btn-small danger" onClick={() => void deleteOpenScenario(scenario)} disabled={busy} title={t('editor.deleteScenarioTitle')}>
-            <Trash2 size={14} /> {t('common.delete')}
-          </button>
-          <button className="btn btn-ghost btn-small" onClick={() => void recaptureScenario(scenario)} disabled={busy} title={t('editor.recaptureTitle')}>
-            <RotateCcw size={14} /> {t('editor.recordAgain')}
-          </button>
-        </div>
         <span className="muted scenario-display">
           {displayLabel} · {sizeLabel}
         </span>
@@ -247,6 +291,7 @@ export function ScenarioReview(): JSX.Element {
                   onSelect={setSelectedId}
                   onCommitDuration={commitDuration}
                   onCommitText={commitText}
+                  onCommitHoverOnly={commitHoverOnly}
                   onDelete={removeAction}
                 />
                 <ScenarioPauseRow action={a} onCommit={commitPause} />
@@ -284,18 +329,60 @@ export function ScenarioReview(): JSX.Element {
           </div>
         )}
         <div className="scenario-footer-row">
-          <button className="btn btn-primary btn-replay" disabled={validationMessage !== null || busy} onClick={() => void startReplay()}>
-            <Play size={16} /> {t('scenario.replay')}
+          <button
+            className="btn btn-record btn-replay"
+            disabled={validationMessage !== null || busy}
+            onClick={() => void startReplay()}
+            title={t('scenario.replayTitle')}
+          >
+            <Circle size={16} fill="currentColor" /> {t('scenario.replay')}
+          </button>
+          <button
+            className="btn btn-preview"
+            disabled={validationMessage !== null || busy}
+            onClick={() => void startPreview()}
+            title={t('scenario.previewTitle')}
+          >
+            <Play size={16} /> {t('scenario.preview')}
           </button>
           <span className="muted small scenario-audio-hint">{t(audioHintKey(audioDefaults))}</span>
           <p className={validationMessage ? 'scenario-validation' : 'muted'}>{validationMessage ?? t('scenario.replayHelp')}</p>
+          <div className="scenario-footer-file">
+            <button
+              className="btn btn-ghost btn-small scenario-recapture"
+              onClick={(e) => void recaptureScenario(scenario, e.currentTarget)}
+              disabled={busy}
+              title={t('editor.recaptureTitle')}
+            >
+              <RotateCcw size={14} /> {t('scenario.recordScenarioAgain')}
+            </button>
+            <button
+              className="btn btn-ghost btn-small danger scenario-review-delete"
+              onClick={(e) => void deleteOpenScenario(scenario, e.currentTarget)}
+              disabled={busy}
+              title={t('editor.deleteScenarioTitle')}
+            >
+              <Trash2 size={14} /> {t('common.delete')}
+            </button>
+          </div>
         </div>
       </footer>
 
-      {busy && (
+      {/* a finished preview's window is back a moment before its result: no "Preparing" card then */}
+      {busy && !(previewing && previewOver) && (
         <div className="overlay">
           <div className="overlay-card">
-            {recorder.phase === 'starting' && <p>{t('home.preparing')}</p>}
+            {previewing && (
+              <>
+                <p>{replay ? t('scenario.previewing', { index: replay.index, total: replay.total }) : t('scenario.previewPreparing')}</p>
+                <button className="btn btn-small scenario-preview-stop" onClick={() => void window.zc.scenario.abortPreview()}>
+                  {t('scenario.previewStop')}
+                </button>
+              </>
+            )}
+            {(recorder.phase === 'starting' || (startingReplay && (recorder.phase === 'idle' || recorder.phase === 'error'))) && (
+              <p>{t('home.preparing')}</p>
+            )}
             {recorder.phase === 'countdown' && <p>{t('home.countdown')}</p>}
             {recorder.phase === 'recording' && (
               <p>{t('scenario.replaying', { index: replay?.index ?? 1, total: replay?.total ?? scenario.actions.length })}</p>
@@ -329,6 +416,7 @@ interface ActionRowProps {
   onSelect: (id: string) => void
   onCommitDuration: (id: string, ms: number) => void
   onCommitText: (id: string, text: string) => void
+  onCommitHoverOnly: (id: string, on: boolean) => void
   onDelete: (id: string) => void
 }
 
@@ -348,15 +436,17 @@ function useDurationPresets(action: ScenarioAction): Preset[] {
 }
 
 /**
- * One action of the list: thumbnail, kind + start time, the typed text (editable) or key label,
- * and how long the action takes. Text and numbers keep a local draft and commit on blur / Enter
- * only (see SecondsInput) - the text field the same way, Escape reverts, an empty text reverts.
+ * One action of the list: thumbnail, kind + start time, the typed text (editable), the key label
+ * or - for a click - the "position only, no click" switch, and how long the action takes (presets,
+ * then the field, at the right edge). Text and numbers keep a local draft and commit on blur /
+ * Enter only (see SecondsInput) - the text field the same way, Escape reverts, an empty text reverts.
  */
 function ScenarioActionRow(props: ActionRowProps): JSX.Element {
-  const { action, index, startMs, scenarioDir, selected, onSelect, onCommitDuration, onCommitText, onDelete } = props
+  const { action, index, startMs, scenarioDir, selected, onSelect, onCommitDuration, onCommitText, onCommitHoverOnly, onDelete } = props
   const t = useT()
-  const Icon = KIND_ICON[action.kind]
   const desc = describeAction(action)
+  const Icon = KIND_ICON[desc.kindKey]
+  const hover = isHoverOnly(action)
   const [shotFailed, setShotFailed] = useState(false)
   const [textDraft, setTextDraft] = useState<string | null>(null)
   const revertText = useRef(false)
@@ -365,7 +455,7 @@ function ScenarioActionRow(props: ActionRowProps): JSX.Element {
 
   return (
     <li
-      className={'scenario-action' + (selected ? ' selected' : '')}
+      className={'scenario-action' + (selected ? ' selected' : '') + (hover ? ' hover-only' : '')}
       data-kind={action.kind}
       data-id={action.id}
       onClick={() => onSelect(action.id)}
@@ -374,7 +464,7 @@ function ScenarioActionRow(props: ActionRowProps): JSX.Element {
         {action.shot && !shotFailed ? (
           <>
             <img src={shotUrl(scenarioDir, action.shot)} alt="" loading="lazy" decoding="async" onError={() => setShotFailed(true)} />
-            <span className="scenario-action-dot" style={dotStyle(action.shot, action)} />
+            <span className={'scenario-action-dot' + (hover ? ' hover' : '')} style={dotStyle(action.shot, action)} />
           </>
         ) : (
           <span className="scenario-action-placeholder">
@@ -385,7 +475,7 @@ function ScenarioActionRow(props: ActionRowProps): JSX.Element {
       <div className="scenario-action-main">
         <div className="scenario-action-head">
           <span className="scenario-action-label">
-            <Icon size={13} /> {t(KIND_LABEL_KEY[action.kind])} <span className="muted">#{index + 1}</span>
+            <Icon size={13} /> {t(KIND_LABEL_KEY[desc.kindKey])} <span className="muted">#{index + 1}</span>
           </span>
           <span className="scenario-action-start muted" title={t('scenario.startsAt')}>
             {formatStartTime(startMs)}
@@ -425,22 +515,30 @@ function ScenarioActionRow(props: ActionRowProps): JSX.Element {
           />
         )}
         {action.kind === 'key' && <span className="scenario-action-detail">{desc.detail}</span>}
+        {isClickAction(action) && (
+          <label className="scenario-hover-toggle" title={t('scenario.hoverOnlyTitle')}>
+            <input type="checkbox" checked={hover} onChange={(e) => onCommitHoverOnly(action.id, e.target.checked)} />
+            {t('scenario.hoverOnly')}
+          </label>
+        )}
         <div className="scenario-action-controls">
           <span className="scenario-field-label">{t('scenario.durationLabel')}</span>
-          <SecondsInput
-            className="scenario-action-duration"
-            value={duration}
-            ariaLabel={t('scenario.durationLabel')}
-            onCommit={(ms) => onCommitDuration(action.id, ms)}
-          />
-          <PresetButtons presets={presets} current={duration} onPick={(ms) => onCommitDuration(action.id, ms)} />
+          <span className="scenario-timing">
+            <PresetButtons presets={presets} current={duration} onPick={(ms) => onCommitDuration(action.id, ms)} />
+            <SecondsInput
+              className="scenario-action-duration"
+              value={duration}
+              ariaLabel={t('scenario.durationLabel')}
+              onCommit={(ms) => onCommitDuration(action.id, ms)}
+            />
+          </span>
         </div>
       </div>
     </li>
   )
 }
 
-/** The pause that follows an action: always there, never deletable, not selectable. */
+/** The pause that follows an action: always there, never deletable, not selectable. Presets, then the field, at the right edge. */
 function ScenarioPauseRow({ action, onCommit }: { action: ScenarioAction; onCommit: (id: string, ms: number) => void }): JSX.Element {
   const t = useT()
   const presets = useSecondsPresets(PAUSE_PRESETS_MS)
@@ -450,8 +548,10 @@ function ScenarioPauseRow({ action, onCommit }: { action: ScenarioAction; onComm
       <span className="scenario-pause-label">
         <Hourglass size={13} /> {t('scenario.pause')}
       </span>
-      <SecondsInput className="scenario-pause-input" value={pause} ariaLabel={t('scenario.pause')} onCommit={(ms) => onCommit(action.id, ms)} />
-      <PresetButtons presets={presets} current={pause} onPick={(ms) => onCommit(action.id, ms)} />
+      <span className="scenario-timing">
+        <PresetButtons presets={presets} current={pause} onPick={(ms) => onCommit(action.id, ms)} />
+        <SecondsInput className="scenario-pause-input" value={pause} ariaLabel={t('scenario.pause')} onCommit={(ms) => onCommit(action.id, ms)} />
+      </span>
     </li>
   )
 }
@@ -519,11 +619,15 @@ function ActionPreview({ action, dir }: { action: ScenarioAction; dir: string })
   const desc = describeAction(action)
   const lang = useI18n((st) => st.lang)
   const [shotFailed, setShotFailed] = useState(false)
+  const hover = isHoverOnly(action)
+  // a hover presses nothing, so it holds no modifier either, whatever was captured with the click
   const activeMods: string[] = []
-  if (action.modifiers.ctrl) activeMods.push('Ctrl')
-  if (action.modifiers.shift) activeMods.push('Shift')
-  if (action.modifiers.alt) activeMods.push('Alt')
-  if (action.modifiers.meta) activeMods.push('Win')
+  if (!hover) {
+    if (action.modifiers.ctrl) activeMods.push('Ctrl')
+    if (action.modifiers.shift) activeMods.push('Shift')
+    if (action.modifiers.alt) activeMods.push('Alt')
+    if (action.modifiers.meta) activeMods.push('Win')
+  }
   const mods = activeMods.length > 0 ? activeMods.join('+') : t('scenario.detailModifiersNone')
 
   return (
@@ -532,7 +636,7 @@ function ActionPreview({ action, dir }: { action: ScenarioAction; dir: string })
         {action.shot && !shotFailed ? (
           <>
             <img src={shotUrl(dir, action.shot)} alt="" loading="lazy" decoding="async" onError={() => setShotFailed(true)} />
-            <span className="scenario-preview-marker" style={dotStyle(action.shot, action)} />
+            <span className={'scenario-preview-marker' + (hover ? ' hover' : '')} style={dotStyle(action.shot, action)} />
           </>
         ) : (
           <div className="scenario-preview-placeholder">

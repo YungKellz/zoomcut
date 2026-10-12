@@ -27,6 +27,7 @@ import type {
   ReplayState,
   Scenario,
   ScenarioCaptureState,
+  ScenarioPreviewResult,
   ScenarioSummary,
   UpdateState,
   VideoFileInfo
@@ -140,10 +141,23 @@ export interface ZcApi {
     load(id: string): Promise<Scenario>
     save(scenario: Scenario): Promise<void>
     remove(id: string): Promise<void>
+    /** Dry run ("Preview"): replays the scenario on its display exactly like "Record video from
+     * scenario" does - real cursor travel, clicks and typing, the same timing and the replay
+     * overlay - but records nothing. The main window hides for the run and comes back afterwards;
+     * Escape aborts. Resolves once the run is over; rejects when it cannot start (a recording, a
+     * capture or another preview is running, the scenario is empty or too long, the helper failed
+     * to start). */
+    preview(scenario: Scenario): Promise<ScenarioPreviewResult>
+    /** Stops a running preview like Escape does; a no-op when none runs. */
+    abortPreview(): Promise<void>
+    /** progress of a running preview: the same ReplayState a recording's replay reports, with preview: true */
+    onPreviewState(cb: (s: ReplayState) => void): Unsubscribe
   }
   overlay: {
     onEffect(cb: (e: OverlayEffect) => void): Unsubscribe
     onReplayState(cb: (s: ReplayState) => void): Unsubscribe
+    /** the overlay page is subscribed: its replay session answers with the current state */
+    ready(): void
   }
   // ---- composition ----
   compositions: {
@@ -158,6 +172,10 @@ export interface ZcApi {
   converter: {
     /** native file picker for a video; probes the chosen file. null when cancelled. */
     chooseVideo(): Promise<VideoFileInfo | null>
+    /** the disk path of a File dropped onto the window (File.path no longer exists); '' when it has none */
+    pathForFile(file: File): string
+    /** validates and probes a video file given by path (a file dropped onto the app); rejects when it is not a usable video */
+    probe(path: string): Promise<VideoFileInfo>
     /** converts a video file into a GIF with ffmpeg's two-pass palette (one conversion at a time) */
     toGif(req: GifConvertRequest): Promise<ExportFinishResult>
     cancel(): Promise<void>

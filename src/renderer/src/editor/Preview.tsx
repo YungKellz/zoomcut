@@ -1,14 +1,14 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Pause, Play, RotateCcw, SkipBack, X } from 'lucide-react'
+import { Pause, Play, RotateCcw, SkipBack, StepBack, StepForward } from 'lucide-react'
 import type { BlurRegion, CropRect, Project, WindowRect } from '@shared/types'
-import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore, type PickRect } from '../store'
+import { PICK_MAX_SIZE, PICK_MIN_SIZE, useProject, useStore } from '../store'
 import type { FollowPath } from '../engine/cursor'
-import { zoomAreas } from '../engine/camera'
+import { clampPickCenter, pickSnapThreshold, resizePickRect, snapPickCenter, type PickCorner } from '../engine/pickRect'
 import { blurIsActive, composeFrame, layoutText, outputSize, textIsActive, TRANSPARENT_BACKGROUND, type OutputSize } from '../engine/compose'
-import { keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
-import { uniqueWindows, windowToCrop } from '../engine/windows'
+import { displayTime, keepSegments, lastKeptTime, outputDuration, srcToOut, type Segment } from '../engine/timeline'
+import { cropFromWindows, pageToCrop, uniqueWindows, windowAt, windowToCrop } from '../engine/windows'
 import { formatTimecode } from '../util/format'
 import { clamp } from '../util/format'
 import { useT } from '../i18n'
@@ -53,7 +53,14 @@ function nextSegmentIndex(segments: Segment[], t: number): number {
   return segments.findIndex((s) => s.start > t - 1)
 }
 
-type Corner = 'nw' | 'ne' | 'sw' | 'se'
+/**
+ * `tMs` is at or past the end of the video file. The file can be a hair shorter than the duration
+ * stored in the project (the probed length is rounded), and playing an ended <video> restarts it from 0,
+ * so nothing may ever be played from such a time.
+ */
+function pastMediaEnd(video: HTMLVideoElement, tMs: number): boolean {
+  return Number.isFinite(video.duration) && tMs >= video.duration * 1000 - 1
+}
 
 /**
  * Preview player. Two <video> elements share the source: while one plays a kept
@@ -69,13 +76,12 @@ export function Preview({ followPath }: Props): JSX.Element {
   const selection = useStore((s) => s.selection)
   const playheadMs = useStore((s) => s.playheadMs)
   const pickRect = useStore((s) => s.pickRect)
-  const pickArea = useStore((s) => s.pickArea)
   const setPickRect = useStore((s) => s.setPickRect)
-  const applyPick = useStore((s) => s.applyPick)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const togglePlay = useStore((s) => s.togglePlay)
   const playFromStart = useStore((s) => s.playFromStart)
+  const stepFrame = useStore((s) => s.stepFrame)
   const updateText = useStore((s) => s.updateText)
   const setCrop = useStore((s) => s.setCrop)
   const checkpoint = useStore((s) => s.checkpoint)
@@ -91,7 +97,10 @@ export function Preview({ followPath }: Props): JSX.Element {
   const standby = useRef<{ segIndex: number; ready: boolean }>({ segIndex: -1, ready: false })
   const [readyCount, setReadyCount] = useState(0)
   const ready = readyCount >= 2
-  const [hoverWindow, setHoverWindow] = useState<number | null>(null)
+  const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
+  // crop mode: the window (or a browser's page) a click would crop to
+  const [hoverWindow, setHoverWindow] = useState<WindowHit | null>(null)
+  const windowHitRef = useRef<HTMLDivElement>(null)
 
   const activeVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoARef.current : videoBRef.current), [])
   const standbyVideo = useCallback((): HTMLVideoElement | null => (activeRef.current === 0 ? videoBRef.current : videoARef.current), [])
@@ -153,7 +162,8 @@ export function Preview({ followPath }: Props): JSX.Element {
   useEffect(() => {
     const video = activeVideo()
     if (!video || !ready) return
-    const tSec = useStore.getState().playheadMs / 1000
+    const { segments: segs, project: p } = latest.current
+    const tSec = displayTime(useStore.getState().playheadMs, 1000 / (p.recording.fps || 30), segs) / 1000
     if (Math.abs(video.currentTime - tSec) > 0.001) video.currentTime = tSec
     standby.current = { segIndex: -1, ready: false }
   }, [seekSeq, ready, activeVideo])
@@ -175,6 +185,18 @@ export function Preview({ followPath }: Props): JSX.Element {
         }
         target = segs[idx].start
       }
+      if (pastMediaEnd(video, target)) {
+        // the playhead sits between the end of the file and the project's duration: there is nothing left
+        // to play from here, so start over like Play at the end does (play() on an ended video would
+        // restart it from 0 behind the playhead's back)
+        idx = 0
+        target = segs[0].start
+        if (pastMediaEnd(video, target)) {
+          setPlaying(false)
+          return
+        }
+        setPlayhead(target)
+      }
       if (Math.abs(video.currentTime * 1000 - target) > 30) video.currentTime = target / 1000
       void video.play().catch(() => setPlaying(false))
       prepareStandby(idx + 1)
@@ -182,7 +204,7 @@ export function Preview({ followPath }: Props): JSX.Element {
       videoARef.current?.pause()
       videoBRef.current?.pause()
     }
-  }, [playing, ready, setPlaying, activeVideo, prepareStandby])
+  }, [playing, ready, setPlaying, setPlayhead, activeVideo, prepareStandby])
 
   // render loop
   useEffect(() => {
@@ -204,7 +226,9 @@ export function Preview({ followPath }: Props): JSX.Element {
         const idx = segmentIndexAt(segs, vt)
         if (idx === -1) {
           const nextIdx = nextSegmentIndex(segs, vt)
-          if (nextIdx === -1 || active.ended) {
+          // the rest of the output lies past the end of the file: swapping to a player that is seeked
+          // there would play an ended video, which restarts from 0 and loops the preview
+          if (nextIdx === -1 || active.ended || pastMediaEnd(active, segs[nextIdx].start)) {
             active.pause()
             useStore.getState().setPlaying(false)
             useStore.getState().setPlayhead(lastKeptTime(segs), true)
@@ -286,7 +310,6 @@ export function Preview({ followPath }: Props): JSX.Element {
   }
 
   // ---- pick area (zoom target) ----
-  const pickedZoom = selection?.kind === 'zoom' ? project.zooms.find((z) => z.id === selection.id) : undefined
   const pickPx: PxRect | null = pickRect
     ? {
         x: (pickRect.cx - pickRect.size / 2) * size.outW,
@@ -296,60 +319,81 @@ export function Preview({ followPath }: Props): JSX.Element {
       }
     : null
 
-  const clampCenter = (r: PickRect): PickRect => ({
-    ...r,
-    cx: clamp(r.cx, r.size / 2, 1 - r.size / 2),
-    cy: clamp(r.cy, r.size / 2, 1 - r.size / 2)
-  })
+  /** the frame's centre guide lines that are lit while Shift pulls the rectangle onto them */
+  const showSnapGuide = (x: boolean, y: boolean): void => setSnapGuide((cur) => (cur.x === x && cur.y === y ? cur : { x, y }))
 
+  /**
+   * One drag of the pick rectangle: pointer capture on the pressed element, `apply` runs on every
+   * pointer move and again whenever Shift or Alt is pressed or released mid-drag (with the last
+   * pointer position), so a held modifier takes effect without having to wiggle the mouse.
+   */
+  const trackPickDrag = (e: React.PointerEvent, apply: (pointer: { x: number; y: number }, mods: { shift: boolean; alt: boolean }) => void): void => {
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    let pointer = { x: e.clientX, y: e.clientY }
+    let mods = { shift: e.shiftKey, alt: e.altKey }
+    const move = (ev: PointerEvent): void => {
+      pointer = { x: ev.clientX, y: ev.clientY }
+      mods = { shift: ev.shiftKey, alt: ev.altKey }
+      apply(pointer, mods)
+    }
+    const key = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Shift' && ev.key !== 'Alt') return
+      mods = { shift: ev.shiftKey, alt: ev.altKey }
+      apply(pointer, mods)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      window.removeEventListener('keydown', key)
+      window.removeEventListener('keyup', key)
+      showSnapGuide(false, false)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+    window.addEventListener('keydown', key)
+    window.addEventListener('keyup', key)
+  }
+
+  /** Moving: with Shift the centre snaps to the frame's vertical / horizontal centre lines. */
   const startPickMove = (e: React.PointerEvent): void => {
     if (!pickRect) return
     e.preventDefault()
     e.stopPropagation()
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
     const origin = { ...pickRect }
     const sx = e.clientX
     const sy = e.clientY
-    const move = (ev: PointerEvent): void => {
-      setPickRect(clampCenter({ ...origin, cx: origin.cx + (ev.clientX - sx) / size.outW, cy: origin.cy + (ev.clientY - sy) / size.outH }))
-    }
-    const up = (): void => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', up)
-    }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', up)
+    trackPickDrag(e, (pointer, mods) => {
+      const moved = clampPickCenter({ ...origin, cx: origin.cx + (pointer.x - sx) / size.outW, cy: origin.cy + (pointer.y - sy) / size.outH })
+      if (!mods.shift) {
+        setPickRect(moved)
+        showSnapGuide(false, false)
+        return
+      }
+      const snapped = snapPickCenter(moved, pickSnapThreshold(size.outW), pickSnapThreshold(size.outH))
+      setPickRect(snapped.rect)
+      showSnapGuide(snapped.x, snapped.y)
+    })
   }
 
-  const startPickResize = (corner: Corner) => (e: React.PointerEvent) => {
+  /**
+   * Resizing by a corner: the opposite corner stays put; with Alt the centre stays put instead and
+   * the rectangle grows or shrinks in every direction. (Shift's magnet is for moving only: the
+   * rectangle is square in frame units, so one size cannot put the centre on both lines.)
+   */
+  const startPickResize = (corner: PickCorner) => (e: React.PointerEvent) => {
     if (!pickRect) return
     e.preventDefault()
     e.stopPropagation()
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
-    const stage = el.closest('.preview-stage')?.getBoundingClientRect()
+    const stage = (e.currentTarget as HTMLElement).closest('.preview-stage')?.getBoundingClientRect()
     if (!stage) return
-    const half = pickRect.size / 2
-    // the opposite corner stays where it is
-    const ax = corner.includes('w') ? pickRect.cx + half : pickRect.cx - half
-    const ay = corner.includes('n') ? pickRect.cy + half : pickRect.cy - half
-    const sxDir = corner.includes('w') ? -1 : 1
-    const syDir = corner.includes('n') ? -1 : 1
-    const move = (ev: PointerEvent): void => {
-      const px = (ev.clientX - stage.left) / size.outW
-      const py = (ev.clientY - stage.top) / size.outH
-      const avail = Math.min(sxDir > 0 ? 1 - ax : ax, syDir > 0 ? 1 - ay : ay)
-      const wanted = Math.max((px - ax) * sxDir, (py - ay) * syDir)
-      const s = clamp(wanted, PICK_MIN_SIZE, Math.min(PICK_MAX_SIZE, avail))
-      setPickRect({ cx: ax + (sxDir * s) / 2, cy: ay + (syDir * s) / 2, size: s })
-    }
-    const up = (): void => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', up)
-    }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', up)
+    const start = { ...pickRect }
+    trackPickDrag(e, (pointer, mods) => {
+      const at = { x: (pointer.x - stage.left) / size.outW, y: (pointer.y - stage.top) / size.outH }
+      setPickRect(resizePickRect(start, corner, at, PICK_MIN_SIZE, PICK_MAX_SIZE, mods.alt))
+    })
   }
 
   // ---- blur regions ----
@@ -391,12 +435,34 @@ export function Preview({ followPath }: Props): JSX.Element {
     }
     if (mode !== 'pickTarget' || !pickRect) return
     const rect = e.currentTarget.getBoundingClientRect()
-    setPickRect(clampCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
+    setPickRect(clampPickCenter({ ...pickRect, cx: (e.clientX - rect.left) / rect.width, cy: (e.clientY - rect.top) / rect.height }))
   }
 
-  const cropToWindow = (w: WindowRect): void => {
+  // Crop mode: a click anywhere on a window crops to it – on a browser's page to the page only – also
+  // inside the crop rectangle, which covers the whole picture until something is cropped (a drag there
+  // still moves the rectangle), as long as the crop is the whole frame or came from a window: a crop
+  // adjusted by hand is never replaced by a click inside it. The outlines are only a picture; the hit
+  // layer and the rectangle ask here.
+  const pickInsideCrop = windows.length > 0 && cropFromWindows(project.crop, windows)
+  // dragged by hand: the window highlighted inside the rectangle is no longer what a click picks
+  useEffect(() => {
+    if (!pickInsideCrop) setHoverWindow(null)
+  }, [pickInsideCrop])
+  const windowAtClient = (clientX: number, clientY: number): WindowHit | null => {
+    const rect = windowHitRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0 || rect.height === 0) return null
+    return windowAt(windows, (clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height)
+  }
+  const hoverWindowAt = (clientX: number, clientY: number): void => {
+    const next = windowAtClient(clientX, clientY)
+    setHoverWindow((cur) => (cur?.index === next?.index && cur?.page === next?.page ? cur : next))
+  }
+  const cropToWindowAt = (clientX: number, clientY: number): void => {
+    const hit = windowAtClient(clientX, clientY)
+    if (!hit) return
+    const w = windows[hit.index]
     checkpoint()
-    setCrop(windowToCrop(w), false)
+    setCrop((hit.page ? pageToCrop(w) : null) ?? windowToCrop(w), false)
   }
 
   const cropPx: PxRect = { x: project.crop.x * size.outW, y: project.crop.y * size.outH, w: project.crop.w * size.outW, h: project.crop.h * size.outH }
@@ -425,11 +491,14 @@ export function Preview({ followPath }: Props): JSX.Element {
 
           {mode === 'pickTarget' && pickPx && (
             <div className="pick-rect" style={{ left: pickPx.x, top: pickPx.y, width: pickPx.w, height: pickPx.h }} onPointerDown={startPickMove}>
-              {(['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+              <div className="pick-grid" />
+              {(['nw', 'ne', 'sw', 'se'] as PickCorner[]).map((c) => (
                 <div key={c} className={`pick-handle pick-${c}`} onPointerDown={startPickResize(c)} />
               ))}
             </div>
           )}
+          {mode === 'pickTarget' && snapGuide.x && <div className="pick-guide pick-guide-v" />}
+          {mode === 'pickTarget' && snapGuide.y && <div className="pick-guide pick-guide-h" />}
 
           {blurMode &&
             otherBlurs.map((b) => {
@@ -459,58 +528,65 @@ export function Preview({ followPath }: Props): JSX.Element {
           )}
 
           {mode === 'crop' && <CropShade crop={cropPx} stage={size} />}
-          {mode === 'crop' &&
-            windows.map((w, i) => (
-              <div
-                key={i}
-                className={'win-outline' + (hoverWindow === i ? ' hover' : '')}
-                style={{ left: w.x * size.outW, top: w.y * size.outH, width: w.w * size.outW, height: w.h * size.outH }}
-                title={w.title}
-                onPointerEnter={() => setHoverWindow(i)}
-                onPointerLeave={() => setHoverWindow((cur) => (cur === i ? null : cur))}
-                onPointerDown={(e) => {
-                  e.stopPropagation()
-                  cropToWindow(w)
-                }}
-              >
-                <span>{w.title}</span>
-              </div>
-            ))}
-          {mode === 'crop' && <CropEditor crop={project.crop} size={size} onChange={(c, commit) => setCrop(c, commit)} onBegin={checkpoint} />}
+          {mode === 'crop' && windows.length > 0 && (
+            <div
+              ref={windowHitRef}
+              className={'win-hit' + (hoverWindow ? ' over' : '')}
+              onPointerMove={(e) => hoverWindowAt(e.clientX, e.clientY)}
+              onPointerLeave={() => setHoverWindow(null)}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                cropToWindowAt(e.clientX, e.clientY)
+              }}
+            />
+          )}
+          {mode === 'crop' && <WindowOutlines windows={windows} size={size} hover={hoverWindow} pageLabel={t('clip.pageOnly')} />}
+          {mode === 'crop' && (
+            <CropEditor
+              crop={project.crop}
+              size={size}
+              // nothing cropped yet: the rectangle cannot move, so over a window a click is all it does
+              className={'crop-rect' + (hoverWindow && project.crop.w >= 1 && project.crop.h >= 1 ? ' pick-window' : '')}
+              onChange={(c, commit) => setCrop(c, commit)}
+              onBegin={checkpoint}
+              onTap={pickInsideCrop ? cropToWindowAt : undefined}
+              onHover={pickInsideCrop ? hoverWindowAt : undefined}
+              onHoverEnd={() => setHoverWindow(null)}
+            />
+          )}
         </div>
       </div>
 
       <div className="preview-controls">
-        <button
-          className="btn btn-ghost"
-          onClick={() => {
-            setPlaying(false)
-            setPlayhead(segments[0]?.start ?? 0, true)
-          }}
-          title={t('preview.goStart')}
-        >
-          <SkipBack size={16} />
-        </button>
-        <button className="btn btn-ghost" onClick={playFromStart} disabled={mode !== 'normal'} title={t('preview.playFromStart')}>
-          <RotateCcw size={16} />
-        </button>
-        <button className="btn btn-ghost" onClick={togglePlay} disabled={mode !== 'normal'} title={t('preview.playPause')}>
-          {playing ? <Pause size={18} /> : <Play size={18} />}
-        </button>
+        <div className="transport">
+          <button
+            className="btn btn-ghost"
+            data-action="go-start"
+            onClick={() => {
+              setPlaying(false)
+              setPlayhead(segments[0]?.start ?? 0, true)
+            }}
+            title={t('preview.goStart')}
+          >
+            <SkipBack size={16} />
+          </button>
+          <button className="btn btn-ghost" data-action="play-from-start" onClick={playFromStart} disabled={mode !== 'normal'} title={t('preview.playFromStart')}>
+            <RotateCcw size={16} />
+          </button>
+          <span className="transport-sep" />
+          <button className="btn btn-ghost" data-action="step-back" onClick={() => stepFrame(-1)} disabled={mode !== 'normal'} title={t('preview.stepBack')}>
+            <StepBack size={16} />
+          </button>
+          <button className="btn btn-ghost" data-action="play" data-playing={playing} onClick={togglePlay} disabled={mode !== 'normal'} title={t('preview.playPause')}>
+            {playing ? <Pause size={18} /> : <Play size={18} />}
+          </button>
+          <button className="btn btn-ghost" data-action="step-forward" onClick={() => stepFrame(1)} disabled={mode !== 'normal'} title={t('preview.stepForward')}>
+            <StepForward size={16} />
+          </button>
+        </div>
         <span className="timecode">{formatTimecode(srcToOut(playheadMs, segments))}</span>
         <span className="muted">/ {formatTimecode(outDur)}</span>
         <span className="muted small source-time">{t('preview.sourceTime', { time: formatTimecode(playheadMs) })}</span>
-        {mode === 'pickTarget' && (
-          <span className="hint">
-            {pickedZoom && zoomAreas(pickedZoom).length > 1 ? t('preview.pickPartHint', { n: pickArea + 1 }) : t('preview.pickHint')}{' '}
-            <button className="btn btn-small btn-primary" onClick={applyPick}>
-              <Check size={13} /> {t('common.apply')}
-            </button>{' '}
-            <button className="btn btn-small" onClick={() => setMode('normal')}>
-              <X size={13} /> {t('common.cancel')}
-            </button>
-          </span>
-        )}
         {blurMode && (
           <span className="hint">
             {selectedBlur && !blurIsActive(selectedBlur, playheadMs) ? t('blur.inactiveHint') + ' ' : ''}
@@ -522,7 +598,7 @@ export function Preview({ followPath }: Props): JSX.Element {
         )}
         {mode === 'crop' && (
           <span className="hint">
-            {windows.length > 0 ? t('preview.cropWindowHint') + ' ' : ''}
+            {windows.length > 0 ? t(windows.some((w) => w.content) ? 'clip.cropPageHint' : 'preview.cropWindowHint') + ' ' : ''}
             {t('preview.cropHint')}{' '}
             <button className="link" onClick={() => setMode('normal')}>
               {t('common.done')}
@@ -550,6 +626,42 @@ function CropShade({ crop, stage }: { crop: PxRect; stage: OutputSize }): JSX.El
   )
 }
 
+/** A window under the pointer in crop mode, and whether it is over that browser window's page. */
+type WindowHit = { index: number; page: boolean }
+
+/**
+ * Crop mode: outlines of the windows on the recording, with the page of browser windows as an inner
+ * outline. Back to front, so the frontmost window is drawn last. Only a picture – the clicks go to the
+ * hit layer and the crop rectangle, which pick the window through `windowAt`.
+ */
+function WindowOutlines({ windows, size, hover, pageLabel }: { windows: WindowRect[]; size: OutputSize; hover: WindowHit | null; pageLabel: string }): JSX.Element {
+  const W = size.outW
+  const H = size.outH
+  const order = windows.map((w, i) => ({ w, i })).reverse()
+  return (
+    <>
+      {order.flatMap(({ w, i }) => [
+        <div
+          key={`w${i}`}
+          className={'win-outline' + (hover?.index === i && !hover.page ? ' hover' : '')}
+          style={{ left: w.x * W, top: w.y * H, width: w.w * W, height: w.h * H }}
+        >
+          <span>{w.title}</span>
+        </div>,
+        w.content && (
+          <div
+            key={`p${i}`}
+            className={'win-page' + (hover?.index === i && hover.page ? ' hover' : '')}
+            style={{ left: w.content.x * W, top: w.content.y * H, width: w.content.w * W, height: w.content.h * H }}
+          >
+            <span>{pageLabel}</span>
+          </div>
+        )
+      ])}
+    </>
+  )
+}
+
 interface CropEditorProps {
   crop: CropRect
   size: OutputSize
@@ -558,11 +670,16 @@ interface CropEditorProps {
   /** smallest width/height, normalized to the stage */
   min?: number
   className?: string
+  /** a click on the rectangle that did not drag it (crop mode: crops to the window under the pointer) */
+  onTap?: (clientX: number, clientY: number) => void
+  /** the pointer moving over the rectangle with no button down, and leaving it */
+  onHover?: (clientX: number, clientY: number) => void
+  onHoverEnd?: () => void
 }
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
-function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'crop-rect' }: CropEditorProps): JSX.Element {
+function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'crop-rect', onTap, onHover, onHoverEnd }: CropEditorProps): JSX.Element {
   const W = size.outW
   const H = size.outH
   const MIN = min
@@ -576,7 +693,13 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
     const sx = e.clientX
     const sy = e.clientY
     const o = { ...crop }
+    // a click that may pick a window leaves the rectangle where it is until the pointer really drags
+    // it, so a tap is one undo step (the window crop) and not a jitter move followed by it
+    const tappable = handle === 'move' && onTap !== undefined
+    let dragged = false
     const move = (ev: PointerEvent): void => {
+      if (!dragged && tappable && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) <= 3) return
+      dragged = true
       const dx = (ev.clientX - sx) / W
       const dy = (ev.clientY - sy) / H
       let { x, y, w, h } = o
@@ -599,9 +722,10 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
       }
       onChange({ x, y, w, h }, false)
     }
-    const up = (): void => {
+    const up = (ev: PointerEvent): void => {
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
+      if (tappable && !dragged) onTap?.(ev.clientX, ev.clientY)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
@@ -613,7 +737,21 @@ function CropEditor({ crop, size, onChange, onBegin, min = 0.05, className = 'cr
   const height = crop.h * H
   const handles: Handle[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
   return (
-    <div className={className} style={{ left, top, width, height }} onPointerDown={start('move')}>
+    <div
+      className={className}
+      style={{ left, top, width, height }}
+      onPointerDown={start('move')}
+      onPointerMove={
+        onHover &&
+        ((e) => {
+          if (e.buttons !== 0) return
+          // a handle resizes, a click on it picks nothing
+          if ((e.target as HTMLElement).classList.contains('crop-handle')) onHoverEnd?.()
+          else onHover(e.clientX, e.clientY)
+        })
+      }
+      onPointerLeave={onHoverEnd}
+    >
       {handles.map((h) => (
         <div key={h} className={`crop-handle crop-${h}`} onPointerDown={start(h)} />
       ))}

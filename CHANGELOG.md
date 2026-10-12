@@ -3,6 +3,61 @@
 Notable changes per version, English first, Russian below. The section of a version becomes the body of its
 GitHub release (`node scripts/release-notes.cjs <version>`, run by `.github/workflows/release.yml`).
 
+## 0.4.1 (2026-10-08)
+
+- **Home screen, rearranged**: two columns that scroll on their own – new recording, compositions and the MP4 → GIF
+  converter on the left, recordings and scenarios on the right (recordings and scenarios are now tinted blocks
+  with a hover effect) – and a footer with the language, the version and the recordings folder. The audio
+  checkboxes are tidy toggles, "Record scenario" is as big as "Start recording".
+- **MP4 → GIF by drag & drop**: the converter is its own block on the home screen; drop a video anywhere on the home
+  screen to open it with that file.
+- **Confirmations in place**: deleting (and "Record again") asks in a small popover right above the button instead
+  of a Windows dialog. Checkboxes and scrollbars got a consistent look; the recorder pill lost its boxy shadow.
+- **Scenario editor**: the timing inputs sit at the end of every row; **Preview** runs the scenario on screen
+  exactly like a recording would (real cursor, clicks, typing) without recording anything – Esc stops it;
+  **"Position only, no click"** turns a click into a point the cursor just moves to (for hover effects);
+  "Record video from scenario", "Record scenario again" and Delete live together in the footer.
+- **Video editor**: Delete and Record again sit next to Export; inspector tabs show only the active tab's name, so
+  all of them fit; frame back / frame forward buttons around Play (they stop playback); playback stops at the end
+  instead of looping, and Play there starts over.
+- **Zoom steps** (formerly parts): every step can be deleted (except a lone one), "Pick area" lives in the steps
+  list, the area has a centre cross, **Shift** snaps it to the frame's centre lines, **Alt** resizes it around its
+  centre, and Apply / Cancel cover the side panel until the area is set. Inspector sections are clearly framed
+  blocks; no more fractional milliseconds like 439.20300000000003 ms.
+- **Clip tab windows**: only windows that were really visible on the recorded screen are offered, and browsers get
+  "Page only" – a crop to the page without the tab strip and the address bar.
+- **Timeline**: only lanes with something on them are drawn (a fresh recording shows just the video), lane names
+  are capitalized, and tags show where you typed, dragged, scrolled, double- or right-clicked or pressed a shortcut
+  (with their length) – handy for finding where to cut. Typed text itself is never stored.
+
+**RU**
+
+- **Главная, новая раскладка**: две колонки со своим скроллом – слева новая запись, композиции и конвертер MP4 → GIF,
+  справа записи и сценарии (теперь это цветные блоки с ховер-эффектом), – и футер с языком, версией и папкой
+  записей. Чекбоксы звука стали аккуратными переключателями, «Записать сценарий» – того же размера, что и «Начать
+  запись».
+- **MP4 → GIF перетаскиванием**: конвертер – отдельный блок на главной; видео можно бросить в любое место главной,
+  и конвертер откроется с этим файлом.
+- **Подтверждения на месте**: удаление (и «Записать заново») спрашивает в маленьком окошке прямо над кнопкой, а не
+  системным диалогом Windows. Чекбоксы и полосы прокрутки оформлены единообразно, у пилюли записи пропала
+  прямоугольная тень.
+- **Редактор сценария**: поля таймингов стоят в конце каждой строки; **Предпросмотр** прогоняет сценарий на экране
+  ровно как при записи (настоящий курсор, клики, ввод), но ничего не записывает – Esc останавливает;
+  **«Положение без клика»** превращает клик в точку, куда курсор просто приезжает (для ховер-эффектов);
+  «Записать видео по сценарию», «Записать сценарий заново» и «Удалить» собраны в футере.
+- **Редактор видео**: «Удалить» и «Записать заново» рядом с «Экспортом»; у вкладок инспектора подписана только
+  активная, поэтому помещаются все; кнопки «кадр назад» / «кадр вперёд» по бокам от Play (останавливают
+  воспроизведение); воспроизведение останавливается в конце, а не крутится по кругу, Play в конце начинает сначала.
+- **Шаги зума** (бывшие части): удалить можно любой шаг (кроме единственного), «Указать область» – в списке шагов,
+  у области есть крест по центру, **Shift** примагничивает её к центральным линиям кадра, **Alt** меняет размер от
+  центра, а «Применить / Отмена» перекрывают боковую панель, пока область не зафиксирована. Разделы инспектора –
+  явные блоки; больше никаких дробных миллисекунд вроде 439.20300000000003 мс.
+- **Окна во вкладке «Клип»**: предлагаются только окна, которые действительно были видны на записанном экране, а для
+  браузеров есть «Только страница» – кадрирование по странице без вкладок и адресной строки.
+- **Таймлайн**: рисуются только полосы, на которых что-то есть (у свежей записи – только видео), подписи полос с
+  заглавной буквы, а метки показывают, где вы печатали, перетаскивали, прокручивали, делали двойной или правый
+  клик или жали сочетание клавиш (с длительностью) – удобно искать, где резать. Сам набранный текст не сохраняется.
+
 ## 0.4.0 (2026-10-08)
 
 - **Scenario editor, new timing**: every action is followed by its own pause – a separate row in the action list

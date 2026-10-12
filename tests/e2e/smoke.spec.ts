@@ -82,7 +82,7 @@ test('record → edit → export GIF and MP4', async () => {
   await win.keyboard.press('Shift+ArrowRight')
   await win.keyboard.press('o')
   await win.keyboard.press('c')
-  await win.click('.tab:has-text("Clip")')
+  await win.click('.tab[data-tab="clip"]')
   await expect(win.locator('.cuts-list .list-item')).toHaveCount(1)
   await win.click('button:has-text("Trim start")')
   await expect(win.locator('.cuts-list .list-item')).toHaveCount(1) // adjacent cuts merge
@@ -91,7 +91,7 @@ test('record → edit → export GIF and MP4', async () => {
   await win.click('.region.text')
   await win.keyboard.press('Shift+ArrowRight')
   await win.screenshot({ path: join(shotsDir, '2-editor.png') })
-  await win.click('.tab:has-text("Cursor")')
+  await win.click('.tab[data-tab="cursor"]')
   await win.screenshot({ path: join(shotsDir, '3-editor-cursor-tab.png') })
 
   // export GIF
@@ -117,7 +117,7 @@ test('record → edit → export GIF and MP4', async () => {
 
   // transparent background with padding → GIF through the raw RGBA / ffv1 path
   await win.click('.modal-foot button:has-text("Close")')
-  await win.click('.tab:has-text("Style")')
+  await win.click('.tab[data-tab="style"]')
   await win.click('.swatch.checker')
   await win.fill('.modal input[spellcheck="false"] >> nth=0', 'x').catch(() => undefined)
   await win.click('button:has-text("Export")')

@@ -94,13 +94,13 @@ test('recording with microphone and system audio enabled yields audio clips or a
   }
   if (noticeVisible) await h.win.click('.notice-bar .btn-ghost')
 
-  await h.win.click('.tab:has-text("Audio")')
+  await h.win.click('.tab[data-tab="audio"]')
   await expect(h.win.locator('.audio-list .list-item')).toHaveCount(clips.length)
   await h.win.screenshot({ path: join(h.shotsDir, 'audio-tab.png') })
 })
 
 test('a music preset adds a looping clip on the timeline; undo and redo keep its file', async () => {
-  await h.win.click('.tab:has-text("Audio")')
+  await h.win.click('.tab[data-tab="audio"]')
   const before = await h.win.locator('.audio-list .list-item').count()
   await h.win.click('.btn-add-music')
   await expect(h.win.locator('.music-presets .music-preset')).toHaveCount(6)
@@ -130,7 +130,7 @@ test('a music preset adds a looping clip on the timeline; undo and redo keep its
 })
 
 test('a voiceover recorded in the editor becomes a clip at the playhead', async () => {
-  await h.win.click('.tab:has-text("Audio")')
+  await h.win.click('.tab[data-tab="audio"]')
   const before = await h.win.locator('.audio-list .list-item').count()
   await h.win.keyboard.press('Home')
   await h.win.click('.btn-voiceover')
@@ -179,7 +179,7 @@ test('MP4 export carries an AAC track, GIF export ignores audio', async () => {
 })
 
 test('a deleted clip keeps its file until the editor closes, then the orphan is swept', async () => {
-  await h.win.click('.tab:has-text("Audio")')
+  await h.win.click('.tab[data-tab="audio"]')
   const clipsBefore = audioClips(projectId)
   const music = clipsBefore.find((c) => c.kind === 'music')
   expect(music).toBeTruthy()

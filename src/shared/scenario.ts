@@ -1,9 +1,9 @@
 /**
  * Pure engine for the scenario recorder: shared by the main process (which groups captured
  * input into actions and compiles a scenario into replay steps) and the renderer (the review
- * screen, which edits the timing and the typed text of actions and deletes them). No Electron
- * imports here, and no I/O – everything is deterministic given its inputs, which is what makes
- * it unit-testable without a real capture.
+ * screen, which edits the timing and the typed text of actions, switches clicks to "position
+ * only" and deletes actions). No Electron imports here, and no I/O – everything is deterministic
+ * given its inputs, which is what makes it unit-testable without a real capture.
  */
 import { SCENARIO_MAX_MS } from './defaults'
 import type {
@@ -482,6 +482,20 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+/** The four click kinds - the ones that can be switched to "position only" (ScenarioClickAction.hoverOnly). */
+export function isClickAction(a: ScenarioAction): a is ScenarioClickAction {
+  return a.kind === 'click' || a.kind === 'doubleClick' || a.kind === 'rightClick' || a.kind === 'middleClick'
+}
+
+/** A click switched to "position only, no click": replay brings the cursor there and presses
+ * nothing, whichever click it was. Only a real `true` counts. */
+export function isHoverOnly(a: ScenarioAction): boolean {
+  return isClickAction(a) && a.hoverOnly === true
+}
+
+/** Floor for a hover: a few frames of travel, then the rest on the spot before the action ends. */
+const HOVER_MIN_MS = 150
+
 /** Whole wheel notches one axis of a scroll replays as; a non-finite delta (stored garbage) counts as none. */
 function wholeNotches(delta: number): number {
   return Number.isFinite(delta) ? Math.ceil(Math.abs(delta)) : 0
@@ -519,6 +533,8 @@ function clampDuration(min: number, ms: number): number {
 
 /** The shortest an action may take, ms: shorter and its phases (travel, press, release) no longer fit. */
 export function minDurationMs(a: ScenarioAction): number {
+  // a hover only travels and rests, whichever click it was (its default stays the click's 1 s)
+  if (isHoverOnly(a)) return HOVER_MIN_MS
   switch (a.kind) {
     case 'click':
     case 'rightClick':
@@ -544,7 +560,7 @@ export function defaultDurationMs(a: ScenarioAction): number {
     case 'type':
       natural = graphemes(a.text).length * TYPE_SPEED_MS.normal
       break
-    default: // the other clicks and scroll
+    default: // the other clicks (a hover too) and scroll
       natural = 1000
   }
   return clampDuration(minDurationMs(a), natural)
@@ -571,14 +587,17 @@ export function typeDurationForSpeed(text: string, speed: TypeSpeed): number {
 // The moment each kind "visibly happens" inside its duration. compileScenario puts the same
 // moments on its steps, so the progress marker (and the review timeline) sit on the real effect.
 // Offsets back from the end E: a click's button goes down 90ms before it, a double click's first
-// press 180ms, a key's press 60ms. A drag presses, and a scroll starts turning, after 40% of the
-// duration: the pointer has travelled there and rested by then.
+// press 180ms, a key's press 60ms, and a hover's cursor lands 90ms before it (then rests there,
+// nothing is pressed). A drag presses, and a scroll starts turning, after 40% of the duration:
+// the pointer has travelled there and rested by then.
 const CLICK_DOWN_BEFORE_END_MS = 90
 const DOUBLE_CLICK_DOWN_BEFORE_END_MS = 180
 const KEY_DOWN_BEFORE_END_MS = 60
+const HOVER_LAND_BEFORE_END_MS = 90
 
 /** where, within the action's own duration `d`, its effect happens */
 function effectOffsetMs(a: ScenarioAction, d: number): number {
+  if (isHoverOnly(a)) return d - HOVER_LAND_BEFORE_END_MS
   switch (a.kind) {
     case 'click':
     case 'rightClick':
@@ -645,12 +664,21 @@ function normalizeTiming(a: ScenarioAction): ScenarioAction {
   }
 }
 
+/** Only a real `true` on a click kind is kept as hoverOnly; false, "yes", 1, or the flag on any
+ * other kind is dropped (absent = false), so stored garbage never decides whether replay clicks. */
+function normalizeHoverOnly(a: ScenarioAction): ScenarioAction {
+  if (!('hoverOnly' in a) || isHoverOnly(a)) return a
+  const { hoverOnly: _dropped, ...rest } = a
+  return rest
+}
+
 /**
  * Brings a scenario read from disk (or anywhere else) to the current version, as a copy: the
- * input is never mutated and every field but the actions' timing is copied as is. A version-2
- * file only has unusable timing replaced by defaults. Version 1 (and a file without a version)
- * used absolute times; they are not converted - the actions get the same default timing a fresh
- * capture gets. Throws when `raw` is not a scenario at all.
+ * input is never mutated and every field but the actions' timing (and an unusable hoverOnly,
+ * see normalizeHoverOnly) is copied as is. A version-2 file only has unusable timing replaced by
+ * defaults. Version 1 (and a file without a version) used absolute times; they are not converted
+ * - the actions get the same default timing a fresh capture gets. Throws when `raw` is not a
+ * scenario at all.
  */
 export function migrateScenario(raw: unknown): Scenario {
   if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as { actions?: unknown }).actions)) {
@@ -663,7 +691,7 @@ export function migrateScenario(raw: unknown): Scenario {
     typeof version === 'number' && version >= SCENARIO_VERSION
       ? scenario.actions.map(normalizeTiming)
       : withDefaultTiming(scenario.actions)
-  return { ...scenario, version: SCENARIO_VERSION, actions }
+  return { ...scenario, version: SCENARIO_VERSION, actions: actions.map(normalizeHoverOnly) }
 }
 
 // ---- editing ----
@@ -702,6 +730,22 @@ export function setAllPauses(actions: ScenarioAction[], ms: number): ScenarioAct
   const value = clamp(Math.round(ms), 0, PAUSE_MAX_MS)
   if (actions.every((a) => a.pauseMs === value)) return actions
   return actions.map((a) => (a.pauseMs === value ? a : { ...a, pauseMs: value }))
+}
+
+/**
+ * Switches a click (any of the four kinds) to "position only, no click" and back: the replay then
+ * only brings the cursor there, for hover effects. Only `true` is stored - switching it off removes
+ * the field. The stored duration is left alone, so switching back and forth loses nothing;
+ * actionDurationMs holds it to whichever floor applies. Any other kind is left alone.
+ */
+export function setActionHoverOnly(actions: ScenarioAction[], id: string, on: boolean): ScenarioAction[] {
+  if (typeof on !== 'boolean') return actions
+  return patchAction(actions, id, (a) => {
+    if (!isClickAction(a) || isHoverOnly(a) === on) return a
+    if (on) return { ...a, hoverOnly: true }
+    const { hoverOnly: _off, ...rest } = a
+    return rest
+  })
 }
 
 /** Control characters (C0, DEL, C1) cannot be typed as text: Enter and Tab are `key` actions of their own. */
@@ -881,6 +925,8 @@ function pushModifiers(steps: ReplayStep[], mods: Array<keyof ScenarioModifiers>
  *   scroll: the notches are spread evenly over start+0.4D (the effect)..end-20, travel start..first-notch-90
  *   type: one grapheme at start + k * D / n, the first one (the effect) at start
  *   key: key down end-60 (the effect), up end-20
+ *   hover (any click with hoverOnly): travel start..end-90 (the landing is the effect), then it
+ *         rests there; no button and no modifiers at all
  * The shortest duration of every kind (minDurationMs) keeps all of that in order.
  */
 export function compileScenario(input: Scenario | ScenarioAction[], opts: CompileOptions): ReplayStep[] {
@@ -894,6 +940,13 @@ export function compileScenario(input: Scenario | ScenarioAction[], opts: Compil
     const here: ScenarioPoint = { x: a.x, y: a.y }
     const mods = heldModifiers(a.modifiers)
     steps.push({ t: effectAt, op: 'action', index: i })
+
+    if (isHoverOnly(a)) {
+      // position only: arrive at the effect and stay - nothing is pressed, not even a modifier
+      emitEasedMove(steps, cursor, here, start, effectAt)
+      cursor = here
+      return
+    }
 
     switch (a.kind) {
       case 'click':
@@ -979,14 +1032,18 @@ export function compileScenario(input: Scenario | ScenarioAction[], opts: Compil
 
 // ---- labels ----
 
+/** What an action is called and shown as: its kind, or 'hover' for a click switched to "position only". */
+export type ScenarioActionLabel = ScenarioActionKind | 'hover'
+
 export interface ActionDescription {
-  kindKey: ScenarioActionKind
+  kindKey: ScenarioActionLabel
   /** extra plain text: the typed string, or the key/chord label – nothing here needs translation */
   detail: string
 }
 
 /** Structured label for an action, so the renderer can translate `kindKey` and just append `detail`. */
 export function describeAction(a: ScenarioAction): ActionDescription {
+  if (isHoverOnly(a)) return { kindKey: 'hover', detail: '' }
   switch (a.kind) {
     case 'type': return { kindKey: a.kind, detail: a.text }
     case 'key': return { kindKey: a.kind, detail: a.key }

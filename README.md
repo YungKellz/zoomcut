@@ -40,8 +40,8 @@ pick the file name and folder.
   plays with its current edits (cuts, zooms, texts, blurs, audio); reorder them, jump into the editor for one and
   back, pick the output frame (like the first recording, 1080p, 720p, square, vertical) and the background around
   recordings of a different shape, then export MP4 or GIF with the usual dialog.
-- **MP4 → GIF**: a separate converter on the home screen turns any video file (MP4, MOV, WebM, MKV, AVI) into a GIF
-  with trim, width, frame rate and the same palette / dithering presets as the export.
+- **MP4 → GIF**: a separate block on the home screen (drop a file anywhere on the window, or pick one) turns any video
+  file (MP4, MOV, WebM, MKV, AVI) into a GIF with trim, width, frame rate and the same palette / dithering presets as the export.
 - Projects autosave to `%USERPROFILE%\Videos\ZoomCut\<timestamp>\` (`source.mp4` + `project.json`) and can be reopened.
   The home screen lists recordings and scenarios together, with each scenario's recordings nested under it; both
   editors have Delete and "Record again" (same display, audio and scenario).
@@ -55,7 +55,9 @@ pick the file name and folder.
 - **Scenario recorder**: "Record scenario" captures your clicks, drags, scrolls, typed text and shortcuts in your
   product with a screenshot of every clicked spot. Review the actions: every action has its own duration (how long
   the mouse takes to get there; 1 / 1.5 / 2 s presets, typing speed for text) and is followed by a pause (1.5 s by
-  default, one control sets all pauses), typed text can be edited, actions deleted, 10-minute limit. Then "Record & replay": the app records the screen while it replays the input for you, with
+  default, one control sets all pauses), typed text can be edited, actions deleted, a click can become "position
+  only, no click" (the cursor just moves there, for hover effects), 10-minute limit. "Preview" runs it on screen
+  without recording anything; "Record video from scenario" records the screen while it replays the input for you, with
   click ripples and a progress HUD drawn over the screen (not in the recording). Esc aborts, Stop keeps the recording,
   and the result opens in the editor. Scenarios are saved for another take after you fix your product.
 
@@ -153,12 +155,13 @@ for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CH
    Вкладка **Аудио**: клипы микрофона / системного звука (флажки на главном экране), запись голоса за кадром,
    музыкальные подложки и свои файлы; всё это микшируется в MP4.
    **Записать сценарий** на главном экране: покликайте по своему продукту, остановите панелью – откроется экран
-   со списком действий и таймлайном (удаление, тайминги, лимит 10 минут); «Записать и воспроизвести» запишет
-   экран, пока приложение само повторит действия (Esc прерывает, Стоп сохраняет запись).
+   со списком действий и таймлайном (удаление, тайминги, «Положение без клика» для наведения, лимит 10 минут);
+   «Предпросмотр» прогонит сценарий на экране без записи, «Записать видео по сценарию» запишет экран, пока
+   приложение само повторит действия (Esc прерывает, Стоп сохраняет запись).
    `B` или кнопка **Размытие** добавляет прямоугольник размытия/пикселизации: пока он редактируется, превью
    показывает весь кадр кропа без зума; в видео область привязана к картинке и следует за зумом.
    **Композиции** на главном экране склеивают несколько записей (каждую с её текущей обработкой) в одно видео.
-   Кнопка **MP4 → GIF** в шапке главного экрана конвертирует любой видеофайл в GIF.
+   Блок **MP4 → GIF** на главном экране конвертирует любой видеофайл в GIF: перетащите файл в окно или нажмите «Выбрать файл».
 4. **Экспорт** → MP4 или GIF. Для серо-белых интерфейсов с тонкими линиями используйте пресет **Чёткий UI**;
    для градиентов – **Плавные градиенты**. Диалог показывает ориентировочный вес файла. Имя файла и папка
    задаются там же. Прозрачный фон (вкладка **Стиль**) экспортируется в GIF.
