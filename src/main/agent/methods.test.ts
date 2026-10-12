@@ -935,6 +935,26 @@ describe('scenario capture', () => {
       expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
     })
 
+    it('survives a captureStart that fails, is refused or is told off by the renderer', async () => {
+      const h = harness()
+      h.capture.emit('done', { id: 'kept', actions: [{}, {}] } as unknown as Scenario)
+      // the renderer refuses the start
+      h.rendererReply.value = () => {
+        throw new AgentError('busy', 'a recording is in progress (see get_status)')
+      }
+      expect((await code(call(h, 'scenarios.captureStart'))).code).toBe('busy')
+      // the capture ends before it started
+      h.rendererReply.value = () => {
+        setTimeout(() => h.capture.emit('failed', new Error('The global input hook is unavailable')), 5)
+      }
+      expect((await code(call(h, 'scenarios.captureStart'))).code).toBe('failed')
+      // a recording is going on: refused before anything is sent
+      h.recorder.active = true
+      expect((await code(call(h, 'scenarios.captureStart'))).code).toBe('busy')
+      h.recorder.active = false
+      expect(await call(h, 'scenarios.captureStop')).toMatchObject({ scenarioId: 'kept', actions: 2 })
+    })
+
     it('is forgotten after a while, and when the agent itself stopped the capture', async () => {
       let clock = 1_000
       const h = harness({ now: () => clock })

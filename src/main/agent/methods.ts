@@ -492,7 +492,8 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
 
     'scenarios.captureStart': define('scenarios.captureStart', (p, signal) =>
       exclusive(signal, async () => {
-        lastCapture = null
+        // lastCapture stays until a capture really begins (the countdown listener above): a start that
+        // is refused or fails must not take away the result of the capture the user ended
         const display = await resolveDisplay(p.displayId)
         const capturing = waitFor<void>(
           (resolve, reject) => {
