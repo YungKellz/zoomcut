@@ -10,10 +10,10 @@
  */
 import { z } from 'zod'
 import type { AgentEditOp, AgentExportParams, AgentScenarioInput } from './agent'
-import { AGENT_SCENARIO_MAX_ACTIONS, AGENT_SCROLL_MAX_NOTCHES } from './agentScenario'
+import { AGENT_SCENARIO_MAX_ACTIONS, AGENT_SCROLL_MAX_NOTCHES, AGENT_TYPE_MAX_CHARS } from './agentScenario'
 import { KEY_CHORD_HELP } from './agentKeys'
 import { GIF_FPS_OPTIONS, GRADIENT_PRESETS, MP4_FPS_OPTIONS, SCENARIO_MAX_MS } from './defaults'
-import { DURATION_MAX_MS, PAUSE_MAX_MS } from './scenario'
+import { DURATION_MAX_MS, PAUSE_MAX_MS, TYPE_MIN_MS_PER_CHAR, graphemes } from './scenario'
 
 /** ids of recordings and scenarios are timestamp folder names: "2026-01-02_03-04-05" or "...-2" */
 export const ID_PATTERN = /^[0-9A-Za-z_-]+$/
@@ -211,7 +211,8 @@ export const agentEditOpSchema = z.discriminatedUnion('op', [
 /**
  * durationMs and pauseMs of an action. A duration is raised to the kind's minimum and never lowered:
  * above the maximum is an error (buildAgentScenario checks it exactly). The maximum is a minute, but a
- * scroll of over 900 notches cannot be replayed in one, so its schema allows the longest scenario instead.
+ * scroll of over 900 notches or a text of over 2400 characters cannot be replayed in one, so their schemas
+ * allow the longest scenario instead (get_scenario reports such a duration, and it has to be accepted again).
  */
 const timing = (maxDurationMs: number) => ({
   durationMs: z
@@ -220,7 +221,7 @@ const timing = (maxDurationMs: number) => ({
     .max(maxDurationMs)
     .describe(
       `How long the action takes, ms, at most ${DURATION_MAX_MS}` +
-        (maxDurationMs > DURATION_MAX_MS ? ' (or the scroll\'s own minimum when that is longer)' : '') +
+        (maxDurationMs > DURATION_MAX_MS ? ' (or the action\'s own minimum when that is longer: a scroll of hundreds of notches, a text of thousands of characters)' : '') +
         '; more is an error. A mouse action first glides there, then happens near the end of this time. Raised to the kind minimum ' +
         '(click 200, double click 300, drag 500, position-only click 150, key 150, type 25 per character, scroll 40 per notch and at least 300). ' +
         `Defaults: click and scroll 1000, drag 1500, key 500, type 80 per character (at most ${DURATION_MAX_MS} in all)`
@@ -229,6 +230,13 @@ const timing = (maxDurationMs: number) => ({
   pauseMs: z.number().min(0).max(PAUSE_MAX_MS).describe('Stillness after the action, ms, at most 60000 (default 1500). Replay is strictly sequential: each action starts when the previous one and its pause are over').optional()
 })
 const modifiers = (what: string) => z.array(z.enum(['ctrl', 'shift', 'alt', 'meta'])).describe(what).optional()
+/** get_scenario reports an id for every action: accepting it back, unused, lets its actions go straight into create_scenario */
+const ignoredId = {
+  id: z
+    .string()
+    .describe('Ignored. get_scenario reports an id for each action; it may stay when you pass the actions back. Nothing reads it: the ids are assigned in order (a1, a2, ...)')
+    .optional()
+}
 const point = {
   x: z.number().describe('Horizontal position in DIP, relative to the left edge of the display (0,0 = its top-left corner). A take_screenshot image pixel divided by its `scale`'),
   y: z.number().describe('Vertical position in DIP, relative to the top edge of the display')
@@ -244,7 +252,8 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
         .boolean()
         .describe('true = only move the pointer to (x, y) and press nothing, not even `modifiers` (for hover effects and tooltips); the kind is then irrelevant. Default false')
         .optional(),
-      ...timing(DURATION_MAX_MS)
+      ...timing(DURATION_MAX_MS),
+      ...ignoredId
     })
     .strict()
     .describe('Move the mouse to (x, y) and click; with hoverOnly only move it there'),
@@ -255,7 +264,8 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
       toX: z.number().describe('Where the button is released, DIP relative to the display'),
       toY: z.number().describe('Where the button is released, DIP relative to the display'),
       modifiers: modifiers('Keys held during the drag, e.g. ["shift"]'),
-      ...timing(DURATION_MAX_MS)
+      ...timing(DURATION_MAX_MS),
+      ...ignoredId
     })
     .strict()
     .describe('Press the left button at (x, y), move to (toX, toY), release'),
@@ -277,23 +287,39 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
         .max(AGENT_SCROLL_MAX_NOTCHES)
         .describe(`Horizontal wheel notches, positive = right, at most ${AGENT_SCROLL_MAX_NOTCHES} either way`)
         .optional(),
-      ...timing(SCENARIO_MAX_MS)
+      ...timing(SCENARIO_MAX_MS),
+      ...ignoredId
     })
     .strict()
     .describe('Move the mouse to (x, y) and turn the wheel'),
   z
     .object({
       kind: z.literal('type'),
-      text: z.string().min(1).max(1000).describe('Text to type into whatever has focus (any language; typed as Unicode). No newlines or tabs: use key actions "Enter" / "Tab"'),
-      ...timing(DURATION_MAX_MS)
+      text: z
+        .string()
+        .min(1)
+        // characters as a person sees them, like the builder counts (a code-unit .max() would cut emoji short)
+        .refine((s) => graphemes(s).length <= AGENT_TYPE_MAX_CHARS, `must be at most ${AGENT_TYPE_MAX_CHARS} characters`)
+        .describe(
+          `Text to type into whatever has focus (any language; typed as Unicode), at most ${AGENT_TYPE_MAX_CHARS} characters. ` +
+            'No newlines or tabs: use key actions "Enter" / "Tab"'
+        ),
+      ...timing(SCENARIO_MAX_MS),
+      ...ignoredId
     })
     .strict()
+    // like a scroll, a text can be too long to type in a minute (over 2400 characters): then its own minimum is the limit
+    .refine((a) => a.durationMs === undefined || a.durationMs <= Math.max(DURATION_MAX_MS, graphemes(a.text).length * TYPE_MIN_MS_PER_CHAR), {
+      message: `durationMs may be at most ${DURATION_MAX_MS} ms (more only for a text so long that typing it takes longer)`,
+      path: ['durationMs']
+    })
     .describe('Type text, one character at a time, into the focused field'),
   z
     .object({
       kind: z.literal('key'),
       key: z.string().min(1).describe(`A key or shortcut, e.g. "Enter", "Escape", "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab", "F5". ${KEY_CHORD_HELP}`),
-      ...timing(DURATION_MAX_MS)
+      ...timing(DURATION_MAX_MS),
+      ...ignoredId
     })
     .strict()
     .describe('Press a key or a shortcut chord')

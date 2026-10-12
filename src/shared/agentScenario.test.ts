@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AgentError, type AgentScenarioInput } from './agent'
-import { AGENT_SCROLL_MAX_NOTCHES, buildAgentScenario, toAgentScenarioView, type AgentDisplay } from './agentScenario'
+import { AGENT_SCROLL_MAX_NOTCHES, AGENT_TYPE_MAX_CHARS, buildAgentScenario, toAgentScenarioView, type AgentDisplay } from './agentScenario'
 import { agentScenarioInputSchema } from './agentSchemas'
 import { SCENARIO_MAX_MS } from './defaults'
 import {
@@ -300,6 +300,18 @@ describe('buildAgentScenario', () => {
       expect(failure(() => scroll(AGENT_SCROLL_MAX_NOTCHES + 1))).toContain('notches')
     })
 
+    it('takes as many typed characters as a scenario can replay, counted the way a person counts them', () => {
+      const typed = (text: string) => build({ name: 'x', actions: [{ kind: 'type', text, pauseMs: 0 }] })
+      // typing takes at least 25 ms a character: this many fill the whole scenario limit, one more can never be replayed
+      const full = typed('a'.repeat(AGENT_TYPE_MAX_CHARS))
+      expect(scenarioEnd(full.actions)).toBe(SCENARIO_MAX_MS)
+      expect(minDurationMs({ ...full.actions[0], text: 'a'.repeat(AGENT_TYPE_MAX_CHARS + 1) } as ScenarioAction)).toBeGreaterThan(SCENARIO_MAX_MS)
+      expect(failure(() => typed('a'.repeat(AGENT_TYPE_MAX_CHARS + 1)))).toMatch(/actions\[0\].*at most 24000 characters/)
+      // characters, not UTF-16 units: an emoji is one
+      expect(typed('👍'.repeat(AGENT_TYPE_MAX_CHARS)).actions[0]).toMatchObject({ kind: 'type' })
+      expect(failure(() => typed('👍'.repeat(AGENT_TYPE_MAX_CHARS + 1)))).toContain('at most 24000')
+    })
+
     it('rejects a position-only flag that is not a boolean, and modifiers on a hover', () => {
       const click = (extra: Record<string, unknown>): AgentScenarioInput => ({ name: 'x', actions: [{ kind: 'click', x: 1, y: 1, ...extra } as never] })
       expect(failure(() => build(click({ hoverOnly: 'yes' })))).toContain('hoverOnly must be true or false')
@@ -322,7 +334,7 @@ describe('buildAgentScenario', () => {
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'click', x: 1, y: 1, durationMs: 'fast' as never }] }))).toContain('durationMs must be a number')
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'type', text: '' }] }))).toContain('non-empty')
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'type', text: 'a\nb' }] }))).toContain('"Enter"')
-      expect(failure(() => build({ name: 'x', actions: [{ kind: 'type', text: 'a'.repeat(1001) }] }))).toContain('at most 1000')
+      expect(failure(() => build({ name: 'x', actions: [{ kind: 'type', text: 'a'.repeat(AGENT_TYPE_MAX_CHARS + 1) }] }))).toContain(`at most ${AGENT_TYPE_MAX_CHARS} characters`)
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'scroll', x: 1, y: 1, deltaY: 0 }] }))).toContain('non-zero')
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'scroll', x: 1, y: 1, deltaY: AGENT_SCROLL_MAX_NOTCHES + 1 }] }))).toContain(`at most ${AGENT_SCROLL_MAX_NOTCHES} notches`)
       expect(failure(() => build({ name: 'x', actions: [{ kind: 'scroll', x: 1, y: 1, deltaX: -AGENT_SCROLL_MAX_NOTCHES - 1 }] }))).toContain('deltaX')
@@ -425,10 +437,10 @@ function captured(raw: RawInputEvent[], hoverIds: string[] = []): Scenario {
   }
 }
 
-/** what an agent does: read the view, drop the per-action id (the input schema is strict), send it back */
+/** what an agent does: read the view and send its actions back as they are (ids included), on the same display */
 function viaAgentApi(scenario: Scenario): Scenario {
   const view = toAgentScenarioView(scenario)
-  const input = { name: view.name, actions: view.actions.map(({ id: _id, ...action }) => action) }
+  const input = { name: view.name, displayId: view.displayId, actions: view.actions }
   return buildAgentScenario(agentScenarioInputSchema.parse(input), MAIN, scenario.id, NOW)
 }
 
@@ -505,6 +517,28 @@ describe('a captured scenario through get_scenario and back into create_scenario
     // the hover is still a hover, the drag still holds Shift
     expect(again.actions.map(isHoverOnly)).toEqual(original.actions.map(isHoverOnly))
     expect(again.actions.find((a) => a.kind === 'drag')?.modifiers).toEqual(mods({ shift: true }))
+  })
+
+  it('is accepted with the ids get_scenario reports, which it does not use', () => {
+    const original = captured(raw, ['h1'])
+    const view = toAgentScenarioView(original)
+    // the ids of the capture, not of the builder
+    expect(view.actions.map((a) => a.id)).toEqual(original.actions.map((a) => a.id))
+    expect(view.actions.map((a) => a.id)).toContain('h1')
+    const again = viaAgentApi(original)
+    expect(again.actions.map((a) => a.id)).toEqual(again.actions.map((_, i) => `a${i + 1}`))
+  })
+
+  it('keeps a typed text of any length a scenario can replay', () => {
+    // a capture stores whatever was typed, five times the old limit of a type action here
+    const text = 'abcdefghij'.repeat(500)
+    const original = captured([...text].map((ch, i) => keyEvent(`t${i}`, 1000 + i * 20, 0x10 + (i % 10), 0x41 + (i % 10), { text: ch })))
+    expect(original.actions).toHaveLength(1)
+    expect(original.actions[0]).toMatchObject({ kind: 'type', text })
+    const again = viaAgentApi(original)
+    expect(again.actions[0]).toMatchObject({ kind: 'type', text })
+    expect(steps(again)).toEqual(steps(original))
+    expect(scenarioEnd(again.actions)).toBe(scenarioEnd(original.actions))
   })
 
   it('gives every key back with the same virtual key, scancode, extended flag and modifiers', () => {

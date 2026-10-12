@@ -17,6 +17,7 @@ import {
   DURATION_MAX_MS,
   PAUSE_MAX_MS,
   SCENARIO_VERSION,
+  TYPE_MIN_MS_PER_CHAR,
   actionDurationMs,
   actionPauseMs,
   defaultDurationMs,
@@ -39,7 +40,13 @@ export interface AgentDisplay {
 
 export const AGENT_SCENARIO_MAX_ACTIONS = 500
 export const AGENT_SCENARIO_NAME_MAX = 120
-export const AGENT_TYPE_MAX_CHARS = 1000
+/**
+ * characters (graphemes) in one type action: as many as a scenario can replay at all. Typing takes at
+ * least TYPE_MIN_MS_PER_CHAR per character, so a longer text exceeds SCENARIO_MAX_MS on its own. A capture
+ * stores a typed text of any length (it only ends after 10 minutes), and what get_scenario returns for a
+ * scenario that can be replayed has to be accepted again.
+ */
+export const AGENT_TYPE_MAX_CHARS = Math.floor(SCENARIO_MAX_MS / TYPE_MIN_MS_PER_CHAR)
 /**
  * wheel notches per axis in one scroll action: the most one scroll can replay within SCENARIO_MAX_MS at
  * the 40 ms a notch needs. Far more than anyone scripts, but a capture merges every wheel event less
@@ -202,7 +209,9 @@ export function buildAgentScenario(input: AgentScenarioInput, display: AgentDisp
         if (stripControlChars(text) !== text) {
           bad(`${where}: text must not contain control characters (newline, tab, ...); use separate key actions "Enter" / "Tab" for those`)
         }
-        if (graphemes(text).length > AGENT_TYPE_MAX_CHARS) bad(`${where}: text may be at most ${AGENT_TYPE_MAX_CHARS} characters; split it into several type actions`)
+        if (graphemes(text).length > AGENT_TYPE_MAX_CHARS) {
+          bad(`${where}: text may be at most ${AGENT_TYPE_MAX_CHARS} characters (typing more takes longer than the ${SCENARIO_MAX_MS / 1000} s a scenario may last)`)
+        }
         action = { ...common, kind: 'type', ...cursor, modifiers: { ...NO_MODIFIERS }, text }
         break
       }

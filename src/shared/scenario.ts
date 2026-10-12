@@ -507,10 +507,13 @@ function scrollNotchCount(a: ScenarioScrollAction): number {
   return wholeNotches(a.deltaY) + wholeNotches(a.deltaX)
 }
 
+/** The fastest typing a replay allows, ms per character (the floor of a type action's duration). */
+export const TYPE_MIN_MS_PER_CHAR = 25
+
 /** Floor for typed text: 25ms per character at the very fastest, and never under 200ms so even
  * a one-letter action reads as an action. */
 function typeMinMs(chars: number): number {
-  return Math.max(200, chars * 25)
+  return Math.max(200, chars * TYPE_MIN_MS_PER_CHAR)
 }
 
 /**

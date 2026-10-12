@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { AGENT_SCROLL_MAX_NOTCHES } from './agentScenario'
-import { agentEditOpSchema, agentParamSchemas, agentScenarioInputSchema, formatZodError } from './agentSchemas'
+import { AGENT_SCROLL_MAX_NOTCHES, AGENT_TYPE_MAX_CHARS } from './agentScenario'
+import { agentEditOpSchema, agentParamSchemas, agentScenarioActionSchema, agentScenarioInputSchema, formatZodError } from './agentSchemas'
 import { SCENARIO_MAX_MS } from './defaults'
 import { DURATION_MAX_MS, PAUSE_MAX_MS } from './scenario'
 
@@ -98,6 +98,47 @@ describe('agentParamSchemas', () => {
       const json = JSON.stringify(z.toJSONSchema(agentScenarioInputSchema))
       expect(json).toContain('at most 60000')
       expect(json).toContain('hoverOnly')
+    })
+
+    it('takes the id get_scenario reports on every kind, as an ignored field', () => {
+      const actions = [
+        { kind: 'click', x: 1, y: 2 },
+        { kind: 'doubleClick', x: 1, y: 2, hoverOnly: true },
+        { kind: 'drag', x: 1, y: 2, toX: 3, toY: 4, modifiers: ['shift'] },
+        { kind: 'scroll', x: 1, y: 2, deltaY: 1 },
+        { kind: 'type', text: 'hi' },
+        { kind: 'key', key: 'Enter' }
+      ]
+      for (const action of actions) {
+        expect(ok({ ...action, id: 'e17' }), action.kind).toBe(true)
+        expect(ok({ ...action, id: 17 }), action.kind).toBe(false)
+        // still strict about every other field
+        expect(ok({ ...action, ids: 'e17' }), action.kind).toBe(false)
+      }
+      const schema = JSON.stringify(z.toJSONSchema(agentScenarioInputSchema))
+      expect(schema).toContain('Ignored.')
+      // optional: none of the kinds needs one
+      expect(JSON.stringify(z.toJSONSchema(agentScenarioActionSchema))).not.toMatch(/"required":\[[^\]]*"id"/)
+    })
+
+    it('takes a typed text of as many characters as a scenario can replay', () => {
+      const typed = (text: string, durationMs?: number): boolean => ok({ kind: 'type', text, durationMs })
+      expect(typed('a'.repeat(AGENT_TYPE_MAX_CHARS))).toBe(true)
+      expect(typed('a'.repeat(AGENT_TYPE_MAX_CHARS + 1))).toBe(false)
+      // characters as a person counts them, not UTF-16 units
+      expect(typed('\u{1F44D}'.repeat(AGENT_TYPE_MAX_CHARS))).toBe(true)
+      expect(typed('\u{1F44D}'.repeat(AGENT_TYPE_MAX_CHARS + 1))).toBe(false)
+      expect(typed('')).toBe(false)
+      expect(ok({ kind: 'type', durationMs: 1000 })).toBe(false)
+      expect(JSON.stringify(z.toJSONSchema(agentScenarioInputSchema))).toContain(`at most ${AGENT_TYPE_MAX_CHARS} characters`)
+    })
+
+    it('lets a text that cannot be typed in a minute take its own minimum, and no other', () => {
+      // 25 ms a character: 2400 characters fill the minute, more take longer, and get_scenario reports that duration
+      expect(ok({ kind: 'type', text: 'a'.repeat(2400), durationMs: DURATION_MAX_MS })).toBe(true)
+      expect(ok({ kind: 'type', text: 'a'.repeat(2400), durationMs: DURATION_MAX_MS + 1 })).toBe(false)
+      expect(ok({ kind: 'type', text: 'a'.repeat(5000), durationMs: 125_000 })).toBe(true)
+      expect(ok({ kind: 'type', text: 'a'.repeat(5000), durationMs: 125_001 })).toBe(false)
     })
 
     it('takes the scroll notches the builder accepts', () => {
