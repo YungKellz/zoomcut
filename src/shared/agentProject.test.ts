@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { keepSegments, outputDuration } from '../renderer/src/engine/timeline'
 import { AGENT_MAX_CLICKS, outputDurationMs, toAgentProjectView } from './agentProject'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from './defaults'
 import type { ClickEvent, CutRange, Project } from './types'
@@ -27,21 +26,21 @@ function project(over: Partial<Project> = {}, clicks: ClickEvent[] = []): Projec
 }
 
 describe('outputDurationMs', () => {
-  it('matches the editor timeline for overlapping, reversed, out-of-range and tiny cuts', () => {
-    const cases: CutRange[][] = [
-      [],
-      [{ id: 'a', start: 1000, end: 2000 }],
-      [{ id: 'a', start: 1000, end: 3000 }, { id: 'b', start: 2500, end: 4000 }],
-      [{ id: 'a', start: 5000, end: 4000 }],
-      [{ id: 'a', start: -500, end: 700 }, { id: 'b', start: 9800, end: 12_000 }],
-      [{ id: 'a', start: 20, end: 9990 }],
-      [{ id: 'a', start: 0, end: 10_000 }],
-      [{ id: 'a', start: 100, end: 100.5 }],
-      [{ id: 'a', start: 3000, end: 3010 }, { id: 'b', start: 3010, end: 3020 }, { id: 'c', start: 8000, end: 9970 }]
-    ]
-    for (const cuts of cases) {
-      expect(outputDurationMs(10_000, cuts), JSON.stringify(cuts)).toBe(outputDuration(keepSegments(10_000, cuts)))
-    }
+  // [cuts, expected output length of a 10 s recording]: overlapping, reversed, out-of-range and tiny cuts,
+  // and kept pieces under MIN_SEGMENT_MS (40 ms), which the editor drops as well
+  const cases: Array<[string, CutRange[], number]> = [
+    ['no cuts', [], 10_000],
+    ['one cut', [{ id: 'a', start: 1000, end: 2000 }], 9000],
+    ['overlapping cuts merge', [{ id: 'a', start: 1000, end: 3000 }, { id: 'b', start: 2500, end: 4000 }], 7000],
+    ['a reversed cut', [{ id: 'a', start: 5000, end: 4000 }], 9000],
+    ['cuts past both ends are clamped', [{ id: 'a', start: -500, end: 700 }, { id: 'b', start: 9800, end: 12_000 }], 9100],
+    ['kept pieces under 40 ms vanish', [{ id: 'a', start: 20, end: 9990 }], 0],
+    ['everything cut', [{ id: 'a', start: 0, end: 10_000 }], 0],
+    ['a cut under 1 ms is ignored', [{ id: 'a', start: 100, end: 100.5 }], 10_000],
+    ['adjacent cuts merge, a 30 ms tail vanishes', [{ id: 'a', start: 3000, end: 3010 }, { id: 'b', start: 3010, end: 3020 }, { id: 'c', start: 8000, end: 9970 }], 7980]
+  ]
+  it.each(cases)('%s', (_name, cuts, expected) => {
+    expect(outputDurationMs(10_000, cuts)).toBe(expected)
   })
 })
 
