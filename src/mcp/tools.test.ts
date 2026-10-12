@@ -74,6 +74,16 @@ describe('the tool list', () => {
     expect(SERVER_INSTRUCTIONS).toContain('REAL')
   })
 
+  it('tells the agent what a cancelled call does in the app, and which deletes are refused', () => {
+    const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.description]))
+    for (const name of ['start_recording', 'record_scenario', 'start_scenario_capture', 'export_project']) expect(by[name], name).toContain('cancelled')
+    expect(by['stop_recording']).toContain('does not stop the saving')
+    expect(by['edit_project']).toContain('does not take back edits')
+    expect(by['delete_project']).toContain('composition')
+    expect(by['delete_scenario']).toContain('scenario review')
+    expect(by['stop_scenario_capture']).toContain('already ended')
+  })
+
   it('marks reads as read-only and deletes as destructive', async () => {
     const c = await connect(recording().rpc)
     const { tools } = await c.listTools()

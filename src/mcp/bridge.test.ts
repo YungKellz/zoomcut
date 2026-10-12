@@ -4,7 +4,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { existsSync, promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AgentError } from '@shared/agent'
+import { AGENT_DISCOVERY_FILE, AgentError } from '@shared/agent'
 import { AgentServer } from '../main/agent/server'
 
 /**
@@ -24,7 +24,7 @@ describe.skipIf(!existsSync(bridge))('the built stdio bridge', () => {
   beforeAll(async () => {
     dir = await fsp.mkdtemp(join(tmpdir(), 'zoomcut-bridge-test-'))
     server = new AgentServer({
-      discoveryPath: join(dir, 'agent-control.json'),
+      discoveryPath: join(dir, AGENT_DISCOVERY_FILE),
       version: '9.9.9',
       logError: () => undefined,
       methods: {
@@ -85,7 +85,7 @@ describe.skipIf(!existsSync(bridge))('the built stdio bridge', () => {
   it('reaches an app that restarted with a new port and token', async () => {
     await server.stop()
     const again = new AgentServer({
-      discoveryPath: join(dir, 'agent-control.json'),
+      discoveryPath: join(dir, AGENT_DISCOVERY_FILE),
       version: '9.9.9',
       logError: () => undefined,
       methods: { status: () => ({ version: 'second', screen: 'editor', recording: 'idle', scenarioCapture: 'idle', openProjectId: 'p1' }) }

@@ -6,13 +6,11 @@
  * Never writes to stdout, which belongs to the MCP protocol.
  */
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import type { AgentDiscovery, AgentErrorCode, AgentRpcResponse } from '@shared/agent'
-
-export const DISCOVERY_FILE = 'agent-control.json'
+import { isAbsolute, join } from 'node:path'
+import { AGENT_CONTROL_FLAG, AGENT_DISCOVERY_FILE, type AgentDiscovery, type AgentErrorCode, type AgentRpcResponse } from '@shared/agent'
 
 /** An error to show the agent: an RPC error from ZoomCut keeps its code, trouble reaching ZoomCut is `unavailable`. */
 export class BridgeError extends Error {
@@ -34,7 +32,7 @@ export function userDataDir(env: NodeJS.ProcessEnv = process.env, platform: Node
 }
 
 export function discoveryPath(env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform, home?: string): string {
-  return join(userDataDir(env, platform, home), DISCOVERY_FILE)
+  return join(userDataDir(env, platform, home), AGENT_DISCOVERY_FILE)
 }
 
 export function readDiscovery(path: string): AgentDiscovery | null {
@@ -88,6 +86,16 @@ function errorCode(err: unknown): string | undefined {
   return typeof err === 'object' && err !== null ? (err as { code?: string }).code : undefined
 }
 
+/** Whether a process with this id exists. A process of another user (EPERM) still counts: it is alive, just not ours to signal. */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return errorCode(err) === 'EPERM'
+  }
+}
+
 export interface ClientOptions {
   discoveryPath: string
   /** starts ZoomCut with agent control; null when the bridge does not know where the app is */
@@ -96,13 +104,18 @@ export interface ClientOptions {
   launchTimeoutMs?: number
   pollMs?: number
   log?: (message: string) => void
+  /** why ZOOMCUT_EXE was not used (see resolveExe); added to the message when ZoomCut cannot be reached */
+  exeProblem?: string | null
+  /** whether the process that wrote the discovery file still runs; default isPidAlive */
+  pidAlive?: (pid: number) => boolean
 }
 
-export function notRunningMessage(path: string): string {
+export function notRunningMessage(path: string, exeProblem?: string | null): string {
   return (
-    `ZoomCut is not running with agent control (no usable ${path}). Start ZoomCut with the --agent-control flag ` +
-    '(ZoomCut.exe --agent-control, or ZOOMCUT_AGENT_CONTROL=1 in its environment), or put the path of ZoomCut.exe in the ' +
-    'ZOOMCUT_EXE environment variable of this MCP server so it can be started automatically.'
+    `ZoomCut is not running with agent control (no usable ${path}). Start ZoomCut with the ${AGENT_CONTROL_FLAG} flag ` +
+    `(ZoomCut.exe ${AGENT_CONTROL_FLAG}; a ZOOMCUT_AGENT_CONTROL=1 environment variable only switches on a copy that is not open yet), ` +
+    'or put the absolute path of ZoomCut.exe in the ZOOMCUT_EXE environment variable of this MCP server so it can be started automatically.' +
+    (exeProblem ? ` ${exeProblem}` : '')
   )
 }
 
@@ -165,13 +178,20 @@ export class ZoomCutClient {
     }
   }
 
+  /** The discovery file, unless the app that wrote it is gone: a file left behind by a crash or a logoff names a port that something else may listen on now. */
+  private readLive(path: string): AgentDiscovery | null {
+    const found = readDiscovery(path)
+    if (found && found.pid > 0 && !(this.opts.pidAlive ?? isPidAlive)(found.pid)) return null
+    return found
+  }
+
   private async findOrStart(): Promise<AgentDiscovery> {
     const { discoveryPath: path, launch, log } = this.opts
-    const found = readDiscovery(path)
+    const found = this.readLive(path)
     if (found && (await this.alive(found))) return (this.cached = found)
-    if (!launch) throw new BridgeError('unavailable', notRunningMessage(path))
+    if (!launch) throw new BridgeError('unavailable', notRunningMessage(path, this.opts.exeProblem))
 
-    log?.('ZoomCut is not reachable; starting it with --agent-control')
+    log?.(`ZoomCut is not reachable; starting it with ${AGENT_CONTROL_FLAG}`)
     try {
       await launch()
     } catch (err) {
@@ -183,30 +203,53 @@ export class ZoomCutClient {
     while (Date.now() - started < timeout) {
       await new Promise((resolve) => setTimeout(resolve, poll))
       // read again every time: the app writes the file once its server is up, replacing a stale one
-      const d = readDiscovery(path)
+      const d = this.readLive(path)
       if (d && (await this.alive(d))) return (this.cached = d)
     }
     throw new BridgeError('unavailable', `ZoomCut was started but did not become ready within ${Math.round(timeout / 1000)} s`)
   }
 }
 
-/**
- * How this bridge can start ZoomCut: through ZOOMCUT_EXE, or - when the bridge itself runs under
- * ZoomCut.exe in Node mode - through that same exe. Null otherwise (a plain `node` run).
- */
-export function launcherFor(opts: {
+interface ExeInput {
   env: NodeJS.ProcessEnv
   execPath: string
   electronVersion: string | undefined
-}): (() => Promise<void>) | null {
-  const exe = opts.env['ZOOMCUT_EXE'] || (opts.electronVersion && /zoomcut\.exe$/i.test(opts.execPath) ? opts.execPath : '')
+  /** default existsSync */
+  exists?: (path: string) => boolean
+}
+
+/**
+ * The exe the bridge starts ZoomCut with: ZOOMCUT_EXE, or - when the bridge itself runs under
+ * ZoomCut.exe in Node mode - that same exe. ZOOMCUT_EXE only counts as the absolute path of a file
+ * that exists: a relative or bare name would be looked up from the working directory of the MCP
+ * client, which is usually some project that happens to hold a ZoomCut.exe of its own. `problem`
+ * says why a ZOOMCUT_EXE that was set is not used.
+ */
+export function resolveExe(opts: ExeInput): { exe: string | null; problem: string | null } {
+  const configured = opts.env['ZOOMCUT_EXE']
+  let problem: string | null = null
+  if (configured) {
+    if (isAbsolute(configured) && (opts.exists ?? existsSync)(configured)) return { exe: configured, problem: null }
+    problem = `ZOOMCUT_EXE ("${configured}") is ignored: it must be the absolute path of an existing ZoomCut.exe.`
+  }
+  const own = opts.electronVersion && /zoomcut\.exe$/i.test(opts.execPath) ? opts.execPath : null
+  return { exe: own, problem }
+}
+
+/**
+ * How this bridge can start ZoomCut (see resolveExe). Null when it does not know where the app is
+ * (a plain `node` run); an unusable ZOOMCUT_EXE is reported through `log`.
+ */
+export function launcherFor(opts: ExeInput & { log?: (message: string) => void }): (() => Promise<void>) | null {
+  const { exe, problem } = resolveExe(opts)
+  if (problem) opts.log?.(problem)
   if (!exe) return null
   return () =>
     new Promise<void>((resolve, reject) => {
       // the app must start as an app, not as a Node runtime like this process
       const env = { ...opts.env }
       delete env['ELECTRON_RUN_AS_NODE']
-      const child = spawn(exe, ['--agent-control'], { detached: true, stdio: 'ignore', env })
+      const child = spawn(exe, [AGENT_CONTROL_FLAG], { detached: true, stdio: 'ignore', env })
       child.once('error', reject)
       child.once('spawn', () => {
         child.unref()

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { AgentError } from '@shared/agent'
+import { join, resolve } from 'node:path'
+import { AGENT_CONTROL_FLAG, AGENT_DISCOVERY_FILE, AgentError } from '@shared/agent'
 import { AgentServer, type AgentMethodTable } from '../main/agent/server'
-import { BridgeError, DISCOVERY_FILE, discoveryPath, launcherFor, readDiscovery, userDataDir, ZoomCutClient } from './rpc'
+import { BridgeError, discoveryPath, isPidAlive, launcherFor, notRunningMessage, readDiscovery, resolveExe, userDataDir, ZoomCutClient } from './rpc'
 
 describe('userDataDir', () => {
   it('prefers ZOOMCUT_USER_DATA', () => {
@@ -22,8 +23,9 @@ describe('userDataDir', () => {
     expect(userDataDir({ XDG_CONFIG_HOME: '/cfg' }, 'linux', '/home/me')).toBe(join('/cfg', 'zoomcut'))
   })
 
-  it('looks for agent-control.json in it', () => {
-    expect(discoveryPath({ ZOOMCUT_USER_DATA: 'D:\\data' })).toBe(join('D:\\data', DISCOVERY_FILE))
+  it('looks for the shared discovery file name in it', () => {
+    expect(AGENT_DISCOVERY_FILE).toBe('agent-control.json')
+    expect(discoveryPath({ ZOOMCUT_USER_DATA: 'D:\\data' })).toBe(join('D:\\data', AGENT_DISCOVERY_FILE))
   })
 })
 
@@ -33,7 +35,7 @@ const servers: AgentServer[] = []
 
 beforeEach(async () => {
   dir = await fsp.mkdtemp(join(tmpdir(), 'zoomcut-mcp-test-'))
-  file = join(dir, DISCOVERY_FILE)
+  file = join(dir, AGENT_DISCOVERY_FILE)
 })
 
 afterEach(async () => {
@@ -41,9 +43,9 @@ afterEach(async () => {
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
-async function serve(methods: AgentMethodTable, token?: string): Promise<AgentServer> {
+async function serve(methods: AgentMethodTable, token?: string, pid?: number): Promise<AgentServer> {
   // the client finds out whether the app is alive by calling `status`, which the real app always has
-  const server = new AgentServer({ methods: { status: () => ({}), ...methods }, discoveryPath: file, version: '1.0.0', token, logError: () => undefined })
+  const server = new AgentServer({ methods: { status: () => ({}), ...methods }, discoveryPath: file, version: '1.0.0', token, pid, logError: () => undefined })
   servers.push(server)
   await server.start()
   return server
@@ -104,13 +106,67 @@ describe('ZoomCutClient', () => {
     const err = await failure(client().call('status'))
     expect(err.code).toBe('unavailable')
     expect(err.message).toContain(file)
-    expect(err.message).toContain('--agent-control')
+    expect(err.message).toContain(AGENT_CONTROL_FLAG)
     expect(err.message).toContain('ZOOMCUT_EXE')
+  })
+
+  it('says that the environment variable only works for a copy that is not open yet, and why a ZOOMCUT_EXE was ignored', async () => {
+    const plain = notRunningMessage(file)
+    expect(plain).toContain('ZOOMCUT_AGENT_CONTROL=1')
+    expect(plain).toContain('not open yet')
+    expect(plain).toContain('absolute path')
+    const err = await failure(client({ exeProblem: 'ZOOMCUT_EXE ("ZoomCut.exe") is ignored: nope.' }).call('status'))
+    expect(err.message).toContain('ZOOMCUT_EXE ("ZoomCut.exe") is ignored: nope.')
   })
 
   it('treats a leftover file of a dead app as not running', async () => {
     await fsp.writeFile(file, JSON.stringify({ port: 1, token: 'old', pid: 1, version: '0' }))
     expect((await failure(client().call('status'))).code).toBe('unavailable')
+  })
+
+  describe('a discovery file left behind by an app that is gone', () => {
+    const DEAD = 424242 // the injected check decides, no real process involved
+
+    it('is not trusted even when something answers on its port', async () => {
+      // another process now listens where ZoomCut did: it would get every call, token included
+      await serve({ ping: () => 'impostor' }, undefined, DEAD)
+      const asked: number[] = []
+      const c = client({ pidAlive: (pid) => (asked.push(pid), false) })
+      const err = await failure(c.call('ping'))
+      expect(err.code).toBe('unavailable')
+      expect(asked).toEqual([DEAD])
+    })
+
+    it('is used while the app that wrote it runs', async () => {
+      await serve({ ping: () => 'pong' }, undefined, DEAD)
+      expect(await client({ pidAlive: (pid) => pid === DEAD }).call('ping')).toBe('pong')
+    })
+
+    it('is replaced by the one of the app that gets started, and the poll ignores it meanwhile', async () => {
+      await serve({ ping: () => 'impostor' }, undefined, DEAD)
+      const launch = vi.fn(async () => {
+        await servers[0].stop() // the impostor stops answering; the real app writes its own file a moment later
+        setTimeout(() => void serve({ ping: () => 'real' }, undefined, process.pid), 60)
+      })
+      const alive = (pid: number): boolean => pid === process.pid
+      expect(await client({ launch, pidAlive: alive }).call('ping')).toBe('real')
+      expect(launch).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not judge a file without a pid', async () => {
+      const server = await serve({ ping: () => 'pong' })
+      await fsp.writeFile(file, JSON.stringify({ ...readDiscovery(file)!, pid: 0, token: server.token }))
+      expect(await client({ pidAlive: () => false }).call('ping')).toBe('pong')
+    })
+  })
+
+  describe('isPidAlive', () => {
+    it('knows this process and a process that ended', () => {
+      expect(isPidAlive(process.pid)).toBe(true)
+      const ended = spawnSync(process.execPath, ['-e', '0'])
+      expect(ended.pid).toBeGreaterThan(0)
+      expect(isPidAlive(ended.pid)).toBe(false)
+    })
   })
 
   it('reads the discovery file again after a wrong token, so a restarted app is found', async () => {
@@ -181,12 +237,47 @@ describe('ZoomCutClient', () => {
 })
 
 describe('launcherFor', () => {
+  const present = (): boolean => true
+  const absent = (): boolean => false
+  const portable = resolve('ZoomCut-Portable.exe') // an absolute path on whatever platform the tests run
+
   it('knows how to start the app only through ZOOMCUT_EXE or when it runs under ZoomCut.exe', () => {
     expect(launcherFor({ env: {}, execPath: 'C:\\Program Files\\nodejs\\node.exe', electronVersion: undefined })).toBeNull()
     expect(launcherFor({ env: {}, execPath: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe', electronVersion: '44.0.0' })).toBeNull()
     expect(launcherFor({ env: {}, execPath: 'C:\\Apps\\ZoomCut\\ZoomCut.exe', electronVersion: undefined })).toBeNull() // a node renamed ZoomCut.exe is not the app
     expect(launcherFor({ env: {}, execPath: 'C:\\Apps\\ZoomCut\\ZoomCut.exe', electronVersion: '44.0.0' })).toBeTypeOf('function')
     expect(launcherFor({ env: {}, execPath: 'C:\\Apps\\ZOOMCUT.EXE', electronVersion: '44.0.0' })).toBeTypeOf('function')
-    expect(launcherFor({ env: { ZOOMCUT_EXE: 'D:\\ZoomCut-Portable.exe' }, execPath: 'node', electronVersion: undefined })).toBeTypeOf('function')
+    expect(launcherFor({ env: { ZOOMCUT_EXE: portable }, execPath: 'node', electronVersion: undefined, exists: present })).toBeTypeOf('function')
+  })
+
+  describe('ZOOMCUT_EXE', () => {
+    it('counts only as the absolute path of a file that exists', () => {
+      expect(resolveExe({ env: { ZOOMCUT_EXE: portable }, execPath: 'node', electronVersion: undefined, exists: present })).toEqual({ exe: portable, problem: null })
+      expect(resolveExe({ env: {}, execPath: 'node', electronVersion: undefined })).toEqual({ exe: null, problem: null })
+    })
+
+    it('is ignored when relative, bare or missing - the bridge would resolve it against the working directory of the MCP client', () => {
+      for (const value of ['release/win-unpacked/ZoomCut.exe', 'ZoomCut.exe', '.\\ZoomCut.exe']) {
+        const r = resolveExe({ env: { ZOOMCUT_EXE: value }, execPath: 'node', electronVersion: undefined, exists: present })
+        expect(r.exe, value).toBeNull()
+        expect(r.problem, value).toContain(value)
+        expect(r.problem, value).toContain('absolute path')
+      }
+      const missing = resolveExe({ env: { ZOOMCUT_EXE: portable }, execPath: 'node', electronVersion: undefined, exists: absent })
+      expect(missing.exe).toBeNull()
+      expect(missing.problem).toContain('existing')
+    })
+
+    it('falls back to the exe the bridge runs under, and says why on stderr', () => {
+      const log = vi.fn()
+      const under = { execPath: 'C:\\Apps\\ZoomCut\\ZoomCut.exe', electronVersion: '44.0.0' }
+      expect(resolveExe({ env: { ZOOMCUT_EXE: 'ZoomCut.exe' }, ...under, exists: present }).exe).toBe(under.execPath)
+      expect(launcherFor({ env: { ZOOMCUT_EXE: 'ZoomCut.exe' }, ...under, exists: present, log })).toBeTypeOf('function')
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('ZOOMCUT_EXE ("ZoomCut.exe") is ignored'))
+      // nowhere to fall back to: no launcher at all, and still the note
+      log.mockClear()
+      expect(launcherFor({ env: { ZOOMCUT_EXE: 'ZoomCut.exe' }, execPath: 'node', electronVersion: undefined, exists: present, log })).toBeNull()
+      expect(log).toHaveBeenCalledTimes(1)
+    })
   })
 })
