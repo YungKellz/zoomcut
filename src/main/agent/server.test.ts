@@ -3,7 +3,7 @@ import { request } from 'node:http'
 import { existsSync, promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentError, type AgentDiscovery } from '@shared/agent'
+import { AGENT_DISCOVERY_FILE, AgentError, type AgentDiscovery } from '@shared/agent'
 import { AgentServer, type AgentMethodTable } from './server'
 
 const TOKEN = 'a'.repeat(64)
@@ -50,7 +50,7 @@ let server: AgentServer | null = null
 
 beforeEach(async () => {
   dir = await fsp.mkdtemp(join(tmpdir(), 'zoomcut-agent-test-'))
-  discoveryPath = join(dir, 'nested', 'agent-control.json')
+  discoveryPath = join(dir, 'nested', AGENT_DISCOVERY_FILE)
 })
 
 afterEach(async () => {
@@ -71,7 +71,7 @@ describe('discovery file', () => {
     expect(info.port).toBeGreaterThan(0)
     expect(JSON.parse(await fsp.readFile(discoveryPath, 'utf8'))).toEqual(info)
     // written through a temp file that is gone again
-    expect((await fsp.readdir(join(dir, 'nested'))).sort()).toEqual(['agent-control.json'])
+    expect((await fsp.readdir(join(dir, 'nested'))).sort()).toEqual([AGENT_DISCOVERY_FILE])
     await server!.stop()
     expect(existsSync(discoveryPath)).toBe(false)
     expect(server!.listening).toBe(false)
@@ -191,6 +191,82 @@ describe('dispatch', () => {
     expect((await rpc(port, 'quick')).json.result).toBe('quick')
     release()
     expect((await held).json.result).toBe('held')
+  })
+})
+
+describe('a client that hangs up', () => {
+  /** posts a call and returns the request, so a test can destroy it while the handler still works */
+  function post(port: number, method: string): { req: ReturnType<typeof request>; reply: Promise<Reply> } {
+    let req!: ReturnType<typeof request>
+    const reply = new Promise<Reply>((resolve, reject) => {
+      req = request(
+        { host: '127.0.0.1', port, method: 'POST', path: '/rpc', headers: { Host: `127.0.0.1:${port}`, Authorization: `Bearer ${TOKEN}` } },
+        (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (c: Buffer) => chunks.push(c))
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
+        }
+      )
+      req.on('error', reject)
+      req.end(JSON.stringify({ method }))
+    })
+    reply.catch(() => undefined)
+    return { req, reply }
+  }
+
+  it('aborts the signal the handler got, and the handler can stop what it started', async () => {
+    let signal: AbortSignal | undefined
+    let release: () => void = () => undefined
+    const finished = new Promise<void>((r) => (release = r))
+    const { port } = await start({
+      long: async (_params, s) => {
+        signal = s
+        await finished
+        return 'too late'
+      }
+    })
+    const { req } = post(port, 'long')
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    expect(signal!.aborted).toBe(false)
+    req.destroy()
+    await vi.waitFor(() => expect(signal!.aborted).toBe(true))
+    release()
+    // the server went on: the next call is served
+    expect((await rpc(port, 'long')).json.result).toBe('too late')
+  })
+
+  it('leaves the signal alone for a call that was answered', async () => {
+    let signal: AbortSignal | undefined
+    const { port } = await start({
+      quick: (_params, s) => {
+        signal = s
+        return 'done'
+      }
+    })
+    expect((await rpc(port, 'quick')).json.result).toBe('done')
+    await new Promise((r) => setTimeout(r, 50)) // the connection closes after the answer
+    expect(signal!.aborted).toBe(false)
+  })
+
+  it('tolerates a handler that fails after the client left', async () => {
+    let signal: AbortSignal | undefined
+    const logError = vi.fn()
+    const { port } = await start(
+      {
+        long: async (_params, s) => {
+          signal = s
+          await new Promise((r) => setTimeout(r, 60))
+          throw new Error('too late to matter')
+        }
+      },
+      { logError }
+    )
+    const { req } = post(port, 'long')
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    req.destroy()
+    await new Promise((r) => setTimeout(r, 120))
+    expect(signal!.aborted).toBe(true)
+    expect((await rpc(port, 'long')).json.ok).toBe(false) // and still serving
   })
 })
 
