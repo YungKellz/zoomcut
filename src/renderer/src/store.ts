@@ -16,15 +16,17 @@ import type {
 } from '@shared/types'
 import { BLUR_DEFAULTS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
-import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts, playStartTime, stepFrames } from './engine/timeline'
+import { firstKeptTime, keepSegments, playStartTime, stepFrames } from './engine/timeline'
+import { addCutToProject } from './engine/projectEdits'
 import {
+  ZOOM_SCALE_MAX,
+  ZOOM_SCALE_MIN,
   findZoom,
   insertZoomPart,
-  normalizeZoomParts,
+  patchZoom,
   patchZoomArea,
   removeZoomPart,
   resolveZoomOverlaps,
-  shiftZoomParts,
   zoomAreaFocusMs,
   zoomAreas,
   type ZoomAreaPatch
@@ -57,6 +59,14 @@ export type PendingStart =
   | { kind: 'record'; displayId: number; audio: AudioCaptureOptions | null }
   | { kind: 'replay'; scenarioId: string; audio: AudioCaptureOptions | null }
   | { kind: 'capture'; displayId: number }
+
+/**
+ * Long-running work a screen has going that leaving the screen would throw away: an export (editor
+ * dialog or composition), a voiceover take, a GIF conversion, a scenario replay / preview on the
+ * review screen, a recording, a scenario capture. Set through hooks/useBusy.ts (one place per kind);
+ * the agent executor answers `busy` to a command that would close the screen meanwhile.
+ */
+export type BusyKind = 'export' | 'voiceover' | 'converter' | 'replay' | 'recording' | 'capture'
 
 export const PICK_MIN_SIZE = 1 / 5
 export const PICK_MAX_SIZE = 1 / 1.2
@@ -112,6 +122,8 @@ export interface EditorState {
   /** clip ids whose <audio> element reported a load/decode error (e.g. a missing file);
    * AudioPlayer sets this instead of retrying play() forever, the Audio panel shows a warning */
   audioErrors: Record<string, boolean>
+  /** what is running right now, see BusyKind (one instance of each kind exists at a time) */
+  busy: Partial<Record<BusyKind, true>>
 
   openProject(project: Project): void
   closeProject(): void
@@ -176,6 +188,7 @@ export interface EditorState {
   removeAudioClip(id: string): void
   setAudioMuted(muted: boolean): void
   setAudioError(id: string, hasError: boolean): void
+  setBusy(kind: BusyKind, on: boolean): void
 }
 
 export const useStore = create<EditorState>((set, get) => ({
@@ -199,6 +212,7 @@ export const useStore = create<EditorState>((set, get) => ({
   exportOpen: false,
   audioMuted: false,
   audioErrors: {},
+  busy: {},
 
   openProject: (project) =>
     set({
@@ -338,7 +352,7 @@ export const useStore = create<EditorState>((set, get) => ({
     }
     const crop = p.crop
     const target = { x: crop.x + r.cx * crop.w, y: crop.y + r.cy * crop.h }
-    const scale = clamp(Math.round((1 / r.size) * 10) / 10, 1.2, 5)
+    const scale = clamp(Math.round((1 / r.size) * 10) / 10, ZOOM_SCALE_MIN, ZOOM_SCALE_MAX)
     const area = get().pickArea
     // a part that vanished while picking (undo) is a no-op rather than a write into area 0
     if (area > 0) get().updateZoomPart(selection.id, area, { target, scale })
@@ -394,18 +408,7 @@ export const useStore = create<EditorState>((set, get) => ({
   },
 
   addCut: (start, end) => {
-    get().mutate((p) => {
-      const duration = p.recording.durationMs
-      const cuts = normalizeCuts([...p.cuts, { id: uid('cut'), start, end }], duration)
-      return {
-        ...p,
-        cuts,
-        // a shortened zoom may no longer have room for all its parts
-        zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200).map(normalizeZoomParts),
-        texts: clipRegionsToCuts(p.texts, cuts, duration, 100),
-        blurs: clipRegionsToCuts(p.blurs, cuts, duration, 100)
-      }
-    })
+    get().mutate((p) => addCutToProject(p, { id: uid('cut'), start, end }))
     set({ range: null, selection: null })
   },
 
@@ -441,15 +444,7 @@ export const useStore = create<EditorState>((set, get) => ({
   updateZoom: (id, patch, record = true) => {
     const whole = wholeMs(patch, ['start', 'end', 'easeInMs', 'easeOutMs'])
     get().mutate((p) => {
-      const zooms = p.zooms.map((z) => {
-        if (z.id !== id) return z
-        const next = { ...z, ...whole }
-        // dragging the whole region (both edges move alike) carries its parts along; any other
-        // change is normalized by resolveZoomOverlaps, which drops the parts that no longer fit.
-        // Both edges are rounded on their own, so "alike" allows the 1 ms that rounding can add.
-        const ds = next.start - z.start
-        return Math.abs(ds - (next.end - z.end)) <= 1 ? shiftZoomParts(next, ds) : next
-      })
+      const zooms = p.zooms.map((z) => (z.id === id ? patchZoom(z, whole) : z))
       return { ...p, zooms: resolveZoomOverlaps(zooms, id, p.recording.durationMs) }
     }, record)
   },
@@ -629,6 +624,15 @@ export const useStore = create<EditorState>((set, get) => ({
       if (hasError) next[id] = true
       else delete next[id]
       return { audioErrors: next }
+    }),
+
+  setBusy: (kind, on) =>
+    set((s) => {
+      if (Boolean(s.busy[kind]) === on) return s
+      const next = { ...s.busy }
+      if (on) next[kind] = true
+      else delete next[kind]
+      return { busy: next }
     }),
 
   setNotice: (notice) => set({ notice }),

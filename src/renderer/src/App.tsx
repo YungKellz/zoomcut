@@ -14,6 +14,7 @@ import { useStore } from './store'
 export function App(): JSX.Element {
   const hash = window.location.hash.replace('#', '')
   const screen = useStore((s) => s.screen)
+  const scenarioId = useStore((s) => s.scenario?.id)
   if (hash === 'bar') return <RecorderBar />
   if (hash === 'target') return <E2eTarget />
   if (hash === 'overlay') return <ReplayOverlay />
@@ -22,7 +23,8 @@ export function App(): JSX.Element {
       {screen === 'editor' ? (
         <Editor />
       ) : screen === 'scenario' ? (
-        <ScenarioReview />
+        // keyed: another scenario (an agent can switch in place) never inherits this one's selection and notices
+        <ScenarioReview key={scenarioId} />
       ) : screen === 'composition' ? (
         <CompositionScreen />
       ) : (

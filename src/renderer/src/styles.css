@@ -3409,3 +3409,46 @@ input.scenario-pause-input {
 
 
 /* ---------- 0.4.1 end of track markers ---------- */
+
+/* ---- agent ---- */
+
+/* the footer's first cell: language selector and the AI agents (MCP) button */
+.home-footer-group {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.home-footer .agent-open {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.agent-block {
+  margin-top: 14px;
+}
+
+.agent-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.agent-code {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}

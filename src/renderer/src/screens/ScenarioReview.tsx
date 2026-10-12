@@ -26,6 +26,7 @@ import {
 } from '@shared/scenario'
 import type { TypeSpeed } from '@shared/scenario'
 import { useScenario, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { useRecorder } from '../recording/useRecorder'
 import { deleteOpenScenario, recaptureScenario } from '../recording/lifecycle'
 import { ScenarioTimeline } from '../components/ScenarioTimeline'
@@ -100,6 +101,7 @@ export function ScenarioReview(): JSX.Element {
     () => setNotice(t('scenario.replayAborted'))
   )
   const busy = (recorder.phase !== 'idle' && recorder.phase !== 'error') || previewing || startingReplay
+  useBusy('replay', busy)
 
   // same audio sources the home screen's checkboxes remember - just for the "Record video"
   // hint below; startReplay() re-reads settings fresh at the moment it actually starts
@@ -242,13 +244,16 @@ export function ScenarioReview(): JSX.Element {
     }
   }
 
-  // "Record again" on a recording opens its scenario with a replay already queued: start it like the button
+  // "Record again" on a recording opens its scenario with a replay already queued, and an AI agent
+  // can queue one while this screen is shown: start it like the button (once - takePendingStart clears it)
+  const pendingStart = useStore((s) => s.pendingStart)
   useEffect(() => {
+    if (!pendingStart) return
     const pending = useStore.getState().takePendingStart((p) => p.kind === 'replay' && p.scenarioId === scenario.id)
     if (pending?.kind === 'replay') void startReplay(pending.audio)
-    // once, on entry only
+    // startReplay closes over the current scenario; only a new pending start matters
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [pendingStart])
 
   return (
     <div className="scenario-review">

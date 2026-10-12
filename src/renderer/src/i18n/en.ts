@@ -509,7 +509,22 @@ export const en = {
   'converter.dropNotFile': 'That is a folder, not a video file.',
   'converter.dropUnreadable': 'There is no video in that file, or it is damaged.',
   'converter.dropFailed': 'Could not open the file: {error}',
-  'converter.probing': 'Reading the file…'
+  'converter.probing': 'Reading the file…',
+
+  // ---- agent ----
+  'agent.button': 'AI agents (MCP)',
+  'agent.buttonTitle': 'Let an AI agent such as Claude control ZoomCut',
+  'agent.title': 'Control ZoomCut from AI agents',
+  'agent.intro': 'An MCP client (Claude Code, Claude Desktop, Cursor …) can then record your screen, replay mouse and keyboard input, edit recordings and export them. While it works it drives the real screen, mouse and keyboard.',
+  'agent.loading': 'Loading…',
+  'agent.json': 'Claude Desktop, Cursor and other clients: add this to the MCP servers settings',
+  'agent.claudeCode': 'Claude Code: run this in a terminal',
+  'agent.copy': 'Copy',
+  'agent.copied': 'Copied',
+  'agent.portableHint': 'This is the portable build, so the agent needs Node.js installed to start the bridge.',
+  'agent.updateHint': 'Updating or reinstalling ZoomCut ends running MCP sessions, so reconnect the server in your client afterwards.',
+  'agent.loadFailed': 'Could not read the MCP settings: {error}',
+  'agent.exporting': 'An AI agent is exporting a video… {percent}%'
 }
 
 export type TKey = keyof typeof en

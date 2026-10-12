@@ -104,6 +104,13 @@ const api: ZcApi = {
     cancel: () => ipcRenderer.invoke('converter:cancel'),
     onProgress: (cb) => subscribe('converter:progress', cb)
   },
+  agent: {
+    onCommand: (cb) => subscribe('agent:command', cb),
+    reply: (r) => ipcRenderer.invoke('agent:reply', r),
+    pushStatus: (s) => ipcRenderer.invoke('agent:status', s),
+    onDataChanged: (cb) => subscribe('agent:data-changed', cb),
+    mcpConfig: () => ipcRenderer.invoke('agent:mcp-config')
+  },
   e2e: {
     openTarget: (bounds) => ipcRenderer.invoke('e2e:open-target', bounds),
     injectSteps: (steps) => ipcRenderer.invoke('e2e:inject-steps', steps)

@@ -1,9 +1,10 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
+import { Bot, Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
 import type { AppInfo, AudioCaptureOptions, CompositionSummary, DisplayInfo, Language, ProjectSummary, ScenarioSummary, VideoFileInfo } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { buildHomeItems } from '../home/items'
 import { confirmDeleteProject, confirmDeleteScenario } from '../recording/lifecycle'
 import { confirmAt } from '../components/ConfirmPopover'
@@ -16,6 +17,7 @@ import { UpdateStatus } from '../components/UpdateStatus'
 import { GifConverterDialog } from '../converter/GifConverterDialog'
 import { GifConverterCard } from '../converter/GifConverterCard'
 import { useVideoIntake } from '../converter/useVideoIntake'
+import { AgentDialog } from '../agent/AgentDialog'
 
 export function Home(): JSX.Element {
   const t = useT()
@@ -27,6 +29,7 @@ export function Home(): JSX.Element {
   const [compositionBusy, setCompositionBusy] = useState(false)
   // the video the converter dialog is open for (picked or dropped); null = dialog closed
   const [converterVideo, setConverterVideo] = useState<VideoFileInfo | null>(null)
+  const [agentOpen, setAgentOpen] = useState(false)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -43,6 +46,8 @@ export function Home(): JSX.Element {
   const scenario = useScenarioCapture((s) => openScenario(s))
   const recording = recorder.phase !== 'idle' && recorder.phase !== 'error'
   const capturing = scenario.phase !== 'idle' && scenario.phase !== 'error'
+  useBusy('recording', recording)
+  useBusy('capture', capturing)
   // a file dropped anywhere on the window (or picked in the converter card) opens the converter
   const intake = useVideoIntake({ enabled: !recording && !capturing && converterVideo === null, onVideo: setConverterVideo })
 
@@ -120,15 +125,22 @@ export function Home(): JSX.Element {
     if (recorder.phase === 'idle' && scenario.phase === 'idle') void refreshLibrary()
   }, [recorder.phase, scenario.phase, refreshLibrary])
 
-  // "Record again" hands the new attempt over through the store: start it exactly like the button
-  // would. takePendingStart clears it atomically, so a StrictMode re-run of this effect cannot start twice.
+  // an AI agent deleted a recording or created / deleted a scenario behind the UI's back: both
+  // lists are fetched together (see refreshLibrary), so either kind of change reloads them
+  useEffect(() => window.zc.agent.onDataChanged(() => void refreshLibrary()), [refreshLibrary])
+
+  // "Record again" and AI agents hand the new attempt over through the store: start it exactly like
+  // the button would - when Home opens with it already set, and when it is set while Home is shown.
+  // takePendingStart clears it atomically, so a StrictMode re-run of this effect cannot start twice.
+  const pendingStart = useStore((s) => s.pendingStart)
   useEffect(() => {
+    if (!pendingStart) return
     const pending = useStore.getState().takePendingStart((p) => p.kind !== 'replay')
     if (pending?.kind === 'record') void recorder.start(pending.displayId, { audio: pending.audio ?? undefined })
     else if (pending?.kind === 'capture') void scenario.start(pending.displayId)
-    // once, on entry only
+    // the hooks' start functions are stable; only a new pending start matters
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [pendingStart])
 
   // displays come and go (docking, projectors): keep the list fresh while idle - a scenario
   // capture also has to stay excluded, the same as an ordinary recording, or this ends up
@@ -415,13 +427,18 @@ export function Home(): JSX.Element {
       </div>
 
       <footer className="home-footer">
-        <label className="lang-select">
-          <span>{t('common.language')}</span>
-          <select value={lang} onChange={(e) => void changeLanguage(e.target.value as Language)}>
-            <option value="en">{t('common.lang.en')}</option>
-            <option value="ru">{t('common.lang.ru')}</option>
-          </select>
-        </label>
+        <div className="home-footer-group">
+          <label className="lang-select">
+            <span>{t('common.language')}</span>
+            <select value={lang} onChange={(e) => void changeLanguage(e.target.value as Language)}>
+              <option value="en">{t('common.lang.en')}</option>
+              <option value="ru">{t('common.lang.ru')}</option>
+            </select>
+          </label>
+          <button className="btn btn-small agent-open" onClick={() => setAgentOpen(true)} disabled={recording || capturing} title={t('agent.buttonTitle')}>
+            <Bot size={13} /> {t('agent.button')}
+          </button>
+        </div>
         {info && (
           <>
             <span className="home-version">
@@ -475,6 +492,7 @@ export function Home(): JSX.Element {
       )}
 
       {converterVideo && <GifConverterDialog key={converterVideo.path} initialVideo={converterVideo} onClose={() => setConverterVideo(null)} />}
+      {agentOpen && <AgentDialog onClose={() => setAgentOpen(false)} />}
 
       {capturing && (
         <div className="overlay">

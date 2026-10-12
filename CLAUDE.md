@@ -10,8 +10,9 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 | --- | --- |
 | `npm run dev` | dev app with hot reload; restart it after changes in `src/main` or `src/preload` |
 | `npm run typecheck` | main/preload/shared (`tsconfig.node.json`) and renderer (`tsconfig.json`) |
-| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine (incl. frame stepping), pick-area math, store zoom/playback actions, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine + dry run, input tags, window visibility, composition layout, GIF converter args + video file intake, formatting helpers |
-| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing), zoom steps (`zoom-parts.spec.ts`, synthetic), delete / record again / home layout (`lifecycle.spec.ts`), playback end + frame step (`playback.spec.ts`, synthetic), timeline lanes + input tags (`timeline-lanes.spec.ts`, synthetic), Clip tab windows (`windows.spec.ts`, synthetic); needs a display, ~20 min |
+| `npm test` | vitest unit tests (`src/**/*.test.ts`): timeline/camera engine (incl. frame stepping), pick-area math, store zoom/playback actions, audio export plan + ffmpeg graph, waveform peaks, clip labels, scenario engine + dry run, input tags, window visibility, composition layout, GIF converter args + video file intake, formatting helpers, agent control (key chords, scenario builder, RPC schemas, control server, methods, MCP client and tools) |
+| `npm run build && npm run e2e` | Playwright tests on the real screen (`tests/e2e`): smoke, 46 adversarial scenarios, update feed, audio, scenario recorder (injects real input over the app's own test window), blur + composition + MP4→GIF converter (`composition.spec.ts`, synthetic ffmpeg recordings, records nothing), zoom steps (`zoom-parts.spec.ts`, synthetic), delete / record again / home layout (`lifecycle.spec.ts`), playback end + frame step (`playback.spec.ts`, synthetic), timeline lanes + input tags (`timeline-lanes.spec.ts`, synthetic), Clip tab windows (`windows.spec.ts`, synthetic), agent control through the real stdio bridge + a real MCP client (`agent.spec.ts`; its scenario replay test only with `ZOOMCUT_E2E_REPLAY=1`); needs a display, ~20 min |
+| `npm run build` | electron-vite bundles, then the MCP bridge (`mcp.vite.config.ts` → `out/mcp/zoomcut-mcp.cjs`, one CJS file); `src/mcp/bridge.test.ts` runs that file over stdio and skips itself until it exists |
 | `npm run dist` | installer + portable exe + `latest.yml` + `.blockmap` in `release/`; never publishes |
 
 - `ZOOMCUT_EXE=release/win-unpacked/ZoomCut.exe npm run e2e` runs the e2e tests against the packaged app.
@@ -44,9 +45,22 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   userData), `mediaProtocol.ts` (`zc-media://` with Range + CORS), `updater.ts` (electron-updater against GitHub
   Releases), `ipc.ts` (all channels; `e2e:*` handlers exist only under `ZOOMCUT_E2E=1`).
 - `src/preload/index.ts` – exposes `window.zc`, typed by `src/shared/api.ts`.
+- `src/main/agent` – agent control (MCP): `server.ts` (loopback `POST /rpc`, Electron-free), `methods.ts` (the RPC table, Electron and
+  disk injected), `rendererBridge.ts` (`agent:command` / `agent:reply` with a pending map, the renderer's `agent:status`
+  cache; commands time out after 60 s except exports, a reload / crash / closed window rejects them; `windowTarget.ts` detects
+  those from the window / webContents events), `waiter.ts`,
+  `mcpConfig.ts` (what the Home dialog shows), `launchArgs.ts` (`--agent-control` / env decisions, pure), `index.ts` (Electron
+  wiring, `agent:*` IPC, discovery file). A client that hangs up aborts the signal handlers get (`AgentMethodHandler`): starts
+  are discarded, exports are cancelled through the renderer's `cancel` command, `stop_recording` and edits are not abortable.
+  `src/mcp` – the stdio MCP bridge: `tools.ts` (the 18 tools and their descriptions), `rpc.ts` (finds / starts the app,
+  node:http client; ignores a discovery file whose pid is gone and a `ZOOMCUT_EXE` that is not an absolute existing path),
+  `zoomcut-mcp.ts` (entry); built by `mcp.vite.config.ts`, shipped as `resources/mcp/zoomcut-mcp.cjs`
+  (`extraResources`). The flag and discovery file names live in `src/shared/agent.ts` (`AGENT_CONTROL_FLAG`,
+  `AGENT_DISCOVERY_FILE`) and are the only copy. The renderer side is `src/renderer/src/agent/` (executor, edits, params).
 - `src/shared` – data model (`types.ts`), defaults, the API contract, `audio.ts` helpers and the pure scenario
   engine `scenario.ts` (event grouping, timing model and edits, v1 → v2 migration, replay compilation), `videoFiles.ts`
-  (video extensions + the coded `video-file:<code>` errors main throws). Renderer and main only share these.
+  (video extensions + the coded `video-file:<code>` errors main throws), the agent contract (`agent.ts` types + `AgentError`,
+  `agentSchemas.ts` zod params, `agentKeys.ts`, `agentScenario.ts`, `agentProject.ts`). Renderer and main only share these.
 - `src/renderer/src` – React app: `screens/` (Home, Editor, Composition, RecorderBar, ScenarioReview, ReplayOverlay, E2eTarget),
   `editor/` (Preview, Timeline, Inspector, ExportDialog, AudioPlayer), `engine/` (timeline math, cursor, camera,
   `compose.ts` = the single frame compositor used by both preview and export), `export/` (Mediabunny/WebCodecs or
@@ -132,8 +146,27 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
   (`converter:probe`) and opens `GifConverterDialog` prefilled; refused files come back as `video-file:<code>`
   errors that `videoErrorText` translates. Rows are one big click target (the open button's `::after` covers the
   card); every delete asks through `confirmAt` with the clicked button as the anchor.
+- Agent control (MCP) is off unless a run asks: `--agent-control` (a second launch with it switches the running copy on) or
+  `ZOOMCUT_AGENT_CONTROL=1` starts `main/agent/server.ts` on 127.0.0.1 with a random port and token, written to
+  `<userData>/agent-control.json` (`{port, token, pid, version}`, removed at quit; a request with an Origin header, a Host other
+  than `127.0.0.1:<port>` or the wrong token is a bare 403). `src/mcp` (stdio, one tool per RPC method) finds the app through that
+  file, starts it with `--agent-control` when it runs under ZoomCut.exe or knows `ZOOMCUT_EXE`, and calls `/rpc`; the app never
+  speaks MCP itself. Adding a capability = a schema in `shared/agentSchemas.ts` (`agentParamSchemas`, used for the tool's input
+  schema AND for validation in main; descriptions are the agent's manual, limits are the editor's real ones and values outside
+  are rejected, never clamped), a handler in `main/agent/methods.ts`, a tool in `src/mcp/tools.ts`. What only the renderer can do
+  (`projects.edit`, `projects.export`, starting a recording / replay / capture from Home) is forwarded over `agent:command`;
+  such a start's reply only means "handed to the screen": main waits for the real phase itself through the events on
+  `RecordingController` (`state`, `finished`, `cancelled`, `failed`) and `ScenarioCapture` (`state`, `done`, `failed`) and
+  refuses with `busy` while a recording, capture or preview runs. Commands wait for the executor's first `agent:status` push.
+  The `agent:*` IPC is registered on every run (the Home dialog shows the config either way); data changed behind the UI's back
+  (project delete, scenario create / delete, a rename) is announced with `agent:data-changed`. Agent scenarios are display-
+  relative DIP (`shared/agentScenario.ts` puts them on the virtual desktop, `startPoint` = display centre) and keys are chords
+  (`shared/agentKeys.ts` gives the vk / scan / extended a captured chord has; `Win` alone or `Alt+Shift` are valid); a scenario
+  folder must be created before `saveScenario` (it never creates one). Error codes: `bad_params`, `not_found`, `busy`,
+  `cancelled`, `failed`, `no_window`, `unknown_method`. The bridge runs under ZoomCut.exe with `ELECTRON_RUN_AS_NODE=1` (installed
+  copies) or `node` (portable: a copy in `userData/mcp`, dev: `out/mcp`); it logs to stderr only, stdout is the protocol.
 - Env vars: `ZOOMCUT_E2E=1` (no single-instance lock, updater never installs on quit), `ZOOMCUT_RECORDINGS_DIR`,
-  `ZOOMCUT_SCENARIOS_DIR`, `ZOOMCUT_COMPOSITIONS_DIR`, `ZOOMCUT_EXE`, `ZOOMCUT_UPDATE_URL` (generic update feed: a folder with `latest.yml` +
+  `ZOOMCUT_SCENARIOS_DIR`, `ZOOMCUT_COMPOSITIONS_DIR`, `ZOOMCUT_USER_DATA` (moves userData: settings, `agent-control.json`; the bridge reads it too), `ZOOMCUT_AGENT_CONTROL=1`, `ZOOMCUT_EXE` (e2e: the packaged app; for the MCP bridge: the exe it may start), `ZOOMCUT_UPDATE_URL` (generic update feed: a folder with `latest.yml` +
   installer), `ZOOMCUT_UPDATE_CHECK=1` (keep the updater on under `ZOOMCUT_E2E`).
 
 ## Gotchas

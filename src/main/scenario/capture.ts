@@ -1,4 +1,5 @@
 import { BrowserWindow, type Display, desktopCapturer, globalShortcut, screen } from 'electron'
+import { EventEmitter } from 'node:events'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface, type Interface } from 'node:readline'
@@ -79,7 +80,17 @@ interface DownState {
  * (scenario/hook.ts); a long-running keytext.ps1 resolves each keystroke's real character
  * asynchronously, so raw events are buffered and only grouped into actions at stop().
  */
-export class ScenarioCapture {
+/** What the agent control (src/main/agent) listens to; the renderer gets the same facts over IPC. */
+export interface ScenarioCaptureEvents {
+  /** every change of the capture state: countdown, capturing, saving, idle */
+  state: [ScenarioCaptureState]
+  /** the capture ended: the saved scenario, or null when it was discarded or captured nothing */
+  done: [Scenario | null]
+  /** start() could not begin (the global input hook is unavailable, the helper failed to start) */
+  failed: [Error]
+}
+
+export class ScenarioCapture extends EventEmitter<ScenarioCaptureEvents> {
   private state: ScenarioCaptureState = { phase: 'idle', actions: 0, startedAt: null }
   private barState: RecorderBarState = { phase: 'idle', startedAt: null, countdownEndsAt: null }
   private bar: BrowserWindow | null = null
@@ -126,19 +137,34 @@ export class ScenarioCapture {
     return this.state.phase !== 'idle'
   }
 
+  /** the scenario being captured or saved: its folder exists from start() on, its scenario.json only once it is saved */
+  activeId(): string | null {
+    return this.id
+  }
+
   async start(displayId: number): Promise<void> {
     if (this.state.phase !== 'idle') throw new Error('A scenario capture is already in progress')
     if (this.otherBusyCheck?.()) throw new Error('A recording is already in progress')
 
     const display = screen.getAllDisplays().find((d) => d.id === displayId) ?? screen.getPrimaryDisplay()
-    const id = await newScenarioId()
-    const dir = scenarioDir(id)
-    await fsp.mkdir(join(dir, 'shots'), { recursive: true })
+    let id: string
+    let dir: string
+    try {
+      id = await newScenarioId()
+      dir = scenarioDir(id)
+      await fsp.mkdir(join(dir, 'shots'), { recursive: true })
+    } catch (err) {
+      // the agent control waits for this to be reported (it would otherwise time out)
+      this.emit('failed', err instanceof Error ? err : new Error(String(err)))
+      throw err
+    }
 
     const hook = await acquireHook()
     if (!hook) {
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined)
-      throw new Error('The global input hook is unavailable, so a scenario cannot be captured')
+      const err = new Error('The global input hook is unavailable, so a scenario cannot be captured')
+      this.emit('failed', err)
+      throw err
     }
 
     try {
@@ -185,6 +211,7 @@ export class ScenarioCapture {
         win.focus()
       }
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined)
+      this.emit('failed', err instanceof Error ? err : new Error(String(err)))
       throw err
     }
   }
@@ -283,6 +310,7 @@ export class ScenarioCapture {
     }
     this.hardReset()
     getMainWindow()?.webContents.send('scenario:done', scenario)
+    this.emit('done', scenario)
   }
 
   /** Full, immediate teardown - used by dispose() and start()'s own failure path, where there
@@ -382,6 +410,7 @@ export class ScenarioCapture {
   private setState(state: ScenarioCaptureState): void {
     this.state = state
     getMainWindow()?.webContents.send('scenario:state', state)
+    this.emit('state', state)
   }
 
   private setBarState(state: RecorderBarState): void {
