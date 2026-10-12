@@ -178,14 +178,64 @@ describe('applyAgentEdits: items inside cuts', () => {
   })
 
   it('judges the result of the whole batch, so the order of the operations does not matter', () => {
+    const addText = { op: 'addText', ...inside, text: 'Hi' }
+    const addCut = { op: 'addCut', start: 500, end: 2500 }
     // [addCut, addText]: the text would be kept, invisible
-    expect(badParams(project(), [{ op: 'addCut', start: 500, end: 2500 }, { op: 'addText', ...inside, text: 'Hi' }]).message).toMatch(/lies entirely inside/)
-    // [addText, addCut]: the editor drops the text with the cut; nothing is left to complain about
-    const dropped = applyAgentEdits(project(), [{ op: 'addText', ...inside, text: 'Hi' }, { op: 'addCut', start: 500, end: 2500 }])
-    expect(dropped.texts).toEqual([])
+    expect(badParams(project(), [addCut, addText]).message).toMatch(/^operations\[1\] \(addText\): the text 1000-2000 ms lies entirely inside removed ranges/)
+    // [addText, addCut]: the cut would drop the text without a word, which is no better
+    expect(badParams(project(), [addText, addCut]).message).toMatch(/^operations\[0\] \(addText\): the text 1000-2000 ms lies entirely inside removed ranges/)
     // a cut that is lifted again in the same batch makes the span visible
     const restored = applyAgentEdits(project({ cuts: [cut] }), [{ op: 'addText', ...inside, text: 'Hi' }, { op: 'removeCut', id: 'c1' }])
     expect(restored.texts).toHaveLength(1)
+  })
+
+  it.each([
+    ['zoom', { op: 'addZoom', ...inside, mode: 'follow' }],
+    ['text', { op: 'addText', ...inside, text: 'Hi' }],
+    ['blur', { op: 'addBlur', ...inside, x: 0, y: 0, w: 0.5, h: 0.5 }]
+  ])('rejects a %s the batch adds and its cuts hide, added before or after the cut', (kind, add) => {
+    const addCut = { op: 'addCut', start: 500, end: 2500 }
+    for (const ops of [[add, addCut], [addCut, add]]) {
+      const message = badParams(project(), ops).message
+      expect(message).toContain(`the ${kind} 1000-2000 ms lies entirely inside removed ranges`)
+      expect(message).toContain(`(${add.op}):`)
+    }
+  })
+
+  it('accepts a span that a cut only clips, in either order', () => {
+    // 1000-3000 is partly cut away, not hidden: a cut that comes last shortens the zoom to where the cut begins, like in the editor
+    const addZoom = { op: 'addZoom', start: 1000, end: 3000, mode: 'follow' } as const
+    const addCut = { op: 'addCut', start: 2000, end: 4000 } as const
+    expect(applyAgentEdits(project(), [addZoom, addCut]).zooms.map((z) => [z.start, z.end])).toEqual([[1000, 2000]])
+    expect(applyAgentEdits(project(), [addCut, addZoom]).zooms.map((z) => [z.start, z.end])).toEqual([[1000, 3000]])
+  })
+
+  it('treats an item the cuts would shorten below the editor minimum like a hidden one, whatever the order', () => {
+    // a valid 150 ms text, of which a cut leaves 50 ms: the editor's cut would drop it
+    const addText = { op: 'addText', start: 1000, end: 1150, text: 'Hi' } as const
+    const addCut = { op: 'addCut', start: 900, end: 1100 } as const
+    for (const ops of [[addText, addCut], [addCut, addText]]) {
+      expect(badParams(project(), ops).message).toMatch(/\(addText\): the cuts of this call would shorten the text 1000-1150 ms to under 100 ms/)
+    }
+    // 100 ms are enough
+    const enough = applyAgentEdits(project(), [addText, { op: 'addCut', start: 900, end: 1050 }])
+    expect(enough.texts.map((t) => [t.start, t.end])).toEqual([[1050, 1150]])
+  })
+
+  it('leaves items that existed before the batch to the editor: a new cut drops what lies entirely inside it', () => {
+    const p0 = project({
+      texts: [{ ...TEXT_DEFAULTS, id: 't1', ...inside }],
+      zooms: [zoom({ id: 'z1', ...inside })],
+      blurs: [{ ...BLUR_DEFAULTS, id: 'b1', ...inside }]
+    })
+    const addCut = { op: 'addCut', start: 500, end: 2500 } as const
+    const addText = { op: 'addText', start: 3000, end: 4000, text: 'Later' } as const
+    for (const ops of [[addCut, addText], [addText, addCut]]) {
+      const p = applyAgentEdits(p0, ops)
+      expect(p.texts.map((t) => t.text)).toEqual(['Later'])
+      expect(p.zooms).toEqual([])
+      expect(p.blurs).toEqual([])
+    }
   })
 
   it('rejects an update that moves an item into a cut, but leaves one that stays where it is', () => {

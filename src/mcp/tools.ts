@@ -184,7 +184,8 @@ export const TOOLS: ToolDef[] = [
       'Positions and rectangles are fractions 0..1 of the recorded frame. Rules: minimum spans are zoom 200 ms, text 100 ms, blur 100 ms, cut 10 ms; ' +
       'zooms must not overlap each other (an overlap is rejected, never moved); colours must be opaque CSS colours; ' +
       'numbers outside the ranges in the schema are errors, not clamped; an update with no field to change is rejected; ' +
-      'an unknown cut / zoom / text / blur id is `not_found`; cuts may not remove the whole recording. ' +
+      'an unknown cut / zoom / text / blur id is `not_found`; cuts may not remove the whole recording; a zoom, text or blur added in the same call ' +
+      'must keep a part that the call\'s cuts do not remove, whatever the order of the operations (else it is rejected). ' +
       'Returns the updated recording like get_project, so you can read the ids of what you added. ' +
       'If the recording is open in the ZoomCut editor it updates live and the whole call is one undo step (Ctrl+Z) for the user. ' +
       'A fixed zoom without a target aims at the centre; to aim it, use a click position from get_project. ' +

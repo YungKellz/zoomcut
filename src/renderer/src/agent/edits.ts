@@ -5,7 +5,7 @@ import { uid } from '../engine/ids'
 import { ZOOM_MIN_MS, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN, patchZoom, resolveZoomOverlaps } from '../engine/camera'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { addCutToProject } from '../engine/projectEdits'
-import { keepSegments } from '../engine/timeline'
+import { clipRegionsToCuts, keepSegments } from '../engine/timeline'
 import { clamp } from '../util/format'
 import { cssColorToHex } from './color'
 
@@ -390,34 +390,75 @@ interface Spanned {
   end: number
 }
 
-/** The items of `after` that are new or got another start / end than their namesake in `before`. */
+type ItemKind = 'zoom' | 'text' | 'blur'
+const ITEM_KINDS: readonly ItemKind[] = ['zoom', 'text', 'blur']
+/** the shortest piece of each kind that survives a cut (addCutToProject drops what a cut shortens below it) */
+const ITEM_MIN_MS: Record<ItemKind, number> = { zoom: ZOOM_MIN_MS, text: TEXT_MIN_MS, blur: BLUR_MIN_MS }
+
+function itemsOf(p: Project, kind: ItemKind): readonly Spanned[] {
+  return kind === 'zoom' ? p.zooms : kind === 'text' ? p.texts : p.blurs
+}
+
+/** An item one of the batch's own operations created, with the span it was created with (a later cut may shorten or drop it). */
+interface Added extends Spanned {
+  kind: ItemKind
+  /** "operations[2] (addText)" */
+  where: string
+}
+
+/** The items `after` has that `before` does not: what an add operation just created. */
+function createdBy(before: Project, after: Project, where: string): Added[] {
+  const out: Added[] = []
+  for (const kind of ITEM_KINDS) {
+    const known = new Set(itemsOf(before, kind).map((x) => x.id))
+    for (const x of itemsOf(after, kind)) {
+      if (!known.has(x.id)) out.push({ kind, id: x.id, start: x.start, end: x.end, where })
+    }
+  }
+  return out
+}
+
+/** The items of `after` that got another start / end than their namesake in `before` (the new ones are createdBy's). */
 function movedSpans(before: readonly Spanned[], after: readonly Spanned[]): Spanned[] {
   const old = new Map(before.map((x) => [x.id, x]))
   return after.filter((x) => {
     const was = old.get(x.id)
-    return !was || was.start !== x.start || was.end !== x.end
+    return was !== undefined && (was.start !== x.start || was.end !== x.end)
   })
 }
 
 /**
- * A zoom, text or blur that was added or moved must show in at least one piece that stays. Judged
- * once all operations are applied, so the outcome does not depend on their order: an addCut after
- * an addText drops a text that lies inside the cut, and the same text added after the cut would
- * otherwise be kept, invisible. The editor never creates such items (its cut tool drops them).
+ * Judged once all operations are applied, so the outcome does not depend on their order.
+ * - An item the batch added must show in at least one piece that stays, and survive the cuts the way the
+ *   editor lets an item survive them (a cut drops a region entirely inside it, and one it shortens below the
+ *   shortest of its kind). An addCut after an addText would silently drop a text that lies inside the cut,
+ *   and the same text added after the cut would be kept, invisible: both orders are an error, naming the
+ *   operation that added it.
+ * - An item that existed before and was moved by an update must not end up hidden either.
+ * Items that existed before and were not touched keep the editor's behaviour: a new cut drops them when
+ * they lie entirely inside it, and shortens them at its edges (addCutToProject).
  */
-function assertVisible(before: Project, after: Project): void {
-  const kept = keepSegments(after.recording.durationMs, after.cuts)
-  const groups: Array<[string, readonly Spanned[], readonly Spanned[]]> = [
-    ['zoom', before.zooms, after.zooms],
-    ['text', before.texts, after.texts],
-    ['blur', before.blurs, after.blurs]
-  ]
-  for (const [kind, was, now] of groups) {
-    for (const item of movedSpans(was, now)) {
-      if (kept.some((s) => s.start < item.end && s.end > item.start)) continue
+function assertVisible(before: Project, after: Project, added: readonly Added[]): void {
+  const duration = after.recording.durationMs
+  const kept = keepSegments(duration, after.cuts)
+  const shows = (s: Spanned): boolean => kept.some((k) => k.start < s.end && k.end > s.start)
+  const hidden = (kind: ItemKind, s: Spanned, where = ''): never =>
+    fail(
+      `${where}the ${kind} ${s.start}-${s.end} ms lies entirely inside removed ranges (cuts) once all operations are applied, so it would never be visible; ` +
+        'times are source ms, not output time (see cuts in get_project)'
+    )
+  for (const kind of ITEM_KINDS) {
+    for (const item of movedSpans(itemsOf(before, kind), itemsOf(after, kind))) {
+      if (!shows(item)) hidden(kind, item)
+    }
+  }
+  for (const a of added) {
+    const where = `${a.where}: `
+    if (!shows(a)) hidden(a.kind, a, where)
+    if (clipRegionsToCuts([a], after.cuts, duration, ITEM_MIN_MS[a.kind]).length === 0) {
       fail(
-        `the ${kind} ${item.start}-${item.end} ms lies entirely inside removed ranges (cuts) once all operations are applied, so it would never be visible; ` +
-          'times are source ms, not output time (see cuts in get_project)'
+        `${where}the cuts of this call would shorten the ${a.kind} ${a.start}-${a.end} ms to under ${ITEM_MIN_MS[a.kind]} ms, the shortest ${a.kind} the editor keeps, ` +
+          'and so drop it; times are source ms, not output time (see cuts in get_project)'
       )
     }
   }
@@ -431,13 +472,16 @@ export function applyAgentEdits(project: Project, ops: readonly AgentEditOp[]): 
   if (!Array.isArray(ops)) fail('operations must be an array of edit operations')
   if (ops.length > MAX_OPS) fail(`too many operations in one call (${ops.length} > ${MAX_OPS})`)
   let p = project
+  const added: Added[] = []
   for (let i = 0; i < ops.length; i++) {
     const raw: unknown = ops[i]
     const where = `operations[${i}]`
     if (!isObj(raw) || typeof raw.op !== 'string') fail(`${where} must be an object with an "op" field`)
     if (!has(HANDLERS, raw.op)) fail(`${where}: unknown op "${raw.op}" (valid: ${Object.keys(HANDLERS).join(', ')})`)
     try {
-      p = HANDLERS[raw.op as AgentEditOp['op']](p, raw)
+      const next = HANDLERS[raw.op as AgentEditOp['op']](p, raw)
+      added.push(...createdBy(p, next, `${where} (${raw.op})`))
+      p = next
     } catch (err) {
       if (err instanceof AgentError) throw new AgentError(err.code, `${where} (${raw.op}): ${err.message}`)
       throw err
@@ -446,6 +490,6 @@ export function applyAgentEdits(project: Project, ops: readonly AgentEditOp[]): 
   if (p !== project && keepSegments(p.recording.durationMs, p.cuts).length === 0) {
     fail('these cuts would remove the whole recording; keep at least part of it (use removeCut to restore a range)')
   }
-  if (p !== project) assertVisible(project, p)
+  if (p !== project) assertVisible(project, p, added)
   return p
 }

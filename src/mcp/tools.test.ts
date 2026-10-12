@@ -66,6 +66,7 @@ describe('the tool list', () => {
     const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.description]))
     expect(by['edit_project']).toContain('SOURCE milliseconds')
     expect(by['edit_project']).toContain('undo step')
+    expect(by['edit_project']).toContain('whatever the order of the operations')
     expect(by['create_scenario']).toContain('DIP')
     expect(by['create_scenario']).toContain('take_screenshot')
     expect(by['record_scenario']).toContain('REAL mouse')
