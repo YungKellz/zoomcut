@@ -14,11 +14,15 @@ import { parseKeyChord } from './agentKeys'
 import { SCENARIO_MAX_MS } from './defaults'
 import {
   DEFAULT_PAUSE_MS,
+  DURATION_MAX_MS,
+  PAUSE_MAX_MS,
   SCENARIO_VERSION,
   actionDurationMs,
   actionPauseMs,
   defaultDurationMs,
   graphemes,
+  isHoverOnly,
+  minDurationMs,
   scenarioEnd,
   scenarioSchedule,
   stripControlChars,
@@ -36,8 +40,12 @@ export interface AgentDisplay {
 export const AGENT_SCENARIO_MAX_ACTIONS = 500
 export const AGENT_SCENARIO_NAME_MAX = 120
 export const AGENT_TYPE_MAX_CHARS = 1000
-/** wheel notches per axis in one scroll action */
-export const AGENT_SCROLL_MAX_NOTCHES = 100
+/**
+ * wheel notches per axis in one scroll action: the most one scroll can replay within SCENARIO_MAX_MS at
+ * the 40 ms a notch needs. Far more than anyone scripts, but a capture merges every wheel event less
+ * than 400 ms apart into one scroll, and what get_scenario returns for it has to be accepted again.
+ */
+export const AGENT_SCROLL_MAX_NOTCHES = 9000
 /** a scroll without deltas scrolls this many notches down */
 export const AGENT_DEFAULT_SCROLL_NOTCHES = 3
 
@@ -59,22 +67,45 @@ function finite(where: string, field: string, v: unknown): number {
   return v
 }
 
-/** A display-relative DIP point, checked against the display and moved onto the virtual desktop. */
+/**
+ * A display-relative DIP point, checked against the display and moved onto the virtual desktop. The
+ * point that is checked is the one that is stored (whole DIP): 1919.5 on a 1920 wide display would
+ * round to the first column of the next monitor.
+ */
 function absolutePoint(where: string, a: Record<string, unknown>, xField: string, yField: string, bounds: Rect): ScenarioPoint {
   const x = finite(where, xField, a[xField])
   const y = finite(where, yField, a[yField])
-  if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) {
+  const rx = Math.round(x)
+  const ry = Math.round(y)
+  if (rx < 0 || rx >= bounds.width || ry < 0 || ry >= bounds.height) {
     bad(`${where}: (${xField}, ${yField}) = (${x}, ${y}) is outside the display, which is ${bounds.width}x${bounds.height} DIP (0,0 is its top-left corner)`)
   }
-  return { x: bounds.x + Math.round(x), y: bounds.y + Math.round(y) }
+  return { x: bounds.x + rx, y: bounds.y + ry }
 }
 
+/** durationMs / pauseMs as given: a number, not negative, and a pause within its limit. A duration is checked once the action is known (durationLimit). */
 function timing(where: string, a: Record<string, unknown>, field: 'durationMs' | 'pauseMs'): number | undefined {
   const v = a[field]
   if (v === undefined) return undefined
   const n = finite(where, field, v)
   if (n < 0) bad(`${where}: ${field} must not be negative`)
+  if (field === 'pauseMs' && Math.round(n) > PAUSE_MAX_MS) bad(`${where}: pauseMs may be at most ${PAUSE_MAX_MS} ms`)
   return n
+}
+
+/**
+ * The longest durationMs an action may be given: one minute, or the action's own shortest duration
+ * when that is longer (a scroll of over 900 notches). Replay never goes faster than the shortest,
+ * so that is what such an action takes and what get_scenario reports for it.
+ */
+function durationLimit(action: ScenarioAction): number {
+  return Math.max(DURATION_MAX_MS, minDurationMs(action))
+}
+
+function hoverOnlyOf(where: string, raw: unknown): boolean {
+  if (raw === undefined) return false
+  if (typeof raw !== 'boolean') bad(`${where}: hoverOnly must be true or false`)
+  return raw
 }
 
 function modifiersOf(where: string, raw: unknown): ScenarioModifiers {
@@ -99,8 +130,9 @@ function notches(where: string, a: Record<string, unknown>, field: 'deltaY' | 'd
 /**
  * Builds the stored scenario for `input`, to be replayed on `display`. Coordinates in the input
  * are DIP relative to the display's top-left; they are checked against the display and stored on
- * the virtual desktop like a capture does. Durations and pauses are the given ones (held within
- * the per-kind limits shared/scenario.ts applies everywhere) or the same defaults a capture gets.
+ * the virtual desktop like a capture does. Durations and pauses are the given ones or the same
+ * defaults a capture gets; a duration below the kind's minimum (shared/scenario.ts minDurationMs)
+ * is raised to it, one above the maximum is an error, never a quietly shorter action.
  * `dir` is left empty: the storage layer fills it in. Throws AgentError('bad_params').
  */
 export function buildAgentScenario(input: AgentScenarioInput, display: AgentDisplay, id: string, now: number): Scenario {
@@ -138,14 +170,19 @@ export function buildAgentScenario(input: AgentScenarioInput, display: AgentDisp
       case 'rightClick':
       case 'middleClick': {
         const p = absolutePoint(where, raw, 'x', 'y', bounds)
-        action = { ...common, kind: kind as (typeof POINTER_KINDS)[number], ...p, modifiers: modifiersOf(where, raw['modifiers']) }
+        const modifiers = modifiersOf(where, raw['modifiers'])
+        const hoverOnly = hoverOnlyOf(where, raw['hoverOnly'])
+        if (hoverOnly && MODIFIERS.some((m) => modifiers[m])) {
+          bad(`${where}: a hoverOnly click presses nothing, not even a modifier key, so it cannot have modifiers`)
+        }
+        action = { ...common, kind: kind as (typeof POINTER_KINDS)[number], ...p, modifiers, ...(hoverOnly ? { hoverOnly: true } : {}) }
         cursor = p
         break
       }
       case 'drag': {
         const p = absolutePoint(where, raw, 'x', 'y', bounds)
         const to = absolutePoint(where, raw, 'toX', 'toY', bounds)
-        action = { ...common, kind: 'drag', ...p, modifiers: { ...NO_MODIFIERS }, toX: to.x, toY: to.y, dragPath: [] }
+        action = { ...common, kind: 'drag', ...p, modifiers: modifiersOf(where, raw['modifiers']), toX: to.x, toY: to.y, dragPath: [] }
         cursor = to
         break
       }
@@ -193,7 +230,12 @@ export function buildAgentScenario(input: AgentScenarioInput, display: AgentDisp
       }
     }
 
-    // stored as the effective values: the same clamping actionDurationMs / actionPauseMs apply on every read
+    // stored as the effective values: the same clamping actionDurationMs / actionPauseMs apply on every read.
+    // A duration is raised to the kind's minimum like there, but never lowered: more than the limit is an error
+    if (durationMs !== undefined && Math.round(durationMs) > durationLimit(action)) {
+      const limit = durationLimit(action)
+      bad(`${where}: durationMs may be at most ${limit} ms${limit > DURATION_MAX_MS ? ' for a scroll this long' : ''}`)
+    }
     action.durationMs = durationMs === undefined ? defaultDurationMs(action) : actionDurationMs({ ...action, durationMs })
     action.pauseMs = pauseMs === undefined ? DEFAULT_PAUSE_MS : actionPauseMs({ ...action, pauseMs })
     return action
@@ -239,11 +281,15 @@ export function toAgentScenarioView(scenario: Scenario): AgentScenarioView {
       case 'doubleClick':
       case 'rightClick':
       case 'middleClick': {
+        // a position-only click presses nothing, not even its modifiers (compileScenario), so none are reported
+        if (isHoverOnly(a)) return { kind: a.kind, x: a.x - ox, y: a.y - oy, hoverOnly: true, ...timing }
         const modifiers = modifierList(a.modifiers)
         return { kind: a.kind, x: a.x - ox, y: a.y - oy, ...(modifiers.length > 0 ? { modifiers } : {}), ...timing }
       }
-      case 'drag':
-        return { kind: 'drag', x: a.x - ox, y: a.y - oy, toX: a.toX - ox, toY: a.toY - oy, ...timing }
+      case 'drag': {
+        const modifiers = modifierList(a.modifiers)
+        return { kind: 'drag', x: a.x - ox, y: a.y - oy, toX: a.toX - ox, toY: a.toY - oy, ...(modifiers.length > 0 ? { modifiers } : {}), ...timing }
+      }
       case 'scroll':
         return { kind: 'scroll', x: a.x - ox, y: a.y - oy, deltaY: a.deltaY, deltaX: a.deltaX, ...timing }
       case 'type':

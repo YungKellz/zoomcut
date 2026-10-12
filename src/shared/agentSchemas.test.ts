@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { AGENT_SCROLL_MAX_NOTCHES } from './agentScenario'
 import { agentEditOpSchema, agentParamSchemas, agentScenarioInputSchema, formatZodError } from './agentSchemas'
+import { SCENARIO_MAX_MS } from './defaults'
+import { DURATION_MAX_MS, PAUSE_MAX_MS } from './scenario'
 
 describe('agentParamSchemas', () => {
   it('converts every method schema to JSON schema, objects only', () => {
@@ -63,6 +66,50 @@ describe('agentParamSchemas', () => {
       ]
     })
     expect(parsed.success).toBe(true)
+  })
+
+  describe('scenario actions', () => {
+    const ok = (action: unknown): boolean => agentScenarioInputSchema.safeParse({ name: 's', actions: [action] }).success
+
+    it('takes position-only clicks and drag modifiers, on the kinds that have them', () => {
+      for (const kind of ['click', 'doubleClick', 'rightClick', 'middleClick']) {
+        expect(ok({ kind, x: 1, y: 2, hoverOnly: true }), kind).toBe(true)
+        expect(ok({ kind, x: 1, y: 2, hoverOnly: false }), kind).toBe(true)
+      }
+      expect(ok({ kind: 'click', x: 1, y: 2, hoverOnly: 'yes' })).toBe(false)
+      expect(ok({ kind: 'drag', x: 1, y: 2, toX: 3, toY: 4, modifiers: ['shift', 'alt'] })).toBe(true)
+      expect(ok({ kind: 'drag', x: 1, y: 2, toX: 3, toY: 4, modifiers: ['hyper'] })).toBe(false)
+      // a hover only exists on a click, and the other kinds have no modifiers to hold
+      expect(ok({ kind: 'drag', x: 1, y: 2, toX: 3, toY: 4, hoverOnly: true })).toBe(false)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: 1, hoverOnly: true })).toBe(false)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: 1, modifiers: ['ctrl'] })).toBe(false)
+    })
+
+    it('says the ranges: a duration over a minute is an error, not a shorter action', () => {
+      expect(ok({ kind: 'click', x: 1, y: 2, durationMs: DURATION_MAX_MS, pauseMs: PAUSE_MAX_MS })).toBe(true)
+      expect(ok({ kind: 'click', x: 1, y: 2, durationMs: DURATION_MAX_MS + 1 })).toBe(false)
+      expect(ok({ kind: 'click', x: 1, y: 2, pauseMs: PAUSE_MAX_MS + 1 })).toBe(false)
+      expect(ok({ kind: 'type', text: 'hi', durationMs: 150_000 })).toBe(false)
+      expect(ok({ kind: 'key', key: 'Enter', durationMs: 150_000 })).toBe(false)
+      expect(ok({ kind: 'drag', x: 1, y: 2, toX: 3, toY: 4, durationMs: 61_000 })).toBe(false)
+      // only a scroll can need more (the exact limit is buildAgentScenario's)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: 1500, durationMs: 100_000 })).toBe(true)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: 1, durationMs: SCENARIO_MAX_MS + 1 })).toBe(false)
+      const json = JSON.stringify(z.toJSONSchema(agentScenarioInputSchema))
+      expect(json).toContain('at most 60000')
+      expect(json).toContain('hoverOnly')
+    })
+
+    it('takes the scroll notches the builder accepts', () => {
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: AGENT_SCROLL_MAX_NOTCHES, deltaX: -AGENT_SCROLL_MAX_NOTCHES })).toBe(true)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: AGENT_SCROLL_MAX_NOTCHES + 1 })).toBe(false)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaX: -AGENT_SCROLL_MAX_NOTCHES - 1 })).toBe(false)
+      expect(ok({ kind: 'scroll', x: 1, y: 2, deltaY: 1.5 })).toBe(false)
+    })
+
+    it('takes a key the way a capture names it', () => {
+      for (const key of ['NumpadEnter', 'Numpad5', 'Ctrl+Numpad+', 'Key86', 'NumLock']) expect(ok({ kind: 'key', key }), key).toBe(true)
+    })
   })
 
   it('names the wrong kind', () => {
