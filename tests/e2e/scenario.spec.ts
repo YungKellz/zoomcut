@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { acceptConfirm, launch, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
+import { acceptConfirm, launch, mainWindowVisible, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
 
 /**
  * Scenario recorder: capture real input (injected through the app's own test-only helper over a
@@ -53,18 +53,14 @@ function typeKeys(t: number, keys: Array<{ vk: number; scan: number }>): unknown
   return out
 }
 
-function mainWindowVisible(): Promise<boolean> {
-  return h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === 'ZoomCut' && w.isVisible()))
-}
-
 /** Runs "Preview" (the dry run) and waits for its notice: the main window hides meanwhile and comes back. */
 async function runPreview(): Promise<void> {
   await h.win.click('.btn-preview')
   await expect(h.win.locator('.scenario-notice')).toHaveCount(0)
-  await expect.poll(mainWindowVisible, { timeout: 20_000 }).toBe(false)
+  await expect.poll(() => mainWindowVisible(h), { timeout: 20_000 }).toBe(false)
   await h.win.waitForSelector('.scenario-notice', { timeout: 90_000 })
   await expect(h.win.locator('.scenario-notice')).toContainText('Preview finished')
-  expect(await mainWindowVisible()).toBe(true)
+  expect(await mainWindowVisible(h)).toBe(true)
   await expect.poll(() => h.app.windows().some((w) => w.url().includes('#overlay')), { timeout: 5_000 }).toBe(false)
 }
 
@@ -302,8 +298,7 @@ test('Escape aborts a replay and discards the recording', async () => {
   await h.win.waitForSelector('.scenario-notice', { timeout: 30_000 })
   await sleep(2000)
   expect(projectIds(h.recordingsDir), 'an aborted replay must not leave a project').toHaveLength(1)
-  const visible = await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === 'ZoomCut' && w.isVisible()))
-  expect(visible).toBe(true)
+  expect(await mainWindowVisible(h), 'the main window must come back after an abort').toBe(true)
   expect(h.app.windows().some((w) => w.url().includes('#overlay')), 'the overlay window must be closed after an abort').toBe(false)
 })
 
