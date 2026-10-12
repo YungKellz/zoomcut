@@ -193,6 +193,10 @@ export type AgentReply =
 export interface AgentUiStatus {
   screen: string
   openProjectId: string | null
+  /** scenario open in the scenario review (main refuses to delete it) */
+  openScenarioId: string | null
+  /** projects referenced by the open composition (main refuses to delete them) */
+  compositionProjectIds: string[]
 }
 
 /** main → renderer after an agent changed stored data behind the UI's back (projects.delete,
