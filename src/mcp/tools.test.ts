@@ -67,6 +67,7 @@ describe('the tool list', () => {
     expect(by['edit_project']).toContain('SOURCE milliseconds')
     expect(by['edit_project']).toContain('undo step')
     expect(by['edit_project']).toContain('whatever the order of the operations')
+    expect(by['edit_project']).toContain('minimum span')
     expect(by['create_scenario']).toContain('DIP')
     expect(by['create_scenario']).toContain('take_screenshot')
     expect(by['record_scenario']).toContain('REAL mouse')
@@ -93,7 +94,9 @@ describe('the tool list', () => {
         expect(by[name], `${name}: ${refusal}`).toContain(refusal)
       }
     }
-    expect(by['export_project']).toMatch(/`busy` while a recording.*scenario replay.*scenario capture/)
+    expect(by['export_project']).toMatch(/`busy` while a recording.*scenario replay.*scenario capture.*another export_project is still running/)
+    // not promised: the export dialog and the composition export are not refused by export_project
+    expect(by['export_project']).not.toContain('another export is running')
     expect(by['delete_project']).toContain('exported')
   })
 
@@ -105,11 +108,13 @@ describe('the tool list', () => {
     expect(create).toMatch(/drag \(x, y to toX, toY, optional `modifiers`/)
     expect(create).toContain('`id` is ignored')
     expect(create).toContain('rejected as outside the display')
+    expect(create).toContain('both 0 only moves the cursor')
     const get = by['get_scenario']
     expect(get).toContain('hoverOnly: true')
     expect(get).toContain('passed back as they are')
     expect(get).toContain('`id`')
     expect(get).toContain('rejects it as outside the display')
+    expect(get).toContain('a scroll of 0 and 0 notches')
   })
 
   it('marks reads as read-only and deletes as destructive', async () => {

@@ -185,7 +185,8 @@ export const TOOLS: ToolDef[] = [
       'zooms must not overlap each other (an overlap is rejected, never moved); colours must be opaque CSS colours; ' +
       'numbers outside the ranges in the schema are errors, not clamped; an update with no field to change is rejected; ' +
       'an unknown cut / zoom / text / blur id is `not_found`; cuts may not remove the whole recording; a zoom, text or blur added in the same call ' +
-      'must keep a part that the call\'s cuts do not remove, whatever the order of the operations (else it is rejected). ' +
+      'must show in a part that no cut removes, and keep at least its minimum span (see above) outside the cuts the call adds, whatever the order of ' +
+      'the operations (else it is rejected: the cut tool of ZoomCut would drop it). ' +
       'Returns the updated recording like get_project, so you can read the ids of what you added. ' +
       'If the recording is open in the ZoomCut editor it updates live and the whole call is one undo step (Ctrl+Z) for the user. ' +
       'A fixed zoom without a target aims at the centre; to aim it, use a click position from get_project. ' +
@@ -202,7 +203,7 @@ export const TOOLS: ToolDef[] = [
       'the export settings saved in the project (set from the last export dialog); what you pass is saved back to the project. ' +
       'Frame rates: mp4 24 / 30 / 60, gif 10 / 12 / 15 / 20 / 25. `folder` must be an absolute path. An existing file is never overwritten ' +
       '("-2" is appended). GIFs have no audio; large GIFs get big fast, so prefer scale 0.5 and 10-15 fps. Fails with `busy` while a recording ' +
-      '(also one that is being saved), a scenario replay or Preview, or a scenario capture is running, and while another export is running: ' +
+      '(also one that is being saved), a scenario replay or Preview, or a scenario capture is running, and while another export_project is still running: ' +
       'export once it has ended. If this call is cancelled (the client interrupts it) ZoomCut stops the export.'
   },
   {
@@ -233,7 +234,8 @@ export const TOOLS: ToolDef[] = [
       'each action carries; pass `displayId` too to stay on the same display): kind, display-relative DIP coordinates, modifiers, text or key, and the ' +
       'effective durationMs and pauseMs of each action (and the total replay length). Works for scenarios captured by a person too. ' +
       'A click can come back with `hoverOnly: true`: the cursor only travels there and nothing is pressed (a click the user switched to "position only"; ' +
-      'it has no modifiers). Keys a capture has no common name for come back as names create_scenario accepts again. ' +
+      'it has no modifiers), and a scroll of 0 and 0 notches (small touchpad movements can add up to none) which only moves the cursor. ' +
+      'Keys a capture has no common name for come back as names create_scenario accepts again. ' +
       `The exception when passing actions back (besides create_scenario's limit of ${AGENT_SCENARIO_MAX_ACTIONS} actions): a captured click, drag or scroll on a ` +
       'monitor other than the scenario\'s display comes back with coordinates outside that display, and create_scenario rejects it as outside the display; ' +
       'leave it out or give it new coordinates.'
@@ -247,7 +249,7 @@ export const TOOLS: ToolDef[] = [
       'Write a scenario: a script of actions ZoomCut replays on the REAL screen with the real mouse and keyboard (see record_scenario). ' +
       'Actions: click / doubleClick / rightClick / middleClick (x, y, optional modifiers; or `hoverOnly: true` to only move the cursor to (x, y) and ' +
       'press nothing, for hover effects and tooltips - only on these click kinds, and not together with modifiers), drag (x, y to toX, toY, optional ' +
-      '`modifiers` held during the drag, e.g. ["shift"]), scroll (x, y, deltaY / deltaX in wheel notches, positive = down / right), type (text), ' +
+      '`modifiers` held during the drag, e.g. ["shift"]), scroll (x, y, deltaY / deltaX in wheel notches, positive = down / right; both 0 only moves the cursor), type (text), ' +
       'key ("Enter", "Ctrl+S", "Alt+Tab", "F5"; "Win" alone opens Start). Coordinates are DIP relative ' +
       'to the display\'s top-left: find them with take_screenshot (image pixel / scale) and list_displays. Replay is strictly sequential: ' +
       'each action takes `durationMs` (the mouse glides there, then acts; defaults click/scroll 1000, drag 1500, key 500, typing 80 per character) ' +
