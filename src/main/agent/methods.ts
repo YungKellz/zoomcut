@@ -140,6 +140,8 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
   let starting = false
   /** scenario ids are timestamps: two creates in the same second must not pick the same one */
   let createChain: Promise<unknown> = Promise.resolve()
+  /** recordings an agent export is rendering right now (projects.export between its send and its reply), with how many; delete_project leaves them alone */
+  const exporting = new Map<string, number>()
   /** how the last scenario capture ended, for a stop_scenario_capture that comes after the user stopped it themselves */
   let lastCapture: { scenario: Scenario | null; at: number } | null = null
   capture.on('done', (scenario) => {
@@ -417,6 +419,7 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
       // a folder that is no saved recording (one still being recorded included) is not_found, never removed
       await assertProjectExists(p.projectId)
       if (recorder.activeId() === p.projectId) fail('busy', 'This recording is still being saved; wait until stop_recording returns')
+      if (exporting.has(p.projectId)) fail('busy', 'This recording is being exported; wait until export_project returns (or cancel it)')
       const ui = renderer.getStatus()
       if (ui?.openProjectId === p.projectId) {
         fail('busy', 'This recording is open in the ZoomCut editor; it cannot be deleted while open. Ask the user to close it (Back), or leave it')
@@ -443,8 +446,16 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
       if (starting || recorder.isActive() || capture.isActive() || deps.otherBusy?.()) {
         fail('busy', 'A recording (also one that is being saved), a scenario replay or preview, or a scenario capture is in progress; export once it has ended (see get_status)')
       }
-      // a client that gave up must not leave the export running: the renderer is told to stop it
-      return renderer.send('projects.export', p, { signal })
+      // marked right after the check, with no await in between
+      exporting.set(p.projectId, (exporting.get(p.projectId) ?? 0) + 1)
+      try {
+        // a client that gave up must not leave the export running: the renderer is told to stop it
+        return await renderer.send('projects.export', p, { signal })
+      } finally {
+        const left = (exporting.get(p.projectId) ?? 1) - 1
+        if (left > 0) exporting.set(p.projectId, left)
+        else exporting.delete(p.projectId)
+      }
     }),
 
     'scenarios.list': define('scenarios.list', () => deps.scenarios.list()),

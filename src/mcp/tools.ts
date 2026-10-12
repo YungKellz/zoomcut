@@ -199,7 +199,7 @@ export const TOOLS: ToolDef[] = [
     annotations: DESTROYS,
     description:
       'Permanently delete a saved recording and its files (video, audio, edits). Cannot be undone. Refused with `busy` while the recording is open in ' +
-      'the editor, is part of the composition open in ZoomCut, or is still being saved. Export first if the result is needed.'
+      'the editor, is part of the composition open in ZoomCut, is still being saved, or is being exported by export_project. Export first if the result is needed.'
   },
   {
     name: 'list_scenarios',

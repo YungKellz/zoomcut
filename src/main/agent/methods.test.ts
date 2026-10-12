@@ -323,6 +323,59 @@ describe('projects', () => {
     expect(h.projects.has('p1')).toBe(false)
   })
 
+  it('never deletes a recording while an agent export renders it, and does again afterwards', async () => {
+    const h = harness()
+    h.projects.set('p2', project('p2'))
+    let finish: (value: unknown) => void = () => undefined
+    h.rendererReply.value = () => new Promise((resolve) => (finish = resolve))
+    const exported = call(h, 'projects.export', { projectId: 'p1' })
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1))
+
+    const err = await code(call(h, 'projects.delete', { projectId: 'p1' }))
+    expect(err.code).toBe('busy')
+    expect(err.message).toMatch(/being exported/)
+    expect(h.projects.has('p1')).toBe(true)
+    expect(h.changed).toEqual([])
+    // other recordings are not affected
+    await call(h, 'projects.delete', { projectId: 'p2' })
+    expect(h.projects.has('p2')).toBe(false)
+
+    finish({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+    expect(await exported).toEqual({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+    await call(h, 'projects.delete', { projectId: 'p1' })
+    expect(h.projects.has('p1')).toBe(false)
+  })
+
+  it('lets a delete through once a failed export is over, and keeps guarding while a second export is refused', async () => {
+    const h = harness()
+    h.projects.set('p2', project('p2'))
+    // an export that fails frees the recording
+    h.rendererReply.value = () => {
+      throw new AgentError('failed', 'ffmpeg exploded')
+    }
+    expect((await code(call(h, 'projects.export', { projectId: 'p2' }))).code).toBe('failed')
+    expect(h.projects.has('p2')).toBe(true)
+    await call(h, 'projects.delete', { projectId: 'p2' })
+    expect(h.projects.has('p2')).toBe(false)
+
+    // a second export of the same recording that the renderer refuses must not release the first one
+    let finish: (value: unknown) => void = () => undefined
+    let calls = 0
+    h.rendererReply.value = () => {
+      if (++calls === 1) return new Promise((resolve) => (finish = resolve))
+      throw new AgentError('busy', 'another export is already running; wait for it to finish')
+    }
+    const first = call(h, 'projects.export', { projectId: 'p1' })
+    await vi.waitFor(() => expect(calls).toBe(1))
+    expect((await code(call(h, 'projects.export', { projectId: 'p1' }))).code).toBe('busy')
+    expect((await code(call(h, 'projects.delete', { projectId: 'p1' }))).message).toMatch(/being exported/)
+    expect(h.projects.has('p1')).toBe(true)
+    finish({ outputPath: 'x.mp4', bytes: 1 })
+    await first
+    await call(h, 'projects.delete', { projectId: 'p1' })
+    expect(h.projects.has('p1')).toBe(false)
+  })
+
   it('answers not_found for a folder that holds no saved recording', async () => {
     const h = harness()
     h.projects.delete('p1') // exists() is about project.json: a recording in progress or a stray folder has none
