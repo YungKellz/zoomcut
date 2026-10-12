@@ -5,6 +5,10 @@
  * Electron, no I/O. Scancodes are PC/AT set 1 (low byte, `extended` marks the 0xE0 prefix), key
  * names follow the US layout – a virtual-key code names a physical key, the character it types
  * depends on the layout the replayed machine uses.
+ *
+ * Every label a capture can give a key (describeKeyLabel in shared/scenario.ts: the numpad, the
+ * lock keys, "Key<scan>" for a key without a name) is read back too, so the key of a captured
+ * scenario that get_scenario returns can be handed to create_scenario unchanged.
  */
 import { AgentError } from './agent'
 import type { ScenarioModifiers } from './types'
@@ -27,17 +31,18 @@ interface KeyDef {
 
 type ModifierName = keyof ScenarioModifiers
 
-const MODIFIER_ALIASES: Record<string, ModifierName> = {
-  ctrl: 'ctrl',
-  control: 'ctrl',
-  shift: 'shift',
-  alt: 'alt',
-  win: 'meta',
-  windows: 'meta',
-  meta: 'meta',
-  cmd: 'meta',
-  super: 'meta'
-}
+// a Map, not an object: the names come from the agent, and "constructor" / "__proto__" are not modifiers
+const MODIFIER_ALIASES = new Map<string, ModifierName>([
+  ['ctrl', 'ctrl'],
+  ['control', 'ctrl'],
+  ['shift', 'shift'],
+  ['alt', 'alt'],
+  ['win', 'meta'],
+  ['windows', 'meta'],
+  ['meta', 'meta'],
+  ['cmd', 'meta'],
+  ['super', 'meta']
+])
 const MODIFIER_ORDER: ModifierName[] = ['ctrl', 'shift', 'alt', 'meta']
 const MODIFIER_LABEL: Record<ModifierName, string> = { ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt', meta: 'Win' }
 // left-hand modifier keys, for a chord that is only modifiers ("Win" opens the Start menu)
@@ -49,10 +54,13 @@ const MODIFIER_KEY: Record<ModifierName, KeyDef> = {
 }
 
 const KEYS = new Map<string, KeyDef>()
+/** the same keys by physical key ("scan:extended"), to give a "Key<scan>" its virtual key */
+const KEYS_BY_SCAN = new Map<string, KeyDef>()
 
 function def(names: string[], label: string, vk: number, scan: number, extended = false): void {
   const key: KeyDef = { label, vk, scan, extended }
   for (const name of names) KEYS.set(name.toLowerCase(), key)
+  KEYS_BY_SCAN.set(`${scan}:${extended}`, key)
 }
 
 // letters, by scancode row (QWERTY)
@@ -103,12 +111,56 @@ def(['.', 'Period'], '.', 0xbe, 0x34)
 def(['/', 'Slash'], '/', 0xbf, 0x35)
 def(['`', 'Backtick', 'Grave'], '`', 0xc0, 0x29)
 
+// the numpad and the lock keys, spelled the way a capture labels them (shared/scenario.ts KEY_NAMES)
+def(['NumpadEnter'], 'NumpadEnter', 0x0d, 0x1c, true)
+def(['NumLock'], 'NumLock', 0x90, 0x45)
+def(['ScrollLock'], 'ScrollLock', 0x91, 0x46)
+// numpad digits sit on the scancodes of the navigation block (7 8 9 / 4 5 6 / 1 2 3 / 0)
+const NUMPAD_SCANS = [0x52, 0x4f, 0x50, 0x51, 0x4b, 0x4c, 0x4d, 0x47, 0x48, 0x49]
+NUMPAD_SCANS.forEach((scan, d) => def([`Numpad${d}`], `Numpad${d}`, 0x60 + d, scan))
+def(['Numpad.', 'NumpadDecimal'], 'Numpad.', 0x6e, 0x53)
+def(['Numpad+', 'NumpadPlus', 'NumpadAdd'], 'Numpad+', 0x6b, 0x4e)
+def(['Numpad-', 'NumpadMinus', 'NumpadSubtract'], 'Numpad-', 0x6d, 0x4a)
+def(['Numpad*', 'NumpadMultiply'], 'Numpad*', 0x6a, 0x37)
+def(['Numpad/', 'NumpadDivide'], 'Numpad/', 0x6f, 0x35, true)
+// two more keys a "Key<scan>" label stands for on common keyboards
+def(['Menu', 'Apps', 'ContextMenu'], 'Menu', 0x5d, 0x5d, true)
+def(['IntlBackslash'], 'IntlBackslash', 0xe2, 0x56)
+
 /** One-line list of what parseKeyChord accepts, for error messages and tool descriptions. */
 export const KEY_CHORD_HELP =
   'Modifiers: Ctrl, Shift, Alt, Win. Keys: A-Z, 0-9, F1-F24, Enter, Tab, Escape, Backspace, Delete, Insert, Home, End, ' +
-  'PageUp, PageDown, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, PrintScreen, CapsLock, and the US-layout punctuation ' +
-  '- = [ ] ; \' \\ , . / ` (also spelled Minus, Equals, LeftBracket, RightBracket, Semicolon, Quote, Backslash, Comma, ' +
-  'Period, Slash, Backtick). Join with "+": "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab". "+" itself cannot be a chord part: write "Ctrl+=" for zoom in.'
+  'PageUp, PageDown, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, PrintScreen, CapsLock, NumLock, ScrollLock, Menu, ' +
+  'Numpad0-Numpad9, NumpadEnter, Numpad+ Numpad- Numpad* Numpad/ Numpad. (also NumpadPlus, NumpadMinus, NumpadMultiply, NumpadDivide, NumpadDecimal), ' +
+  'and the US-layout punctuation - = [ ] ; \' \\ , . / ` (also spelled Minus, Equals, LeftBracket, RightBracket, Semicolon, Quote, ' +
+  'Backslash, Comma, Period, Slash, Backtick). A key without a name is written Key<scancode>, like "Key86": that is how ' +
+  'get_scenario names such keys of a captured scenario. Join with "+": "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab". ' +
+  '"+" itself cannot be a chord part ("Ctrl+=" is zoom in), except as the last key spelled Numpad+.'
+
+/** "Key86" – a physical key by its scancode, for the keys a capture has no name for */
+const RAW_SCAN_KEY = /^key([0-9]{1,3})$/
+
+/**
+ * The key a "Key<scan>" label stands for: what the table knows about that physical key (the
+ * label does not say if it was extended, so the plain key wins), else the bare scancode with no
+ * virtual key – a key a capture gave this label only because it knew nothing more about it.
+ */
+function rawScanKey(part: string): KeyDef | null {
+  const match = RAW_SCAN_KEY.exec(part.toLowerCase())
+  if (!match) return null
+  const scan = Number(match[1])
+  if (scan > 0xff) return null
+  const known = KEYS_BY_SCAN.get(`${scan}:false`) ?? KEYS_BY_SCAN.get(`${scan}:true`)
+  return { label: `Key${scan}`, vk: known?.vk ?? 0, scan, extended: known?.extended ?? false }
+}
+
+/** "Ctrl+Shift+T" → its parts. "Numpad+" is a key whose own name ends in the separator: "Ctrl+Numpad+" has an empty last part to merge. */
+function chordParts(input: string): string[] {
+  const parts = input.split('+').map((p) => p.trim())
+  const n = parts.length
+  if (n >= 2 && parts[n - 1] === '' && parts[n - 2].toLowerCase() === 'numpad') parts.splice(n - 2, 2, 'Numpad+')
+  return parts
+}
 
 function bad(message: string): never {
   throw new AgentError('bad_params', message)
@@ -121,7 +173,7 @@ function bad(message: string): never {
  */
 export function parseKeyChord(input: string): ParsedKeyChord {
   if (typeof input !== 'string' || input.trim() === '') bad(`Empty key. ${KEY_CHORD_HELP}`)
-  const parts = input.split('+').map((p) => p.trim())
+  const parts = chordParts(input)
   const modifiers: ScenarioModifiers = { ctrl: false, shift: false, alt: false, meta: false }
   const held: ModifierName[] = []
   let base: KeyDef | null = null
@@ -129,14 +181,14 @@ export function parseKeyChord(input: string): ParsedKeyChord {
   for (const part of parts) {
     if (part === '') bad(`Cannot read the key "${input}": empty part between "+" signs. ${KEY_CHORD_HELP}`)
     const lower = part.toLowerCase()
-    const modifier = MODIFIER_ALIASES[lower]
+    const modifier = MODIFIER_ALIASES.get(lower)
     if (modifier) {
       if (modifiers[modifier]) bad(`Cannot read the key "${input}": ${MODIFIER_LABEL[modifier]} is listed twice.`)
       modifiers[modifier] = true
       held.push(modifier)
       continue
     }
-    const key = KEYS.get(lower)
+    const key = KEYS.get(lower) ?? rawScanKey(part)
     if (!key) bad(`Unknown key "${part}" in "${input}". ${KEY_CHORD_HELP}`)
     if (base) bad(`Cannot read the key "${input}": it has two non-modifier keys ("${base.label}" and "${key.label}"). Use one key action per key.`)
     base = key
