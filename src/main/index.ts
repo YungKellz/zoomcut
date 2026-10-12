@@ -10,7 +10,8 @@ import { ensureDirs } from './storage'
 import { ScenarioCapture } from './scenario/capture'
 import { ScenarioPreview } from './scenario/preview'
 import { cleanupHelperScripts } from './scenario/inputHelper'
-import { agentControlRequested, setupAgentControl, type AgentControl } from './agent'
+import { setupAgentControl, type AgentControl } from './agent'
+import { agentControlRequested, secondInstanceAction } from './agent/launchArgs'
 
 // Lets a test (or a second install) keep this run's userData - settings, agent-control.json - apart from
 // the real one; must happen before anything reads the path, the single-instance lock included.
@@ -45,13 +46,16 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
+    const busy = Boolean(recorder?.isActive() || scenarioCapture?.isActive() || scenarioPreview?.isActive())
+    const action = secondInstanceAction(argv, busy)
     // `ZoomCut.exe --agent-control` started while the app already runs: this copy switches it on
-    if (agentControlRequested(argv)) {
+    if (action.enableAgentControl) {
       agentWanted = true
       void agentControl?.enable()
     }
+    // the window stays hidden while recording or replaying, and a launch that only wanted agent control leaves it alone
     const win = getMainWindow()
-    if (win) {
+    if (win && action.showWindow) {
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
