@@ -3,13 +3,14 @@ import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, X } from 'lucide-react'
 import type { ExportFinishResult, ExportProgress, ExportSettings, GifSettings } from '@shared/types'
-import { GIF_FPS_OPTIONS, MP4_FPS_OPTIONS, SCALE_OPTIONS } from '@shared/defaults'
+import { SCALE_OPTIONS } from '@shared/defaults'
 import { useProject, useStore } from '../store'
 import type { FollowPath } from '../engine/cursor'
 import { outputSize, TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration } from '../engine/timeline'
 import { runExport, type RenderProgress } from '../export/exporter'
 import { estimateExportSize, type SizeEstimate } from '../export/estimate'
+import { defaultExportFileName, exportFpsOptions, withExportFormat } from '../export/settings'
 import { formatBytes, formatDuration } from '../util/format'
 import { useT, type TKey } from '../i18n'
 
@@ -66,7 +67,7 @@ export function ExportDialog({ followPath }: Props): JSX.Element {
   const probeVideo = useRef<HTMLVideoElement>(null)
   const segments = useMemo(() => keepSegments(project.recording.durationMs, project.cuts), [project.recording.durationMs, project.cuts])
   const initial = useMemo(
-    () => ({ ...project.export, fileName: project.export.fileName || project.name.replace(/[^\w\- ]+/g, '').trim() || 'recording' }),
+    () => ({ ...project.export, fileName: defaultExportFileName(project) }),
     // the dialog keeps its own copy once open
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
@@ -146,7 +147,7 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
 
   const size = frameSize(settings.scale)
   const frames = Math.round((outMs / 1000) * settings.fps)
-  const fpsOptions = settings.format === 'gif' ? GIF_FPS_OPTIONS : MP4_FPS_OPTIONS
+  const fpsOptions = exportFpsOptions(settings.format)
 
   // rough size estimate, recomputed (debounced) when anything relevant changes
   const estimateKey = JSON.stringify([settings.format, settings.scale, settings.fps, settings.mp4Quality, settings.gif, sourceKey])
@@ -232,21 +233,14 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
             <button
               className={'seg-btn' + (settings.format === 'mp4' ? ' active' : '')}
               disabled={running}
-              onClick={() => set({ format: 'mp4', fps: MP4_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 30 })}
+              onClick={() => setSettings((s) => withExportFormat(s, 'mp4', frameSize(1).outW))}
             >
               {t('export.mp4')}
             </button>
             <button
               className={'seg-btn' + (settings.format === 'gif' ? ' active' : '')}
               disabled={running}
-              onClick={() =>
-                set({
-                  format: 'gif',
-                  fps: GIF_FPS_OPTIONS.includes(settings.fps) ? settings.fps : 15,
-                  // big GIFs get huge fast: default to half size for large recordings
-                  scale: settings.scale === 1 && frameSize(1).outW > 1400 ? 0.5 : settings.scale
-                })
-              }
+              onClick={() => setSettings((s) => withExportFormat(s, 'gif', frameSize(1).outW))}
             >
               {t('export.gif')}
             </button>

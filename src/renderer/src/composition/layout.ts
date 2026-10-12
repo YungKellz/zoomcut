@@ -1,5 +1,5 @@
 import type { AudioExportPlan, Composition, CompositionItem, Project } from '@shared/types'
-import { buildFollowPath, type FollowPath } from '../engine/cursor'
+import { followPathFor, type FollowPath } from '../engine/cursor'
 import { outputSize, type OutputSize } from '../engine/compose'
 import { keepSegments, outputDuration, type Segment } from '../engine/timeline'
 import { buildAudioPlan } from '../export/audioPlan'
@@ -16,11 +16,7 @@ export interface CompositionEntry {
 
 export function makeEntry(item: CompositionItem, project: Project): CompositionEntry {
   const segments = keepSegments(project.recording.durationMs, project.cuts)
-  const { followSmoothing, followDeadZone, offsetMs } = project.cursor
-  const followPath = project.cursorData.samples.length
-    ? buildFollowPath(project.cursorData.samples, { followSmoothing, followDeadZone, offsetMs }, project.recording.durationMs)
-    : null
-  return { item, project, segments, outMs: outputDuration(segments), followPath }
+  return { item, project, segments, outMs: outputDuration(segments), followPath: followPathFor(project) }
 }
 
 export interface CompositionSpan {

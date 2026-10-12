@@ -16,15 +16,17 @@ import type {
 } from '@shared/types'
 import { BLUR_DEFAULTS, TEXT_DEFAULTS, ZOOM_DEFAULTS } from '@shared/defaults'
 import { uid } from './engine/ids'
-import { clipRegionsToCuts, firstKeptTime, keepSegments, normalizeCuts, playStartTime, stepFrames } from './engine/timeline'
+import { firstKeptTime, keepSegments, playStartTime, stepFrames } from './engine/timeline'
+import { addCutToProject } from './engine/projectEdits'
 import {
+  ZOOM_SCALE_MAX,
+  ZOOM_SCALE_MIN,
   findZoom,
   insertZoomPart,
-  normalizeZoomParts,
+  patchZoom,
   patchZoomArea,
   removeZoomPart,
   resolveZoomOverlaps,
-  shiftZoomParts,
   zoomAreaFocusMs,
   zoomAreas,
   type ZoomAreaPatch
@@ -338,7 +340,7 @@ export const useStore = create<EditorState>((set, get) => ({
     }
     const crop = p.crop
     const target = { x: crop.x + r.cx * crop.w, y: crop.y + r.cy * crop.h }
-    const scale = clamp(Math.round((1 / r.size) * 10) / 10, 1.2, 5)
+    const scale = clamp(Math.round((1 / r.size) * 10) / 10, ZOOM_SCALE_MIN, ZOOM_SCALE_MAX)
     const area = get().pickArea
     // a part that vanished while picking (undo) is a no-op rather than a write into area 0
     if (area > 0) get().updateZoomPart(selection.id, area, { target, scale })
@@ -394,18 +396,7 @@ export const useStore = create<EditorState>((set, get) => ({
   },
 
   addCut: (start, end) => {
-    get().mutate((p) => {
-      const duration = p.recording.durationMs
-      const cuts = normalizeCuts([...p.cuts, { id: uid('cut'), start, end }], duration)
-      return {
-        ...p,
-        cuts,
-        // a shortened zoom may no longer have room for all its parts
-        zooms: clipRegionsToCuts(p.zooms, cuts, duration, 200).map(normalizeZoomParts),
-        texts: clipRegionsToCuts(p.texts, cuts, duration, 100),
-        blurs: clipRegionsToCuts(p.blurs, cuts, duration, 100)
-      }
-    })
+    get().mutate((p) => addCutToProject(p, { id: uid('cut'), start, end }))
     set({ range: null, selection: null })
   },
 
@@ -441,15 +432,7 @@ export const useStore = create<EditorState>((set, get) => ({
   updateZoom: (id, patch, record = true) => {
     const whole = wholeMs(patch, ['start', 'end', 'easeInMs', 'easeOutMs'])
     get().mutate((p) => {
-      const zooms = p.zooms.map((z) => {
-        if (z.id !== id) return z
-        const next = { ...z, ...whole }
-        // dragging the whole region (both edges move alike) carries its parts along; any other
-        // change is normalized by resolveZoomOverlaps, which drops the parts that no longer fit.
-        // Both edges are rounded on their own, so "alike" allows the 1 ms that rounding can add.
-        const ds = next.start - z.start
-        return Math.abs(ds - (next.end - z.end)) <= 1 ? shiftZoomParts(next, ds) : next
-      })
+      const zooms = p.zooms.map((z) => (z.id === id ? patchZoom(z, whole) : z))
       return { ...p, zooms: resolveZoomOverlaps(zooms, id, p.recording.durationMs) }
     }, record)
   },

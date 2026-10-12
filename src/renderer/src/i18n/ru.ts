@@ -496,5 +496,19 @@ export const ru: Record<TKey, string> = {
   'converter.dropNotFile': 'Это папка, а не видеофайл.',
   'converter.dropUnreadable': 'В этом файле нет видео, или он повреждён.',
   'converter.dropFailed': 'Не удалось открыть файл: {error}',
-  'converter.probing': 'Читаем файл…'
+  'converter.probing': 'Читаем файл…',
+
+  // ---- agent ----
+  'agent.button': 'ИИ-агенты (MCP)',
+  'agent.buttonTitle': 'Разрешить ИИ-агенту, например Claude, управлять ZoomCut',
+  'agent.title': 'Управление ZoomCut из ИИ-агентов',
+  'agent.intro': 'Подключённый MCP-клиент (Claude Code, Claude Desktop, Cursor …) сможет записывать экран, воспроизводить ввод мыши и клавиатуры, редактировать записи и экспортировать их. Пока агент работает, он управляет настоящим экраном, мышью и клавиатурой.',
+  'agent.loading': 'Загрузка…',
+  'agent.json': 'Claude Desktop, Cursor и другие клиенты: добавьте это в настройки MCP-серверов',
+  'agent.claudeCode': 'Claude Code: выполните в терминале',
+  'agent.copy': 'Копировать',
+  'agent.copied': 'Скопировано',
+  'agent.portableHint': 'Это портативная версия, поэтому для запуска моста агенту нужен установленный Node.js.',
+  'agent.loadFailed': 'Не удалось прочитать настройки MCP: {error}',
+  'agent.exporting': 'ИИ-агент экспортирует видео… {percent}%'
 }
