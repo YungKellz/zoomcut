@@ -10,7 +10,7 @@ import {
   type AgentScenarioInput,
   type AgentScenarioView
 } from './agent'
-import { parseKeyChord } from './agentKeys'
+import { formatKeyChord, parseKeyChord } from './agentKeys'
 import { SCENARIO_MAX_MS } from './defaults'
 import {
   DEFAULT_PAUSE_MS,
@@ -295,7 +295,8 @@ export function toAgentScenarioView(scenario: Scenario): AgentScenarioView {
       case 'type':
         return { kind: 'type', text: a.text, ...timing }
       case 'key':
-        return { kind: 'key', key: a.key, ...timing }
+        // not a.key: the review screen's "Key48" does not say that this is the extended Volume Up and not the B key
+        return { kind: 'key', key: formatKeyChord(a), ...timing }
     }
   })
   return {

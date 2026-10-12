@@ -458,10 +458,23 @@ describe('a captured scenario through get_scenario and back into create_scenario
     keyEvent('k2', 22_000, 76, 0x65), // Numpad5
     keyEvent('k3', 24_000, 69, 0x90), // NumLock
     keyEvent('k4', 26_000, 70, 0x91), // ScrollLock
-    keyEvent('k5', 28_000, 86, 0xe2), // the ISO backslash key: no name, "Key86"
+    keyEvent('k5', 28_000, 86, 0xe2), // the ISO backslash key: the capture calls it "Key86"
     keyEvent('k6', 30_000, 78, 0x6b, { mods: mods({ ctrl: true }) }), // Ctrl+Numpad+
-    keyEvent('k7', 32_000, 93, 0x5d, { extended: true }), // the Menu key, "Key93"
-    keyEvent('k8', 34_000, 31, 0x53, { mods: mods({ ctrl: true }) }) // Ctrl+S
+    keyEvent('k7', 32_000, 93, 0x5d, { extended: true }), // the Menu key, "Key93" in the capture
+    keyEvent('k8', 34_000, 31, 0x53, { mods: mods({ ctrl: true }) }), // Ctrl+S
+    // media keys: libuiohook's 0xE030 is scancode 0x30 with the extended prefix, which on its own is the B key
+    keyEvent('m1', 36_000, 0x30, 0xaf, { extended: true }), // Volume Up, "Key48" in the capture
+    keyEvent('m2', 38_000, 0x2e, 0xae, { extended: true, mods: mods({ shift: true }) }), // Shift+Volume Down
+    keyEvent('m3', 40_000, 0x20, 0xad, { extended: true }), // Mute
+    keyEvent('m4', 42_000, 0x22, 0xb3, { extended: true }), // Play/Pause
+    keyEvent('m5', 44_000, 0x19, 0xb0, { extended: true }), // Next track
+    keyEvent('m6', 46_000, 0x10, 0xb1, { extended: true }), // Previous track
+    keyEvent('m7', 48_000, 0x24, 0xb2, { extended: true }), // Stop
+    // a layout where the scancode of Q types "a", the numpad keys as the layout lookup maps them, a lookup that timed out
+    keyEvent('l1', 50_000, 0x10, 0x41, { mods: mods({ ctrl: true }) }), // Ctrl+A on AZERTY
+    keyEvent('l2', 52_000, 76, 0x0c), // Numpad5 without NumLock: VK_CLEAR
+    keyEvent('l3', 54_000, 0x30, 0), // no virtual key: not B
+    keyEvent('l4', 56_000, 0x30, 0, { extended: true }) // no virtual key, extended: not Volume Up either
   ]
 
   it('is described the way the replay treats it', () => {
@@ -476,7 +489,10 @@ describe('a captured scenario through get_scenario and back into create_scenario
     expect(byId['r1']).toMatchObject({ kind: 'rightClick' })
     expect(byId['w0']).toMatchObject({ kind: 'scroll', deltaY: 150, deltaX: -3 })
     expect(view.actions.filter((a) => a.kind === 'key').map((a) => (a.kind === 'key' ? a.key : ''))).toEqual([
-      'NumpadEnter', 'Numpad5', 'NumLock', 'ScrollLock', 'Key86', 'Ctrl+Numpad+', 'Key93', 'Ctrl+S'
+      // the keys of the table by name, every other one by scancode, "e" for the extended ones and "@" its virtual key
+      'NumpadEnter', 'Numpad5', 'NumLock', 'ScrollLock', 'IntlBackslash', 'Ctrl+Numpad+', 'Menu', 'Ctrl+S',
+      'Key48e@175', 'Shift+Key46e@174', 'Key32e@173', 'Key34e@179', 'Key25e@176', 'Key16e@177', 'Key36e@178',
+      'Ctrl+Key16@65', 'Key76@12', 'Key48', 'Key48e'
     ])
   })
 
@@ -489,6 +505,18 @@ describe('a captured scenario through get_scenario and back into create_scenario
     // the hover is still a hover, the drag still holds Shift
     expect(again.actions.map(isHoverOnly)).toEqual(original.actions.map(isHoverOnly))
     expect(again.actions.find((a) => a.kind === 'drag')?.modifiers).toEqual(mods({ shift: true }))
+  })
+
+  it('gives every key back with the same virtual key, scancode, extended flag and modifiers', () => {
+    const original = captured(raw)
+    const again = viaAgentApi(original)
+    const keys = (s: Scenario) =>
+      s.actions.flatMap((a) => (a.kind === 'key' ? [{ vk: a.vk, scan: a.scan, extended: a.extended, modifiers: a.modifiers }] : []))
+    expect(keys(original)).toHaveLength(19)
+    expect(keys(again)).toEqual(keys(original))
+    // the media keys in particular: a replay presses Volume Up, not the B key
+    expect(keys(again)).toContainEqual({ vk: 0xaf, scan: 0x30, extended: true, modifiers: NONE })
+    expect(keys(again).filter((k) => k.vk === 0x42)).toEqual([])
   })
 
   it('keeps a scroll of more notches than anyone scripts, with the time it needs', () => {

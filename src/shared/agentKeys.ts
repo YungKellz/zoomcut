@@ -6,9 +6,12 @@
  * names follow the US layout – a virtual-key code names a physical key, the character it types
  * depends on the layout the replayed machine uses.
  *
- * Every label a capture can give a key (describeKeyLabel in shared/scenario.ts: the numpad, the
- * lock keys, "Key<scan>" for a key without a name) is read back too, so the key of a captured
- * scenario that get_scenario returns can be handed to create_scenario unchanged.
+ * A key action is read and written exactly: formatKeyChord is the inverse of parseKeyChord, so the
+ * key of a captured scenario that get_scenario returns, handed back to create_scenario, replays as
+ * the same virtual key, scancode and extended flag. A key without a name in the table below is
+ * spelled by its scancode, "Key<scan>" (an "e" marks the extended 0xE0 keys, "@<vk>" carries the
+ * virtual key) – never by a lookup of that scancode in the table, which names a different key for
+ * every extended key (a media key shares its scancode with a letter) and for every other layout.
  */
 import { AgentError } from './agent'
 import type { ScenarioModifiers } from './types'
@@ -54,13 +57,17 @@ const MODIFIER_KEY: Record<ModifierName, KeyDef> = {
 }
 
 const KEYS = new Map<string, KeyDef>()
-/** the same keys by physical key ("scan:extended"), to give a "Key<scan>" its virtual key */
-const KEYS_BY_SCAN = new Map<string, KeyDef>()
+/** the same keys by what a key action stores ("scan:extended:vk"), to name a stored key */
+const KEYS_BY_PHYSICAL = new Map<string, KeyDef>()
+
+function physicalKey(scan: number, extended: boolean, vk: number): string {
+  return `${scan}:${extended}:${vk}`
+}
 
 function def(names: string[], label: string, vk: number, scan: number, extended = false): void {
   const key: KeyDef = { label, vk, scan, extended }
   for (const name of names) KEYS.set(name.toLowerCase(), key)
-  KEYS_BY_SCAN.set(`${scan}:${extended}`, key)
+  KEYS_BY_PHYSICAL.set(physicalKey(scan, extended, vk), key)
 }
 
 // letters, by scancode row (QWERTY)
@@ -133,25 +140,29 @@ export const KEY_CHORD_HELP =
   'PageUp, PageDown, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, PrintScreen, CapsLock, NumLock, ScrollLock, Menu, ' +
   'Numpad0-Numpad9, NumpadEnter, Numpad+ Numpad- Numpad* Numpad/ Numpad. (also NumpadPlus, NumpadMinus, NumpadMultiply, NumpadDivide, NumpadDecimal), ' +
   'and the US-layout punctuation - = [ ] ; \' \\ , . / ` (also spelled Minus, Equals, LeftBracket, RightBracket, Semicolon, Quote, ' +
-  'Backslash, Comma, Period, Slash, Backtick). A key without a name is written Key<scancode>, like "Key86": that is how ' +
-  'get_scenario names such keys of a captured scenario. Join with "+": "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab". ' +
+  'Backslash, Comma, Period, Slash, Backtick). Any other key is written by its scancode and virtual key, decimal: ' +
+  '"Key48e@175" is scancode 48, e = an extended (0xE0) key, virtual key 175 (Volume Up). ' +
+  'get_scenario writes such keys of a captured scenario that way, and without "@" the virtual key stays unknown (0), ' +
+  'so a replay has nothing to press for it. Join with "+": "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab". ' +
   '"+" itself cannot be a chord part ("Ctrl+=" is zoom in), except as the last key spelled Numpad+.'
 
-/** "Key86" – a physical key by its scancode, for the keys a capture has no name for */
-const RAW_SCAN_KEY = /^key([0-9]{1,3})$/
+/** "Key86", "Key93e", "Key48e@175" – a physical key by scancode ("e" = extended) and, after "@", its virtual key */
+const RAW_KEY = /^key([0-9]{1,3})(e?)(?:@([0-9]{1,3}))?$/
 
 /**
- * The key a "Key<scan>" label stands for: what the table knows about that physical key (the
- * label does not say if it was extended, so the plain key wins), else the bare scancode with no
- * virtual key – a key a capture gave this label only because it knew nothing more about it.
+ * The key a "Key<scan>" spelling stands for, exactly as spelled: no virtual key unless it is given.
+ * A capture stores a key without a name just like that (vk 0 when the keyboard layout lookup timed
+ * out), and neither the table nor the US layout may fill it in: the same scancode is a different
+ * key when extended, and a different character on another layout.
  */
-function rawScanKey(part: string): KeyDef | null {
-  const match = RAW_SCAN_KEY.exec(part.toLowerCase())
+function rawKey(part: string): KeyDef | null {
+  const match = RAW_KEY.exec(part.toLowerCase())
   if (!match) return null
   const scan = Number(match[1])
-  if (scan > 0xff) return null
-  const known = KEYS_BY_SCAN.get(`${scan}:false`) ?? KEYS_BY_SCAN.get(`${scan}:true`)
-  return { label: `Key${scan}`, vk: known?.vk ?? 0, scan, extended: known?.extended ?? false }
+  const vk = match[3] === undefined ? 0 : Number(match[3])
+  if (scan > 0xff || vk > 0xff) return null
+  // labelled like a capture labels a key without a name; the action keeps vk, scan and extended
+  return { label: `Key${scan}`, vk, scan, extended: match[2] === 'e' }
 }
 
 /** "Ctrl+Shift+T" → its parts. "Numpad+" is a key whose own name ends in the separator: "Ctrl+Numpad+" has an empty last part to merge. */
@@ -188,7 +199,7 @@ export function parseKeyChord(input: string): ParsedKeyChord {
       held.push(modifier)
       continue
     }
-    const key = KEYS.get(lower) ?? rawScanKey(part)
+    const key = KEYS.get(lower) ?? rawKey(part)
     if (!key) bad(`Unknown key "${part}" in "${input}". ${KEY_CHORD_HELP}`)
     if (base) bad(`Cannot read the key "${input}": it has two non-modifier keys ("${base.label}" and "${key.label}"). Use one key action per key.`)
     base = key
@@ -209,4 +220,22 @@ export function parseKeyChord(input: string): ParsedKeyChord {
     extended: base.extended,
     modifiers
   }
+}
+
+/**
+ * The inverse of parseKeyChord for a stored key action: the chord string that reads back as exactly
+ * these modifiers, virtual key, scancode and extended flag. The name of the table's key when the
+ * action is that very key ("Ctrl+S", "Menu"), else the "Key<scan>" spelling that carries all three
+ * ("Key48e@175"). Never the name of a key that merely shares the scancode.
+ */
+export function formatKeyChord(action: { modifiers: ScenarioModifiers; vk: number; scan: number; extended: boolean }): string {
+  const { modifiers, vk, scan, extended } = action
+  const prefix = MODIFIER_ORDER.filter((m) => modifiers[m]).map((m) => MODIFIER_LABEL[m])
+  // a modifier key as the key itself ("Win", "Alt+Shift"), unless that modifier is also held: "Shift+Shift" cannot be read
+  const modifierKey = MODIFIER_ORDER.find((m) => {
+    const k = MODIFIER_KEY[m]
+    return !modifiers[m] && k.vk === vk && k.scan === scan && k.extended === extended
+  })
+  const named = modifierKey ? MODIFIER_LABEL[modifierKey] : KEYS_BY_PHYSICAL.get(physicalKey(scan, extended, vk))?.label
+  return [...prefix, named ?? `Key${scan}${extended ? 'e' : ''}${vk > 0 ? `@${vk}` : ''}`].join('+')
 }

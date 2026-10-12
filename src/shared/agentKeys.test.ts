@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AgentError } from './agent'
-import { KEY_CHORD_HELP, parseKeyChord } from './agentKeys'
+import { KEY_CHORD_HELP, formatKeyChord, parseKeyChord } from './agentKeys'
 import { compileScenario, describeKeyLabel, isModifierKey } from './scenario'
 import type { ScenarioKeyAction, ScenarioModifiers } from './types'
 
@@ -146,21 +146,24 @@ describe('parseKeyChord', () => {
     expect(badParams(() => parseKeyChord('A+Numpad+')).message).toContain('two non-modifier keys')
   })
 
-  it('takes a key by its scancode, the way a capture names a key it has no name for', () => {
-    // the ISO "<>" key
-    expect(parseKeyChord('Key86')).toEqual({ key: 'Key86', vk: 0xe2, scan: 86, extended: false, modifiers: NONE })
-    // F13 on its scancode keeps its virtual key, the Menu key its extended flag
-    expect(parseKeyChord('Key100')).toMatchObject({ key: 'Key100', vk: 0x7c, scan: 100, extended: false })
-    expect(parseKeyChord('Ctrl+key93')).toMatchObject({ key: 'Ctrl+Key93', vk: 0x5d, scan: 93, extended: true })
-    // nothing known about the key: just the scancode, as a capture without a keytext answer stores it
-    expect(parseKeyChord('Key200')).toMatchObject({ key: 'Key200', vk: 0, scan: 200, extended: false })
+  it('takes a key without a name by its scancode, extended flag and virtual key, exactly as spelled', () => {
+    // Volume Up: scancode 0x30 with the extended prefix, virtual key 0xAF
+    expect(parseKeyChord('Key48e@175')).toEqual({ key: 'Key48', vk: 0xaf, scan: 0x30, extended: true, modifiers: NONE })
+    expect(parseKeyChord('Ctrl+key93e@93')).toEqual({ key: 'Ctrl+Key93', vk: 0x5d, scan: 93, extended: true, modifiers: { ...NONE, ctrl: true } })
+    expect(parseKeyChord('KEY86@226')).toMatchObject({ key: 'Key86', vk: 0xe2, scan: 86, extended: false })
+    // nothing but the scancode: vk 0 as a capture stores a key its layout lookup timed out on, not the key the table has there
+    expect(parseKeyChord('Key200')).toEqual({ key: 'Key200', vk: 0, scan: 200, extended: false, modifiers: NONE })
+    expect(parseKeyChord('Key48')).toMatchObject({ vk: 0, scan: 0x30, extended: false }) // not B
+    expect(parseKeyChord('Key48e')).toMatchObject({ vk: 0, scan: 0x30, extended: true })
+    expect(parseKeyChord('Key16')).toMatchObject({ vk: 0, scan: 0x10, extended: false }) // not Q: on AZERTY that key types "a"
     expect(parseKeyChord('Key007').key).toBe('Key7')
-    expect(badParams(() => parseKeyChord('Key256')).message).toContain('Unknown key')
-    expect(badParams(() => parseKeyChord('Key')).message).toContain('Unknown key')
-    expect(badParams(() => parseKeyChord('Key1234')).message).toContain('Unknown key')
+    expect(parseKeyChord('Key255e@255')).toMatchObject({ vk: 255, scan: 255, extended: true })
+    for (const bad of ['Key256', 'Key', 'Key1234', 'Key48@256', 'Key48@', 'Key48@x', 'Key48ee', 'Key48@175e', 'Key48@1@2', 'Key-1', 'Key48 e']) {
+      expect(badParams(() => parseKeyChord(bad)).message, bad).toContain('Unknown key')
+    }
   })
 
-  it('reads back every label a capture can give a key', () => {
+  it('reads back every label a capture can give a key, as far as the label goes', () => {
     // describeKeyLabel is the one place that names captured keys: every scan, both extended flags and the virtual
     // keys it labels by themselves (digits, letters, punctuation) or does not (0, an F-key, 0xff)
     const vks = [0, 0x70, 0xff, ...Array.from({ length: 10 }, (_, i) => 48 + i), ...Array.from({ length: 26 }, (_, i) => 65 + i)]
@@ -177,7 +180,8 @@ describe('parseKeyChord', () => {
           expect(chord.key, base).toBe(base)
           expect(chord.modifiers, base).toEqual(NONE)
           if (/^Key\d+$/.test(base)) {
-            expect(chord.scan, base).toBe(scan)
+            // the label names a scancode and nothing else: no virtual key, and no extended flag the label does not carry
+            expect([chord.scan, chord.vk, chord.extended], base).toEqual([scan, 0, false])
           } else if (base.length === 1) {
             // a character names the key by its virtual key
             expect(chord.vk, base).toBe(vk)
@@ -201,6 +205,85 @@ describe('parseKeyChord', () => {
         expect(label.endsWith(base)).toBe(true)
       }
     }
+  })
+
+  it('writes a stored key so that it reads back as exactly the same key', () => {
+    // the label of a capture ("Key48") is ambiguous, formatKeyChord is not: every scancode, both extended flags and
+    // every virtual key, whatever mix of them a keyboard layout or a lookup that timed out produced
+    let named = 0
+    for (let scan = 0; scan <= 255; scan++) {
+      for (const extended of [false, true]) {
+        for (let vk = 0; vk <= 255; vk++) {
+          const text = formatKeyChord({ modifiers: NONE, vk, scan, extended })
+          const chord = parseKeyChord(text)
+          const m = chord.modifiers
+          // (a plain comparison: 130 000 expect() calls would take seconds)
+          if (chord.vk !== vk || chord.scan !== scan || chord.extended !== extended || m.ctrl || m.shift || m.alt || m.meta) {
+            throw new Error(`${text} reads back as vk ${chord.vk}, scan ${chord.scan}, extended ${chord.extended}, not vk ${vk}, scan ${scan}, extended ${extended}`)
+          }
+          if (!text.startsWith('Key')) named++
+        }
+      }
+    }
+    expect(named).toBeGreaterThan(100) // the keys of the table keep their names
+  })
+
+  it('keeps the held modifiers apart from a modifier that is also the key', () => {
+    const keys = [
+      { vk: 0x11, scan: 0x1d, extended: false },
+      { vk: 0x10, scan: 0x2a, extended: false },
+      { vk: 0x12, scan: 0x38, extended: false },
+      { vk: 0x5b, scan: 0x5b, extended: true },
+      { vk: 0x53, scan: 0x1f, extended: false },
+      { vk: 0xaf, scan: 0x30, extended: true },
+      { vk: 0, scan: 0x30, extended: false }
+    ]
+    for (let bits = 0; bits < 16; bits++) {
+      const modifiers: ScenarioModifiers = { ctrl: !!(bits & 1), shift: !!(bits & 2), alt: !!(bits & 4), meta: !!(bits & 8) }
+      for (const key of keys) {
+        const text = formatKeyChord({ modifiers, ...key })
+        expect(parseKeyChord(text), text).toMatchObject({ ...key, modifiers })
+      }
+    }
+    expect(formatKeyChord({ modifiers: NONE, vk: 0x5b, scan: 0x5b, extended: true })).toBe('Win')
+    expect(formatKeyChord({ modifiers: { ...NONE, alt: true }, vk: 0x10, scan: 0x2a, extended: false })).toBe('Alt+Shift')
+    expect(formatKeyChord({ modifiers: { ...NONE, shift: true }, vk: 0x10, scan: 0x2a, extended: false })).toBe('Shift+Key42@16')
+  })
+
+  it('does not turn a media key into the letter that shares its scancode', () => {
+    // libuiohook reports Volume Up as 0xE030: scancode 0x30 (the B key without the prefix), extended, virtual key 0xAF
+    const media = [
+      { name: 'Volume Up', scan: 0x30, vk: 0xaf, letter: 'B' },
+      { name: 'Volume Down', scan: 0x2e, vk: 0xae, letter: 'C' },
+      { name: 'Mute', scan: 0x20, vk: 0xad, letter: 'D' },
+      { name: 'Play/Pause', scan: 0x22, vk: 0xb3, letter: 'G' },
+      { name: 'Next track', scan: 0x19, vk: 0xb0, letter: 'P' },
+      { name: 'Previous track', scan: 0x10, vk: 0xb1, letter: 'Q' },
+      { name: 'Stop', scan: 0x24, vk: 0xb2, letter: 'J' }
+    ]
+    for (const { name, scan, vk, letter } of media) {
+      const text = formatKeyChord({ modifiers: NONE, vk, scan, extended: true })
+      expect(text, name).toBe(`Key${scan}e@${vk}`)
+      expect(parseKeyChord(text), name).toMatchObject({ vk, scan, extended: true })
+      expect(parseKeyChord(text).key, name).not.toBe(letter)
+      expect(parseKeyChord(letter), name).toMatchObject({ scan, extended: false }) // the key the scancode alone would have meant
+      // the review screen's label for it, the one get_scenario used to return, names no virtual key and not the extended flag
+      const label = describeKeyLabel({ mods: NONE, scan, vk, extended: true })
+      expect(label, name).toBe(`Key${scan}`)
+      expect(parseKeyChord(label), name).toMatchObject({ vk: 0, extended: false })
+    }
+  })
+
+  it('names a key of the table by its name and nothing else', () => {
+    expect(formatKeyChord({ modifiers: { ...NONE, ctrl: true }, vk: 0x53, scan: 31, extended: false })).toBe('Ctrl+S')
+    expect(formatKeyChord({ modifiers: NONE, vk: 0x5d, scan: 93, extended: true })).toBe('Menu')
+    expect(formatKeyChord({ modifiers: NONE, vk: 0xe2, scan: 86, extended: false })).toBe('IntlBackslash')
+    expect(formatKeyChord({ modifiers: { ...NONE, ctrl: true }, vk: 0x6b, scan: 78, extended: false })).toBe('Ctrl+Numpad+')
+    // the scancode of S with another virtual key (a layout that puts another character there) is not "S"
+    expect(formatKeyChord({ modifiers: NONE, vk: 0x41, scan: 31, extended: false })).toBe('Key31@65')
+    // the extended twin of a table key is another key
+    expect(formatKeyChord({ modifiers: NONE, vk: 0x0d, scan: 0x1c, extended: true })).toBe('NumpadEnter')
+    expect(formatKeyChord({ modifiers: NONE, vk: 0x2e, scan: 0x53, extended: false })).toBe('Key83@46')
   })
 
   it('labels every key the way the review screen labels a captured one', () => {
