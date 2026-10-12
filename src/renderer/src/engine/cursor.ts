@@ -1,4 +1,4 @@
-import type { ClickEvent, CursorSample, CursorSettings } from '@shared/types'
+import type { ClickEvent, CursorSample, CursorSettings, Project } from '@shared/types'
 
 export interface Point {
   x: number
@@ -89,6 +89,14 @@ export function buildFollowPath(
     ys[i] = cy
   }
   return { stepMs, xs, ys }
+}
+
+/** The follow path of a project's own cursor data and settings; null when no cursor was recorded. */
+export function followPathFor(project: Project): FollowPath | null {
+  const { followSmoothing, followDeadZone, offsetMs } = project.cursor
+  return project.cursorData.samples.length
+    ? buildFollowPath(project.cursorData.samples, { followSmoothing, followDeadZone, offsetMs }, project.recording.durationMs)
+    : null
 }
 
 export function followAt(path: FollowPath, t: number): Point {

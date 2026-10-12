@@ -32,7 +32,7 @@ import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
 import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
-import { findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
+import { ZOOM_SCALE_MAX, ZOOM_SCALE_MIN, findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
 import { uniqueWindows, windowToCrop } from '../engine/windows'
 import { TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration, srcToOut } from '../engine/timeline'
@@ -304,8 +304,8 @@ function ZoomPanel({ t }: PanelProps): JSX.Element {
           <Slider
             label={areas.length > 1 ? t('zoom.scalePart', { n: activeArea + 1 }) : t('zoom.scale')}
             value={areas[activeArea].scale}
-            min={1.2}
-            max={5}
+            min={ZOOM_SCALE_MIN}
+            max={ZOOM_SCALE_MAX}
             step={0.1}
             format={(v) => `${v.toFixed(1)}×`}
             onBegin={checkpoint}

@@ -259,6 +259,23 @@ export function viewportOf(cam: Camera): Viewport {
   return { x: cam.cx - w / 2, y: cam.cy - h / 2, w, h }
 }
 
+/** A zoom lasts at least this long. */
+export const ZOOM_MIN_MS = 200
+/** The zoom factor range the editor offers (the pick rectangle and the scale slider). */
+export const ZOOM_SCALE_MIN = 1.2
+export const ZOOM_SCALE_MAX = 5
+
+/**
+ * Applies a patch to a zoom. When the patch moves both edges alike (dragging the whole region)
+ * the parts are carried along; any other change is left to resolveZoomOverlaps, which drops the
+ * parts that no longer fit.
+ */
+export function patchZoom(z: ZoomSegment, patch: Partial<ZoomSegment>): ZoomSegment {
+  const next = { ...z, ...patch }
+  const ds = next.start - z.start
+  return Math.abs(ds - (next.end - z.end)) < 0.5 ? shiftZoomParts(next, ds) : next
+}
+
 /** Keeps zoom segments sorted and non-overlapping after one of them changed. */
 export function resolveZoomOverlaps(zooms: ZoomSegment[], changedId: string, durationMs: number): ZoomSegment[] {
   const sorted = [...zooms].sort((a, b) => a.start - b.start)
@@ -270,7 +287,7 @@ export function resolveZoomOverlaps(zooms: ZoomSegment[], changedId: string, dur
   // the room between the neighbours; the segment never leaves it
   const lo = prev ? prev.end : 0
   const hi = next ? next.start : durationMs
-  const minLength = 200
+  const minLength = ZOOM_MIN_MS
   z.start = Math.max(lo, Math.min(hi, z.start))
   z.end = Math.max(lo, Math.min(hi, z.end))
   if (z.end - z.start < minLength) {

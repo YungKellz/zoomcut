@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Circle, Clapperboard, FileImage, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
+import { Bot, Circle, Clapperboard, FileImage, FolderOpen, Mic, Monitor, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from 'lucide-react'
 import type { AppInfo, AudioCaptureOptions, CompositionSummary, DisplayInfo, Language, ProjectSummary, ScenarioSummary } from '@shared/types'
 import { DEFAULT_AUDIO_CAPTURE } from '@shared/defaults'
 import { useStore } from '../store'
@@ -13,6 +13,7 @@ import { changeLanguage, useI18n, useT } from '../i18n'
 import { Logo } from '../components/Logo'
 import { UpdateStatus } from '../components/UpdateStatus'
 import { GifConverterDialog } from '../converter/GifConverterDialog'
+import { AgentDialog } from '../agent/AgentDialog'
 
 export function Home(): JSX.Element {
   const t = useT()
@@ -23,6 +24,7 @@ export function Home(): JSX.Element {
   const [compositions, setCompositions] = useState<CompositionSummary[]>([])
   const [compositionBusy, setCompositionBusy] = useState(false)
   const [converterOpen, setConverterOpen] = useState(false)
+  const [agentOpen, setAgentOpen] = useState(false)
   const [displays, setDisplays] = useState<DisplayInfo[]>([])
   const [selectedDisplay, setSelectedDisplay] = useState<number | null>(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -114,15 +116,18 @@ export function Home(): JSX.Element {
     if (recorder.phase === 'idle' && scenario.phase === 'idle') void refreshLibrary()
   }, [recorder.phase, scenario.phase, refreshLibrary])
 
-  // "Record again" hands the new attempt over through the store: start it exactly like the button
-  // would. takePendingStart clears it atomically, so a StrictMode re-run of this effect cannot start twice.
+  // "Record again" and AI agents hand the new attempt over through the store: start it exactly like
+  // the button would - when Home opens with it already set, and when it is set while Home is shown.
+  // takePendingStart clears it atomically, so a StrictMode re-run of this effect cannot start twice.
+  const pendingStart = useStore((s) => s.pendingStart)
   useEffect(() => {
+    if (!pendingStart) return
     const pending = useStore.getState().takePendingStart((p) => p.kind !== 'replay')
     if (pending?.kind === 'record') void recorder.start(pending.displayId, { audio: pending.audio ?? undefined })
     else if (pending?.kind === 'capture') void scenario.start(pending.displayId)
-    // once, on entry only
+    // the hooks' start functions are stable; only a new pending start matters
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [pendingStart])
 
   // displays come and go (docking, projectors): keep the list fresh while idle - a scenario
   // capture also has to stay excluded, the same as an ordinary recording, or this ends up
@@ -226,9 +231,14 @@ export function Home(): JSX.Element {
           </div>
         </div>
         <div className="home-meta">
-          <button className="btn btn-small" onClick={() => setConverterOpen(true)} disabled={recording || capturing} title={t('converter.buttonTitle')}>
-            <FileImage size={14} /> {t('converter.button')}
-          </button>
+          <div className="home-meta-actions">
+            <button className="btn btn-small" onClick={() => setAgentOpen(true)} disabled={recording || capturing} title={t('agent.buttonTitle')}>
+              <Bot size={14} /> {t('agent.button')}
+            </button>
+            <button className="btn btn-small" onClick={() => setConverterOpen(true)} disabled={recording || capturing} title={t('converter.buttonTitle')}>
+              <FileImage size={14} /> {t('converter.button')}
+            </button>
+          </div>
           <label className="lang-select">
             <span>{t('common.language')}</span>
             <select value={lang} onChange={(e) => void changeLanguage(e.target.value as Language)}>
@@ -452,6 +462,7 @@ export function Home(): JSX.Element {
       )}
 
       {converterOpen && <GifConverterDialog onClose={() => setConverterOpen(false)} />}
+      {agentOpen && <AgentDialog onClose={() => setAgentOpen(false)} />}
 
       {capturing && (
         <div className="overlay">

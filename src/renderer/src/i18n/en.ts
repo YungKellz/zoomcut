@@ -464,7 +464,21 @@ export const en = {
   'converter.start': 'Start, s',
   'converter.end': 'End, s',
   'converter.output': 'Output: {w}×{h} · {duration} · {frames} frames at {fps} fps',
-  'converter.run': 'Convert to GIF'
+  'converter.run': 'Convert to GIF',
+
+  // ---- agent ----
+  'agent.button': 'AI agents (MCP)',
+  'agent.buttonTitle': 'Let an AI agent such as Claude control ZoomCut',
+  'agent.title': 'Control ZoomCut from AI agents',
+  'agent.intro': 'An MCP client (Claude Code, Claude Desktop, Cursor …) can then record your screen, replay mouse and keyboard input, edit recordings and export them. While it works it drives the real screen, mouse and keyboard.',
+  'agent.loading': 'Loading…',
+  'agent.json': 'Claude Desktop, Cursor and other clients: add this to the MCP servers settings',
+  'agent.claudeCode': 'Claude Code: run this in a terminal',
+  'agent.copy': 'Copy',
+  'agent.copied': 'Copied',
+  'agent.portableHint': 'This is the portable build, so the agent needs Node.js installed to start the bridge.',
+  'agent.loadFailed': 'Could not read the MCP settings: {error}',
+  'agent.exporting': 'An AI agent is exporting a video… {percent}%'
 }
 
 export type TKey = keyof typeof en

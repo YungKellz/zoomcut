@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import { useStore } from './store'
 import { useI18n } from './i18n'
+import { installAgentExecutor } from './agent/executor'
 import type { Composition, Project, Scenario } from '@shared/types'
 import './styles.css'
 
@@ -133,6 +134,10 @@ useStore.subscribe((state, prev) => {
       .catch((err) => console.error('saving defaults failed', err))
   }, 800)
 })
+
+// AI agents (MCP): only the main window executes the commands the control server forwards; the
+// floating bar, the replay overlay and the e2e target load this same bundle under a hash
+if (!window.location.hash.replace('#', '')) installAgentExecutor()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

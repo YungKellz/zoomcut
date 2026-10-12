@@ -190,13 +190,16 @@ export function ScenarioReview(): JSX.Element {
     await recorder.start(target, { scenario, audio: audio ?? undefined })
   }
 
-  // "Record again" on a recording opens its scenario with a replay already queued: start it like the button
+  // "Record again" on a recording opens its scenario with a replay already queued, and an AI agent
+  // can queue one while this screen is shown: start it like the button (once - takePendingStart clears it)
+  const pendingStart = useStore((s) => s.pendingStart)
   useEffect(() => {
+    if (!pendingStart) return
     const pending = useStore.getState().takePendingStart((p) => p.kind === 'replay' && p.scenarioId === scenario.id)
     if (pending?.kind === 'replay') void startReplay(pending.audio)
-    // once, on entry only
+    // startReplay closes over the current scenario; only a new pending start matters
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [pendingStart])
 
   return (
     <div className="scenario-review">
