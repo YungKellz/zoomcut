@@ -509,6 +509,7 @@ export const ru: Record<TKey, string> = {
   'agent.copy': 'Копировать',
   'agent.copied': 'Скопировано',
   'agent.portableHint': 'Это портативная версия, поэтому для запуска моста агенту нужен установленный Node.js.',
+  'agent.updateHint': 'При обновлении или переустановке ZoomCut запущенные MCP-сессии завершаются, поэтому потом переподключите сервер в клиенте.',
   'agent.loadFailed': 'Не удалось прочитать настройки MCP: {error}',
   'agent.exporting': 'ИИ-агент экспортирует видео… {percent}%'
 }

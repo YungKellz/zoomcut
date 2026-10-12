@@ -54,6 +54,7 @@ export function AgentDialog({ onClose }: Props): JSX.Element {
               <ConfigBlock label={t('agent.json')} text={config.json} />
               <ConfigBlock label={t('agent.claudeCode')} text={config.claudeCode} />
               {config.portable && <p className="muted small">{t('agent.portableHint')}</p>}
+              <p className="muted small">{t('agent.updateHint')}</p>
             </>
           )}
         </div>

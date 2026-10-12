@@ -522,6 +522,7 @@ export const en = {
   'agent.copy': 'Copy',
   'agent.copied': 'Copied',
   'agent.portableHint': 'This is the portable build, so the agent needs Node.js installed to start the bridge.',
+  'agent.updateHint': 'Updating or reinstalling ZoomCut ends running MCP sessions, so reconnect the server in your client afterwards.',
   'agent.loadFailed': 'Could not read the MCP settings: {error}',
   'agent.exporting': 'An AI agent is exporting a video… {percent}%'
 }
