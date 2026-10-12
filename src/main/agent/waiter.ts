@@ -4,6 +4,8 @@ export interface Waiter<T> {
   promise: Promise<T>
   /** stops listening; the promise stays pending (call it when the wait is no longer needed) */
   cancel(): void
+  /** restarts the timeout with a new length (a wait whose budget grows when a later phase begins); no-op once settled */
+  rearm(ms: number): void
 }
 
 /**
@@ -25,7 +27,18 @@ export function waitFor<T>(
     timer = null
     detach()
   }
+  let rejectTimeout: (err: AgentError) => void = () => undefined
+  const arm = (ms: number): void => {
+    if (!timeout) return
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      if (settled) return
+      done()
+      rejectTimeout(timeout.error())
+    }, ms)
+  }
   const promise = new Promise<T>((resolve, reject) => {
+    rejectTimeout = reject
     detach = subscribe(
       (value) => {
         if (settled) return
@@ -39,15 +52,9 @@ export function waitFor<T>(
       }
     )
     if (settled) detach() // settled while subscribing
-    else if (timeout) {
-      timer = setTimeout(() => {
-        if (settled) return
-        done()
-        reject(timeout.error())
-      }, timeout.ms)
-    }
+    else if (timeout) arm(timeout.ms)
   })
   // a waiter whose owner stopped listening (an earlier step failed) must not end up as an unhandled rejection
   promise.catch(() => undefined)
-  return { promise, cancel: () => done() }
+  return { promise, cancel: () => done(), rearm: (ms) => (settled ? undefined : arm(ms)) }
 }

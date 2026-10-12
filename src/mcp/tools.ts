@@ -115,7 +115,8 @@ export const TOOLS: ToolDef[] = [
       '(not recorded) shows the state. Returns after the ~3 second countdown, once recording is running; it keeps going until stop_recording ' +
       '(or cancel_recording). While it runs the machine can be used normally, for example by the user, or by an agent driving ' +
       'another app. Audio: `mic` and `systemAudio` (what the computer plays) default to the app\'s last choice, usually off. ' +
-      'Fails with `busy` if a recording or scenario capture is already running.'
+      'Fails with `busy` if a recording or scenario capture is already running. If this call is cancelled (the client interrupts it) before ' +
+      'the recording is running, ZoomCut discards the recording.'
   },
   {
     name: 'stop_recording',
@@ -126,7 +127,7 @@ export const TOOLS: ToolDef[] = [
       'Stop the running recording and save it. Waits while ZoomCut converts and saves it (a few seconds, longer for long recordings) ' +
       'and returns { projectId, durationMs, warnings }. The new recording opens in the ZoomCut editor. Next: get_project to see ' +
       'what was recorded (including where the mouse clicked), edit_project to cut, zoom and annotate, export_project to render it. ' +
-      'Fails with `not_found` if nothing is recording.'
+      'Fails with `not_found` if nothing is recording. Cancelling this call does not stop the saving.'
   },
   {
     name: 'cancel_recording',
@@ -175,7 +176,8 @@ export const TOOLS: ToolDef[] = [
       'an unknown cut / zoom / text / blur id is `not_found`; cuts may not remove the whole recording. ' +
       'Returns the updated recording like get_project, so you can read the ids of what you added. ' +
       'If the recording is open in the ZoomCut editor it updates live and the whole call is one undo step (Ctrl+Z) for the user. ' +
-      'A fixed zoom without a target aims at the centre; to aim it, use a click position from get_project.'
+      'A fixed zoom without a target aims at the centre; to aim it, use a click position from get_project. ' +
+      'Cancelling the call does not take back edits that were already applied.'
   },
   {
     name: 'export_project',
@@ -187,7 +189,8 @@ export const TOOLS: ToolDef[] = [
       'it takes about as long as the video (a minute or more for long ones) and the call waits for it. Everything is optional and defaults to ' +
       'the export settings saved in the project (set from the last export dialog); what you pass is saved back to the project. ' +
       'Frame rates: mp4 24 / 30 / 60, gif 10 / 12 / 15 / 20 / 25. `folder` must be an absolute path. An existing file is never overwritten ' +
-      '("-2" is appended). GIFs have no audio; large GIFs get big fast, so prefer scale 0.5 and 10-15 fps.'
+      '("-2" is appended). GIFs have no audio; large GIFs get big fast, so prefer scale 0.5 and 10-15 fps. If this call is cancelled (the client ' +
+      'interrupts it) ZoomCut stops the export.'
   },
   {
     name: 'delete_project',
@@ -195,8 +198,8 @@ export const TOOLS: ToolDef[] = [
     method: 'projects.delete',
     annotations: DESTROYS,
     description:
-      'Permanently delete a recording and its files (video, audio, edits). Cannot be undone. Refused with `busy` while the recording is open in ' +
-      'the editor. Export first if the result is needed.'
+      'Permanently delete a saved recording and its files (video, audio, edits). Cannot be undone. Refused with `busy` while the recording is open in ' +
+      'the editor, is part of the composition open in ZoomCut, or is still being saved. Export first if the result is needed.'
   },
   {
     name: 'list_scenarios',
@@ -236,7 +239,9 @@ export const TOOLS: ToolDef[] = [
     title: 'Delete a scenario',
     method: 'scenarios.delete',
     annotations: DESTROYS,
-    description: 'Permanently delete a scenario (a saved script of mouse and keyboard actions). Recordings that were made from it are kept.'
+    description:
+      'Permanently delete a scenario (a saved script of mouse and keyboard actions). Recordings that were made from it are kept. ' +
+      'Refused with `busy` while the scenario is open in the ZoomCut scenario review or is being captured.'
   },
   {
     name: 'record_scenario',
@@ -246,9 +251,12 @@ export const TOOLS: ToolDef[] = [
     description:
       'Replay a scenario while recording the screen, and return { projectId, durationMs, warnings } when the replay has ended and the recording ' +
       'is saved. WARNING: this moves the REAL mouse and presses REAL keys on the user\'s machine, and records the real screen. Nobody should touch the ' +
-      'mouse or keyboard until it returns; pressing Esc aborts it (the recording is then discarded and the call fails with `cancelled`). ' +
-      'The windows and pages the scenario clicks must already be set up as the scenario expects. Takes as long as the scenario (plus a few ' +
-      'seconds). The new recording opens in the ZoomCut editor. Audio flags work like start_recording.'
+      'mouse or keyboard until it returns; pressing Esc aborts it (the recording is then discarded and the call fails with `cancelled`; if the ' +
+      'replay itself breaks the call fails with `failed` and the reason). If this call is cancelled (the client interrupts it) ZoomCut aborts ' +
+      'the replay and discards the recording, unless it is already being saved. ' +
+      'The windows and pages the scenario clicks must already be set up as the scenario expects. Takes as long as the scenario, plus a few ' +
+      'seconds, plus the time to convert and save the recording (longer for long scenarios). The new recording opens in the ZoomCut editor. ' +
+      'Audio flags work like start_recording.'
   },
   {
     name: 'start_scenario_capture',
@@ -258,7 +266,8 @@ export const TOOLS: ToolDef[] = [
     description:
       'Start capturing the clicks, drags, scrolls and keystrokes the USER performs on a display, to turn them into a scenario (the user must ' +
       'demonstrate it; the agent cannot click for them). Returns after the ~3 second countdown, once capturing runs. Tell the user to perform the steps, ' +
-      'then call stop_scenario_capture (they can also press Ctrl+Alt+R or Stop on the floating bar - then just call stop_scenario_capture to get the id).'
+      'then call stop_scenario_capture (they can also press Ctrl+Alt+R or Stop on the floating bar - then just call stop_scenario_capture to get the id). ' +
+      'If this call is cancelled (the client interrupts it) before the capture is running, ZoomCut discards the capture.'
   },
   {
     name: 'stop_scenario_capture',
@@ -267,7 +276,8 @@ export const TOOLS: ToolDef[] = [
     annotations: CHANGES,
     description:
       'Stop the running scenario capture and save it. Returns { scenarioId, actions (count), durationMs }; read the actions with get_scenario, ' +
-      'replay them with record_scenario. If nothing was captured the call fails with `cancelled`.'
+      'replay them with record_scenario. If the user already ended the capture (Stop on the floating bar, Ctrl+Alt+R), the result of that ' +
+      'capture is returned instead (once). If nothing was captured the call fails with `cancelled`.'
   }
 ]
 

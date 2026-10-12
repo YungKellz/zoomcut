@@ -8,7 +8,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { discoveryPath, launcherFor, ZoomCutClient } from './rpc'
+import { discoveryPath, launcherFor, resolveExe, ZoomCutClient } from './rpc'
 import { registerTools, SERVER_INSTRUCTIONS } from './tools'
 
 // injected by mcp.vite.config.ts; absent when this file runs unbundled (tests)
@@ -23,9 +23,11 @@ async function main(): Promise<void> {
   // a stray console.log from a dependency must not corrupt the protocol stream
   console.log = (...args: unknown[]) => log(args.map(String).join(' '))
 
+  const exe = { env: process.env, execPath: process.execPath, electronVersion: process.versions['electron'] }
   const client = new ZoomCutClient({
     discoveryPath: discoveryPath(),
-    launch: launcherFor({ env: process.env, execPath: process.execPath, electronVersion: process.versions['electron'] }),
+    launch: launcherFor({ ...exe, log }),
+    exeProblem: resolveExe(exe).problem,
     log
   })
   const server = new McpServer({ name: 'zoomcut', version: VERSION }, { instructions: SERVER_INSTRUCTIONS })

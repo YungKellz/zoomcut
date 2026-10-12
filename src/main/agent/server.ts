@@ -5,8 +5,11 @@ import { promises as fsp, readFileSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { AgentError, type AgentDiscovery, type AgentRpcResponse } from '@shared/agent'
 
-/** An RPC method: gets the call's `params` object, returns the `result` (or throws an AgentError). */
-export type AgentMethodHandler = (params: Record<string, unknown>) => Promise<unknown> | unknown
+/**
+ * An RPC method: gets the call's `params` object, returns the `result` (or throws an AgentError).
+ * `signal` aborts when the client hangs up before the answer was sent (an MCP client cancelled the call).
+ */
+export type AgentMethodHandler = (params: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown> | unknown
 export type AgentMethodTable = Record<string, AgentMethodHandler>
 
 export interface AgentServerOptions {
@@ -172,9 +175,15 @@ export class AgentServer {
     const handler = Object.hasOwn(this.opts.methods, method) ? this.opts.methods[method] : undefined
     if (!handler) return send(res, 200, JSON.stringify(fail('unknown_method', `Unknown method "${method}"`)))
 
+    // the client hung up before the answer was sent: tell the handler, so it can stop what the call started
+    const aborter = new AbortController()
+    res.on('close', () => {
+      if (!res.writableFinished) aborter.abort()
+    })
+
     let text: string
     try {
-      const result = await handler(params as Record<string, unknown>)
+      const result = await handler(params as Record<string, unknown>, aborter.signal)
       // serialized here, once: a result that cannot be (circular, BigInt) is a failed call, not a crashed server
       text = JSON.stringify({ ok: true, result: result === undefined ? {} : result } satisfies AgentRpcResponse)
     } catch (err) {
@@ -185,6 +194,7 @@ export class AgentServer {
         text = JSON.stringify(fail('failed', err instanceof Error ? err.message : String(err)))
       }
     }
+    if (aborter.signal.aborted) return
     send(res, 200, text)
   }
 }

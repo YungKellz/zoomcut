@@ -86,21 +86,34 @@ For an installed copy the config looks like this (the bridge runs under ZoomCut.
 ```
 
 ```
-claude mcp add --transport stdio --env "ELECTRON_RUN_AS_NODE=1" zoomcut -- "C:\...\ZoomCut.exe" "C:\...\resources\mcp\zoomcut-mcp.cjs"
+claude mcp add --transport stdio zoomcut --env "ELECTRON_RUN_AS_NODE=1" -- "C:\...\ZoomCut.exe" "C:\...\resources\mcp\zoomcut-mcp.cjs"
 ```
+
+The server name comes before `--env` (which takes any number of values) and the paths are always in double quotes, which
+keeps the backslashes in Git Bash as well as in PowerShell and cmd.
 
 - **Portable exe**: it unpacks itself to a new temp folder on every run, so each start copies the bridge to
   `%APPDATA%\zoomcut\mcp\zoomcut-mcp.cjs` and the config uses `node` (Node 20+) with that path, plus
-  `ZOOMCUT_EXE=<your ZoomCut-Portable exe>` so the bridge can start the app.
+  `ZOOMCUT_EXE=<your ZoomCut-Portable exe>` so the bridge can start the app. `ZOOMCUT_EXE` only counts as the absolute path
+  of a file that exists; a relative or bare name is ignored (with a note on stderr), because the MCP client's working
+  directory is usually some project, not ZoomCut's folder.
 - **From source**: `npm run build` produces `out/mcp/zoomcut-mcp.cjs` (one self-contained file); point the client at
-  `node out/mcp/zoomcut-mcp.cjs`. For a dev app run `ZOOMCUT_AGENT_CONTROL=1 npm run dev`.
+  `node out/mcp/zoomcut-mcp.cjs`. For a dev app run `ZOOMCUT_AGENT_CONTROL=1 npm run dev` (with no ZoomCut open yet; see below).
 
 **Starting.** Agent control is off unless a run asks for it. The bridge starts ZoomCut for you (`ZoomCut.exe
---agent-control`; a copy that is already open is switched on instead of starting a second one), or start it yourself with
-`ZoomCut.exe --agent-control` or `ZOOMCUT_AGENT_CONTROL=1`. Then the app listens on `127.0.0.1` on a random port; the port
-and a random token are written to `%APPDATA%\zoomcut\agent-control.json` while it runs and removed when it quits. Requests
-need the token, and a browser page or another host cannot talk to it (anything carrying an `Origin` header or the wrong
-`Host` is refused). Set `ZOOMCUT_USER_DATA` to keep that folder, and the app's settings, somewhere else.
+--agent-control`; a copy that is already open is switched on instead of starting a second one, and its window stays where
+it is, so a recording or a replay that is running is not disturbed), or start it yourself with `ZoomCut.exe
+--agent-control`. The `ZOOMCUT_AGENT_CONTROL=1` environment variable does the same, but only for a copy that is not open
+yet: a second launch cannot hand its environment to the running copy, so for one that is already open use the flag. Then
+the app listens on `127.0.0.1` on a random port; the port and a random token are written to
+`%APPDATA%\zoomcut\agent-control.json` while it runs and removed when it quits (the bridge ignores a file whose process is
+gone). Requests need the token, and a browser page or another host cannot talk to it (anything carrying an `Origin`
+header or the wrong `Host` is refused). Set `ZOOMCUT_USER_DATA` to keep that folder, and the app's settings, somewhere
+else; the configuration the dialog shows then passes the same variable on to the bridge.
+
+**Updates.** On an installed copy the bridge runs as `ZoomCut.exe` from the install folder, so installing an update (or
+reinstalling) ends every running MCP session of ZoomCut: the installer has to replace that file. Restart or reconnect the
+`zoomcut` server in your client afterwards (in Claude Code `/mcp`).
 
 **What the agent can do** (18 tools, one per capability; every description tells the agent the units and the risks):
 
@@ -112,16 +125,20 @@ need the token, and a browser page or another host cannot talk to it (anything c
 | `list_projects`, `get_project` | saved recordings; one in detail: cuts, zooms, texts, blurs, crop, frame, recorded clicks |
 | `edit_project` | rename, cuts, zooms (follow or fixed), texts, blurs, crop, frame, cursor; one undo step in the open editor |
 | `export_project` | render to MP4 or GIF with the project's (or given) export settings |
-| `delete_project`, `delete_scenario` | remove a recording / a scenario (a recording that is open in the editor is refused) |
+| `delete_project`, `delete_scenario` | remove a saved recording / scenario (refused while it is open in the editor, scenario review or composition, or still being recorded or captured) |
 | `list_scenarios`, `get_scenario`, `create_scenario` | read and write scenarios: click, double / right / middle click, drag, scroll, type, key (`"Ctrl+S"`) |
 | `record_scenario` | replay a scenario while recording the screen |
-| `start_scenario_capture`, `stop_scenario_capture` | capture a scenario while a person demonstrates it |
+| `start_scenario_capture`, `stop_scenario_capture` | capture a scenario while a person demonstrates it (if they end it themselves, `stop_scenario_capture` still returns the result) |
 
 Good to know: recording captures the **real screen**, and `record_scenario` moves the **real mouse and keyboard** (Esc
 aborts) - leave the machine alone while it runs. Times in `edit_project` are milliseconds of the *original* recording,
 positions inside a recording are fractions 0..1 of its frame, and scenario coordinates are DIP relative to a display's
 top-left corner (a `take_screenshot` pixel divided by the screenshot's `scale`). The editor keeps working while an agent
 edits: changes show live and `Ctrl+Z` takes back a whole `edit_project` call.
+
+If the client cancels a call (the agent is interrupted), ZoomCut follows: an export is stopped, and a recording, replay or
+scenario capture that is still starting or running is discarded. A recording that is already being saved
+(`stop_recording`, the end of `record_scenario`) is finished, and edits that were applied stay.
 
 ## Run from source
 
@@ -240,5 +257,7 @@ for testing (see `tests/e2e/update.spec.ts`). Version history: [CHANGELOG.md](CH
 **ИИ-агенты (MCP).** Кнопка **ИИ-агенты (MCP)** на главном экране показывает готовую конфигурацию для Claude Code,
 Claude Desktop и Cursor с настоящими путями. Агент может записывать экран, резать запись, добавлять зумы,
 тексты и блюр, экспортировать MP4 / GIF и писать сценарии. Управление включается только по запросу
-(`ZoomCut.exe --agent-control` или `ZOOMCUT_AGENT_CONTROL=1`; мост запускает приложение сам) и слушает только
-`127.0.0.1` с случайным токеном. Подробности – в разделе «Control from AI agents (MCP)» выше.
+(`ZoomCut.exe --agent-control`, для ещё не открытой копии также `ZOOMCUT_AGENT_CONTROL=1`; мост запускает
+приложение сам) и слушает только `127.0.0.1` с случайным токеном. Обновление или переустановка ZoomCut завершает
+запущенный MCP-сервер: после этого перезапустите или переподключите сервер `zoomcut` в клиенте. Подробности – в
+разделе «Control from AI agents (MCP)» выше.

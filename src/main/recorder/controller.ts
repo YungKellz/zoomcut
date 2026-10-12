@@ -117,8 +117,8 @@ export interface RecorderEvents {
   state: [RecorderBarState]
   /** a recording was saved (after the folder is complete and the controller is free again) */
   finished: [{ project: Project; warnings: RecordingWarning[] }]
-  /** an attempt was discarded: bar X, Esc during a replay, or a start that fell through */
-  cancelled: [{ id: string }]
+  /** an attempt was discarded: bar X, Esc during a replay, or a start that fell through; `error` when the replay helper failed (nobody pressed anything) */
+  cancelled: [{ id: string; error?: Error }]
   /** an attempt failed: prepare() threw (id null), or finish() did */
   failed: [{ id: string | null; error: Error }]
 }
@@ -134,6 +134,8 @@ export class RecordingController extends EventEmitter<RecorderEvents> {
   private otherBusyCheck: (() => boolean) | null = null
   /** true while requestCancel() is re-entering itself from a replay's onAbort callback */
   private cancelingViaAbort = false
+  /** why the replay helper made the controller cancel the attempt; reported by the next 'cancelled' */
+  private cancelError: Error | null = null
 
   /** Lets main/index.ts wire this up against the scenario capture: they refuse to run at once. */
   setOtherBusyCheck(fn: () => boolean): void {
@@ -142,6 +144,11 @@ export class RecordingController extends EventEmitter<RecorderEvents> {
 
   isActive(): boolean {
     return this.active !== null
+  }
+
+  /** the recording being made or saved: its folder exists from prepare() on, its project.json only once it is saved */
+  activeId(): string | null {
+    return this.active?.id ?? null
   }
 
   installDisplayMediaHandler(): void {
@@ -194,12 +201,25 @@ export class RecordingController extends EventEmitter<RecorderEvents> {
   async prepare(displayId: number, options?: RecordOptions): Promise<{ id: string; countdownEndsAt: number }> {
     if (this.active) throw new Error('A recording is already in progress')
     if (this.otherBusyCheck?.()) throw new Error('A scenario capture is already in progress')
-    const displays = await this.listDisplays()
-    const info = displays.find((d) => d.id === displayId) ?? displays[0]
-    if (!info) throw new Error('No display available for recording')
-    const source = this.sources.get(info.sourceId)
-    const display = screen.getAllDisplays().find((d) => d.id === info.id) ?? screen.getPrimaryDisplay()
-    if (!source) throw new Error('Display source not found')
+    this.cancelError = null
+
+    let info: DisplayInfo
+    let source: Electron.DesktopCapturerSource
+    let display: Electron.Display
+    try {
+      const displays = await this.listDisplays()
+      const first = displays.find((d) => d.id === displayId) ?? displays[0]
+      if (!first) throw new Error('No display available for recording')
+      const found = this.sources.get(first.sourceId)
+      if (!found) throw new Error('Display source not found')
+      info = first
+      source = found
+      display = screen.getAllDisplays().find((d) => d.id === first.id) ?? screen.getPrimaryDisplay()
+    } catch (err) {
+      // nothing is set up yet, so there is nothing to undo; the agent control waits for this to be reported
+      this.emit('failed', { id: null, error: err instanceof Error ? err : new Error(String(err)) })
+      throw err
+    }
 
     try {
       if (options?.scenario) {
@@ -209,7 +229,10 @@ export class RecordingController extends EventEmitter<RecorderEvents> {
           },
           onDone: () => this.requestStop(),
           onAbort: () => this.cancelFromReplay(),
-          onError: () => this.cancelFromReplay()
+          onError: (message) => {
+            this.cancelError = new Error(message)
+            this.cancelFromReplay()
+          }
         })
       }
 
@@ -607,30 +630,41 @@ export class RecordingController extends EventEmitter<RecorderEvents> {
   async cancel(id: string): Promise<void> {
     const a = this.active
     if (!a || a.id !== id) return
+    const error = this.cancelError
+    this.cancelError = null
     this.tracker.stop(null)
     // release any input the replay helper might still be holding before spending time on the
     // audio flush below - a helper that was mid-keystroke when cancel arrived must not keep a
     // modifier held any longer than necessary just because closing the audio streams takes a moment
     this.replaySession?.dispose()
     this.replaySession = null
-    // startSystemAudio() may still be starting up (prepare() does not await it) - wait for it to
-    // settle before touching `loopback`, or a helper that finishes starting a moment after this
-    // runs would never get disposed. Then kill outright rather than a graceful stop(): the raw
-    // file is about to be deleted with the rest of the folder anyway, nothing to gain from
-    // waiting on its D line.
-    if (a.systemAudioPromise) await a.systemAudioPromise.catch(() => undefined)
-    if (a.loopback) await a.loopback.dispose()
-    if (a.stream) {
-      await new Promise<void>((resolve) => a.stream!.end(() => resolve()))
+    try {
+      // startSystemAudio() may still be starting up (prepare() does not await it) - wait for it to
+      // settle before touching `loopback`, or a helper that finishes starting a moment after this
+      // runs would never get disposed. Then kill outright rather than a graceful stop(): the raw
+      // file is about to be deleted with the rest of the folder anyway, nothing to gain from
+      // waiting on its D line.
+      if (a.systemAudioPromise) await a.systemAudioPromise.catch(() => undefined)
+      if (a.loopback) await a.loopback.dispose()
+      if (a.stream) {
+        await new Promise<void>((resolve) => a.stream!.end(() => resolve()))
+      }
+      await closeAudioStreams(a)
+    } catch (err) {
+      console.warn('[recorder] releasing the cancelled recording failed:', err)
     }
-    await closeAudioStreams(a)
+    // The attempt is over from here on, whatever went wrong above and however long the folder
+    // removal takes: the controller is free and 'cancelled' is emitted in the same tick, so the
+    // agent control neither misses it nor hands it to a start that begins right afterwards.
     this.teardownRecordingUi()
     this.active = null
     this.selectedSource = null
-    // maxRetries/retryDelay: a still-closing audio stream fd (or antivirus) can otherwise make
-    // this fail on Windows even after closeAudioStreams() above has resolved
-    await fsp.rm(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    this.emit('cancelled', { id })
+    this.emit('cancelled', error ? { id, error } : { id })
+    // best effort; maxRetries/retryDelay: a still-closing audio stream fd (or antivirus) can
+    // otherwise make this fail on Windows even after closeAudioStreams() above has resolved
+    await fsp.rm(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch((err) => {
+      console.warn('[recorder] could not remove the cancelled recording folder:', err)
+    })
   }
 
   dispose(): void {
