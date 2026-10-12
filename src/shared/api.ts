@@ -32,6 +32,7 @@ import type {
   VideoFileInfo
 } from './types'
 import type { ReplayStep } from './scenario'
+import type { AgentCommand, AgentMcpConfig, AgentReply, AgentUiStatus } from './agent'
 
 export type Unsubscribe = () => void
 
@@ -161,6 +162,17 @@ export interface ZcApi {
     toGif(req: GifConvertRequest): Promise<ExportFinishResult>
     cancel(): Promise<void>
     onProgress(cb: (p: GifConvertProgress) => void): Unsubscribe
+  }
+  // ---- agent ----
+  agent: {
+    /** commands an AI agent sent through the MCP bridge (see src/shared/agent.ts) */
+    onCommand(cb: (c: AgentCommand) => void): Unsubscribe
+    /** answers one onCommand request, exactly once */
+    reply(r: AgentReply): Promise<void>
+    /** tells main which screen / project is open, for the agent's get_status */
+    pushStatus(s: AgentUiStatus): Promise<void>
+    /** MCP client configuration for this installation (paths of the exe and the bridge) */
+    mcpConfig(): Promise<AgentMcpConfig>
   }
   /** Only functional under ZOOMCUT_E2E=1; rejects otherwise (no handler registered). */
   e2e: {
