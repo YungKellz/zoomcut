@@ -67,7 +67,7 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
   return next
 }
 
-function projectFile(id: string): string {
+export function projectFile(id: string): string {
   return join(projectDir(id), 'project.json')
 }
 

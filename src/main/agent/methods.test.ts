@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { AgentError } from '@shared/agent'
+import { AgentError, type AgentUiStatus } from '@shared/agent'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from '@shared/defaults'
 import type { Project, RecorderBarState, Scenario, ScenarioCaptureState, ScenarioSummary } from '@shared/types'
 import type { RecorderEvents } from '../recorder/controller'
@@ -10,11 +10,16 @@ import type { AgentMethodTable } from './server'
 
 class FakeRecorder extends EventEmitter<RecorderEvents> {
   active = false
+  /** the id of the recording being made; null when none (the real one has an id as soon as it is active) */
+  id: string | null = null
   bar: RecorderBarState = { phase: 'idle', startedAt: null, countdownEndsAt: null }
   requestStop = vi.fn()
   requestCancel = vi.fn()
   isActive(): boolean {
     return this.active
+  }
+  activeId(): string | null {
+    return this.active ? this.id : null
   }
   getBarState(): RecorderBarState {
     return this.bar
@@ -34,7 +39,12 @@ class FakeCapture extends EventEmitter<ScenarioCaptureEvents> {
   getState(): ScenarioCaptureState {
     return this.state
   }
+  id: string | null = null
+  activeId(): string | null {
+    return this.isActive() ? this.id : null
+  }
   requestStop = vi.fn()
+  requestCancel = vi.fn()
   setPhase(phase: ScenarioCaptureState['phase']): void {
     this.state = { phase, actions: 0, startedAt: null }
     this.emit('state', this.state)
@@ -68,6 +78,10 @@ function project(id: string, over: Partial<Project> = {}): Project {
   }
 }
 
+function homeUi(over: Partial<AgentUiStatus> = {}): AgentUiStatus {
+  return { screen: 'home', openProjectId: null, openScenarioId: null, compositionProjectIds: [], ...over }
+}
+
 function enoent(): Error {
   return Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' })
 }
@@ -78,9 +92,11 @@ interface Harness {
   capture: FakeCapture
   deps: AgentDeps
   sent: Array<{ method: string; params: unknown }>
+  /** the SendOptions of each renderer.send, in the same order as `sent` */
+  sentOptions: Array<{ signal?: AbortSignal } | undefined>
   /** what renderer.send answers; set per test */
   rendererReply: { value: (method: string, params: unknown) => Promise<unknown> | unknown }
-  ui: { value: { screen: string; openProjectId: string | null } | null }
+  ui: { value: AgentUiStatus | null }
   projects: Map<string, Project>
   scenarios: Map<string, Scenario>
   saved: Scenario[]
@@ -94,8 +110,9 @@ function harness(over: Partial<AgentDeps> = {}): Harness {
   const recorder = new FakeRecorder()
   const capture = new FakeCapture()
   const sent: Harness['sent'] = []
+  const sentOptions: Harness['sentOptions'] = []
   const rendererReply: Harness['rendererReply'] = { value: () => ({}) }
-  const ui: Harness['ui'] = { value: { screen: 'home', openProjectId: null } }
+  const ui: Harness['ui'] = { value: homeUi() }
   const projects = new Map<string, Project>([['p1', project('p1')]])
   const scenarios = new Map<string, Scenario>()
   const saved: Scenario[] = []
@@ -108,8 +125,9 @@ function harness(over: Partial<AgentDeps> = {}): Harness {
     recorder,
     capture,
     renderer: {
-      send: async (method, params) => {
+      send: async (method, params, opts) => {
         sent.push({ method, params })
+        sentOptions.push(opts)
         return rendererReply.value(method, params)
       },
       getStatus: () => ui.value
@@ -158,7 +176,7 @@ function harness(over: Partial<AgentDeps> = {}): Harness {
     timeouts: { startMs: 150, stopMs: 400, cancelMs: 150, captureStopMs: 150, replaySlackMs: 100 },
     ...over
   }
-  return { methods: createAgentMethods(deps), recorder, capture, deps, sent, rendererReply, ui, projects, scenarios, saved, reserved, changed, settings, nextIds }
+  return { methods: createAgentMethods(deps), recorder, capture, deps, sent, sentOptions, rendererReply, ui, projects, scenarios, saved, reserved, changed, settings, nextIds }
 }
 
 async function code(promise: Promise<unknown>): Promise<AgentError> {
@@ -201,7 +219,7 @@ describe('status', () => {
   it('combines the recorder, the capture and what the renderer reported', async () => {
     const h = harness()
     expect(await call(h, 'status')).toEqual({ version: '1.2.3', screen: 'home', recording: 'idle', scenarioCapture: 'idle', openProjectId: null })
-    h.ui.value = { screen: 'editor', openProjectId: 'p1' }
+    h.ui.value = homeUi({ screen: 'editor', openProjectId: 'p1' })
     h.recorder.active = true
     h.recorder.bar = { phase: 'recording', startedAt: 1, countdownEndsAt: null }
     h.capture.state = { phase: 'capturing', actions: 2, startedAt: 1 }
@@ -271,10 +289,44 @@ describe('projects', () => {
 
   it('refuses to delete the recording open in the editor', async () => {
     const h = harness()
-    h.ui.value = { screen: 'editor', openProjectId: 'p1' }
+    h.ui.value = homeUi({ screen: 'editor', openProjectId: 'p1' })
     const err = await code(call(h, 'projects.delete', { projectId: 'p1' }))
     expect(err.code).toBe('busy')
     expect(h.projects.has('p1')).toBe(true)
+    expect(h.changed).toEqual([])
+  })
+
+  it('refuses to delete a recording the open composition uses', async () => {
+    const h = harness()
+    h.projects.set('p2', project('p2'))
+    h.ui.value = homeUi({ screen: 'composition', compositionProjectIds: ['p2', 'p1'] })
+    const err = await code(call(h, 'projects.delete', { projectId: 'p1' }))
+    expect(err.code).toBe('busy')
+    expect(err.message).toContain('composition')
+    expect(h.projects.has('p1')).toBe(true)
+    // a project the composition does not use is still deleted
+    h.ui.value = homeUi({ screen: 'composition', compositionProjectIds: ['p2'] })
+    await call(h, 'projects.delete', { projectId: 'p1' })
+    expect(h.projects.has('p1')).toBe(false)
+  })
+
+  it('never deletes the recording that is being made or saved right now', async () => {
+    const h = harness()
+    // a folder exists from the first moment of a recording; only a saved one has its project.json (exists)
+    h.projects.set('2026-02-03_04-05-06', project('2026-02-03_04-05-06'))
+    h.recorder.active = true
+    h.recorder.id = '2026-02-03_04-05-06'
+    expect((await code(call(h, 'projects.delete', { projectId: '2026-02-03_04-05-06' }))).code).toBe('busy')
+    expect(h.projects.has('2026-02-03_04-05-06')).toBe(true)
+    // other recordings are not affected
+    await call(h, 'projects.delete', { projectId: 'p1' })
+    expect(h.projects.has('p1')).toBe(false)
+  })
+
+  it('answers not_found for a folder that holds no saved recording', async () => {
+    const h = harness()
+    h.projects.delete('p1') // exists() is about project.json: a recording in progress or a stray folder has none
+    expect((await code(call(h, 'projects.delete', { projectId: 'p1' }))).code).toBe('not_found')
     expect(h.changed).toEqual([])
   })
 
@@ -380,6 +432,25 @@ describe('scenarios', () => {
     expect((await code(call(h, 'scenarios.get', { scenarioId }))).code).toBe('not_found')
     expect((await code(call(h, 'scenarios.delete', { scenarioId }))).code).toBe('not_found')
   })
+
+  it('refuses to delete the scenario open in the review, or the one being captured', async () => {
+    const h = harness()
+    const { scenarioId } = await call(h, 'scenarios.create', input)
+    h.changed.length = 0
+    h.ui.value = homeUi({ screen: 'scenario', openScenarioId: scenarioId })
+    const open = await code(call(h, 'scenarios.delete', { scenarioId }))
+    expect(open.code).toBe('busy')
+    expect(open.message).toContain('scenario review')
+    h.ui.value = homeUi()
+    h.capture.state = { phase: 'capturing', actions: 1, startedAt: 1 }
+    h.capture.id = scenarioId
+    expect((await code(call(h, 'scenarios.delete', { scenarioId }))).code).toBe('busy')
+    expect(h.scenarios.has(scenarioId)).toBe(true)
+    expect(h.changed).toEqual([])
+    h.capture.state = { phase: 'idle', actions: 0, startedAt: null }
+    await call(h, 'scenarios.delete', { scenarioId })
+    expect(h.scenarios.has(scenarioId)).toBe(false)
+  })
 })
 
 describe('recording.start', () => {
@@ -443,14 +514,24 @@ describe('recording.start', () => {
     await call(h, 'recording.start')
   })
 
-  it('fails when the attempt dies before it records', async () => {
+  it('fails with the reason when the recorder gives up on the attempt (prepare() reports every early error this way)', async () => {
     const h = harness()
     h.rendererReply.value = () => {
-      setTimeout(() => h.recorder.emit('failed', { id: null, error: new Error('Display source not found') }), 5)
+      setTimeout(() => h.recorder.emit('failed', { id: null, error: new Error('No display available for recording') }), 5)
     }
     const err = await code(call(h, 'recording.start'))
     expect(err.code).toBe('failed')
-    expect(err.message).toContain('Display source not found')
+    expect(err.message).toContain('No display available for recording')
+  })
+
+  it('reports a replay helper that broke as failed, not as an abort', async () => {
+    const h = harness()
+    h.rendererReply.value = () => {
+      setTimeout(() => h.recorder.emit('cancelled', { id: 'x', error: new Error('The replay helper exited unexpectedly') }), 5)
+    }
+    const err = await code(call(h, 'recording.start'))
+    expect(err.code).toBe('failed')
+    expect(err.message).toBe('The replay failed: The replay helper exited unexpectedly')
   })
 
   it('reports cancelled when the attempt is discarded during the countdown', async () => {
@@ -592,6 +673,77 @@ describe('scenarios.record', () => {
     expect(h.recorder.listenerCount('finished')).toBe(0)
   })
 
+  it('times out and lets go of the start lock when the renderer never answers the handover', async () => {
+    const h = harness()
+    const scenarioId = await makeScenario(h)
+    h.rendererReply.value = () => new Promise(() => undefined) // a reply lost to a reload
+    expect((await code(call(h, 'scenarios.record', { scenarioId }))).message).toContain('did not start in time')
+    // the lock is free again: a later start is not answered with busy
+    h.rendererReply.value = () => {
+      setTimeout(() => h.recorder.setBar('recording'), 5)
+    }
+    await call(h, 'recording.start')
+  })
+
+  it('reports a replay helper that broke as failed with its message', async () => {
+    const h = harness()
+    const scenarioId = await makeScenario(h)
+    h.rendererReply.value = () => {
+      setTimeout(() => {
+        h.recorder.setBar('recording')
+        setTimeout(() => h.recorder.emit('cancelled', { id: 'x', error: new Error('SendInput was blocked') }), 20)
+      }, 5)
+    }
+    const err = await code(call(h, 'scenarios.record', { scenarioId }))
+    expect(err).toMatchObject({ code: 'failed', message: 'The replay failed: SendInput was blocked' })
+  })
+
+  describe('time budgets', () => {
+    const timeouts = { startMs: 150, stopMs: 900, cancelMs: 150, captureStopMs: 150, replaySlackMs: 50 }
+
+    it('gives converting and saving the recording a budget of its own once the replay is over', async () => {
+      const h = harness({ timeouts })
+      const scenarioId = await makeScenario(h)
+      const replayBudget = timeouts.startMs + (await call(h, 'scenarios.get', { scenarioId })).durationMs + timeouts.replaySlackMs
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('recording')
+          // the replay ends in time, but the saving runs past the replay budget
+          setTimeout(() => h.recorder.setBar('processing'), 60)
+          setTimeout(() => h.recorder.emit('finished', { project: project('p7'), warnings: [] }), replayBudget + 250)
+        }, 5)
+      }
+      expect(await call(h, 'scenarios.record', { scenarioId })).toMatchObject({ projectId: 'p7' })
+    })
+
+    it('still gives up on a replay that never ends, and on a saving that never ends', async () => {
+      const h = harness({ timeouts: { ...timeouts, stopMs: 200 } })
+      const scenarioId = await makeScenario(h)
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('recording') // a stuck replay never gets to processing
+        }, 5)
+      }
+      expect((await code(call(h, 'scenarios.record', { scenarioId }))).message).toContain('Timed out')
+      h.recorder.active = false
+      h.recorder.setBar('idle')
+
+      const started = Date.now()
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('recording')
+          setTimeout(() => h.recorder.setBar('processing'), 20) // and a saving that never finishes
+        }, 5)
+      }
+      expect((await code(call(h, 'scenarios.record', { scenarioId }))).message).toContain('Timed out')
+      // the saving budget of 200 ms started over when the recording ended
+      expect(Date.now() - started).toBeGreaterThanOrEqual(200)
+    })
+  })
+
   it('is busy while something else records', async () => {
     const h = harness()
     const scenarioId = await makeScenario(h)
@@ -615,6 +767,7 @@ describe('scenario capture', () => {
 
   it('captureStart fails if the capture cannot start, or ends first', async () => {
     const h = harness()
+    const listening = h.capture.listenerCount('state') // the methods keep one of their own
     h.rendererReply.value = () => {
       setTimeout(() => h.capture.emit('failed', new Error('The global input hook is unavailable')), 5)
     }
@@ -625,7 +778,7 @@ describe('scenario capture', () => {
       setTimeout(() => h.capture.emit('done', null), 5)
     }
     expect((await code(call(h, 'scenarios.captureStart'))).code).toBe('cancelled')
-    expect(h.capture.listenerCount('state')).toBe(0)
+    expect(h.capture.listenerCount('state')).toBe(listening)
   })
 
   it('captureStart is busy during a recording', async () => {
@@ -656,6 +809,52 @@ describe('scenario capture', () => {
     expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('cancelled')
   })
 
+  describe('a capture the user ended on their own', () => {
+    it('is handed over once by the next captureStop', async () => {
+      const h = harness()
+      h.capture.setPhase('capturing')
+      h.capture.setPhase('idle')
+      h.capture.emit('done', { id: 'sc7', actions: [{}, {}] } as unknown as Scenario)
+      expect(await call(h, 'scenarios.captureStop')).toMatchObject({ scenarioId: 'sc7', actions: 2 })
+      expect(h.capture.requestStop).not.toHaveBeenCalled()
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
+    })
+
+    it('says cancelled when the user discarded it', async () => {
+      const h = harness()
+      h.capture.emit('done', null)
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('cancelled')
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
+    })
+
+    it('is forgotten when a new capture begins', async () => {
+      const h = harness()
+      h.capture.emit('done', { id: 'old', actions: [{}] } as unknown as Scenario)
+      h.capture.setPhase('countdown')
+      h.capture.setPhase('idle')
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
+    })
+
+    it('is forgotten after a while, and when the agent itself stopped the capture', async () => {
+      let clock = 1_000
+      const h = harness({ now: () => clock })
+      h.capture.emit('done', { id: 'old', actions: [{}] } as unknown as Scenario)
+      clock += 10 * 60_000 + 1
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
+
+      h.capture.state = { phase: 'capturing', actions: 1, startedAt: 1 }
+      h.capture.requestStop.mockImplementation(() => {
+        setTimeout(() => {
+          h.capture.state = { phase: 'idle', actions: 0, startedAt: null }
+          h.capture.emit('done', { id: 'mine', actions: [{}] } as unknown as Scenario)
+        }, 5)
+      })
+      expect(await call(h, 'scenarios.captureStop')).toMatchObject({ scenarioId: 'mine' })
+      // the result went to the call that stopped it; a second ask finds nothing
+      expect((await code(call(h, 'scenarios.captureStop'))).code).toBe('not_found')
+    })
+  })
+
   it('captureStop waits for a capture that is already saving without stopping it again', async () => {
     const h = harness()
     h.capture.state = { phase: 'saving', actions: 1, startedAt: 1 }
@@ -663,5 +862,158 @@ describe('scenario capture', () => {
     setTimeout(() => h.capture.emit('done', { id: 'sc2', actions: [{}] } as unknown as Scenario), 5)
     expect((await pending).scenarioId).toBe('sc2')
     expect(h.capture.requestStop).not.toHaveBeenCalled()
+  })
+})
+
+describe('an MCP client that hangs up', () => {
+  const hangUpAfter = (ms: number): AbortController => {
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), ms)
+    return ac
+  }
+  const withSignal = (h: Harness, method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<any> => h.methods[method](params, signal) as Promise<any>
+
+  describe('during recording.start', () => {
+    it('discards the countdown that is already running', async () => {
+      const h = harness()
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('countdown')
+        }, 5)
+      }
+      const err = await code(withSignal(h, 'recording.start', {}, hangUpAfter(40).signal))
+      expect(err.code).toBe('cancelled')
+      expect(h.recorder.requestCancel).toHaveBeenCalledTimes(1)
+      expect(h.recorder.listenerCount('state')).toBe(0)
+    })
+
+    it('discards the attempt the moment it appears when the handover is still on its way', async () => {
+      const h = harness()
+      h.rendererReply.value = () =>
+        new Promise((resolve) =>
+          setTimeout(() => {
+            resolve({})
+            setTimeout(() => {
+              h.recorder.active = true
+              h.recorder.setBar('countdown')
+            }, 5)
+          }, 50)
+        )
+      const err = await code(withSignal(h, 'recording.start', {}, hangUpAfter(10).signal))
+      expect(err.code).toBe('cancelled')
+      expect(h.recorder.requestCancel).not.toHaveBeenCalled() // nothing to discard yet
+      await vi.waitFor(() => expect(h.recorder.requestCancel).toHaveBeenCalledTimes(1))
+    })
+
+    it('leaves a later recording alone when the handover was refused', async () => {
+      const h = harness()
+      h.rendererReply.value = () => new Promise((_resolve, reject) => setTimeout(() => reject(new AgentError('failed', 'No display available')), 30))
+      expect((await code(withSignal(h, 'recording.start', {}, hangUpAfter(10).signal))).code).toBe('cancelled')
+      await new Promise((r) => setTimeout(r, 50)) // the refusal arrives and ends the watch
+      h.recorder.active = true // somebody else records now
+      h.recorder.setBar('countdown')
+      expect(h.recorder.requestCancel).not.toHaveBeenCalled()
+    })
+
+    it('stops watching once the recording runs: a hang-up after the answer is no cancel', async () => {
+      const h = harness()
+      h.rendererReply.value = () => {
+        setTimeout(() => h.recorder.setBar('recording'), 5)
+      }
+      const ac = new AbortController()
+      await withSignal(h, 'recording.start', {}, ac.signal)
+      h.recorder.active = true
+      ac.abort()
+      expect(h.recorder.requestCancel).not.toHaveBeenCalled()
+    })
+
+    it('does not start at all for a client that is already gone', async () => {
+      const h = harness()
+      const ac = new AbortController()
+      ac.abort()
+      expect((await code(withSignal(h, 'recording.start', {}, ac.signal))).code).toBe('cancelled')
+      expect(h.sent).toEqual([])
+    })
+  })
+
+  describe('during scenarios.record', () => {
+    async function scenario(h: Harness): Promise<string> {
+      return (await call(h, 'scenarios.create', { name: 'S', actions: [{ kind: 'click', x: 10, y: 10, pauseMs: 0, durationMs: 200 }] })).scenarioId
+    }
+
+    it('aborts the replay and discards the recording', async () => {
+      const h = harness()
+      const scenarioId = await scenario(h)
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('recording')
+        }, 5)
+      }
+      h.recorder.requestCancel.mockImplementation(() => setTimeout(() => h.recorder.emit('cancelled', { id: 'x' }), 5))
+      const err = await code(withSignal(h, 'scenarios.record', { scenarioId }, hangUpAfter(60).signal))
+      expect(err.code).toBe('cancelled')
+      expect(h.recorder.requestCancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('cannot discard a recording that is already being saved, and still reports its project', async () => {
+      const h = harness()
+      const scenarioId = await scenario(h)
+      h.rendererReply.value = () => {
+        setTimeout(() => {
+          h.recorder.active = true
+          h.recorder.setBar('recording')
+          setTimeout(() => h.recorder.setBar('processing'), 20)
+          setTimeout(() => h.recorder.emit('finished', { project: project('p8'), warnings: [] }), 120)
+        }, 5)
+      }
+      const result = await withSignal(h, 'scenarios.record', { scenarioId }, hangUpAfter(70).signal)
+      expect(result).toMatchObject({ projectId: 'p8' })
+      expect(h.recorder.requestCancel).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('during scenarios.captureStart', () => {
+    it('discards the capture', async () => {
+      const h = harness()
+      h.rendererReply.value = () => {
+        setTimeout(() => h.capture.setPhase('countdown'), 5)
+      }
+      const err = await code(withSignal(h, 'scenarios.captureStart', {}, hangUpAfter(40).signal))
+      expect(err.code).toBe('cancelled')
+      expect(h.capture.requestCancel).toHaveBeenCalledTimes(1)
+      expect(h.recorder.requestCancel).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('during projects.export', () => {
+    it('hands the signal to the renderer bridge, which tells the renderer to stop', async () => {
+      const h = harness()
+      const ac = new AbortController()
+      h.rendererReply.value = () => {
+        ac.abort()
+        throw new AgentError('cancelled', 'The request was cancelled')
+      }
+      expect((await code(withSignal(h, 'projects.export', { projectId: 'p1' }, ac.signal))).code).toBe('cancelled')
+      expect(h.sentOptions[0]?.signal).toBe(ac.signal)
+    })
+  })
+
+  it('does not abort what cannot be taken back: stop_recording and edits', async () => {
+    const h = harness()
+    h.recorder.active = true
+    h.recorder.bar = { phase: 'recording', startedAt: 1, countdownEndsAt: null }
+    h.recorder.requestStop.mockImplementation(() => {
+      h.recorder.setBar('processing')
+      setTimeout(() => h.recorder.emit('finished', { project: project('p3'), warnings: [] }), 40)
+    })
+    const ac = hangUpAfter(10)
+    expect(await withSignal(h, 'recording.stop', {}, ac.signal)).toMatchObject({ projectId: 'p3' })
+    expect(h.recorder.requestCancel).not.toHaveBeenCalled()
+
+    h.rendererReply.value = () => ({ id: 'p1' })
+    await withSignal(h, 'projects.edit', { projectId: 'p1', operations: [{ op: 'rename', name: 'x' }] }, ac.signal)
+    expect(h.sentOptions.at(-1)).toBeUndefined()
   })
 })

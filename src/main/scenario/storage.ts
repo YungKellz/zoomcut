@@ -16,7 +16,7 @@ export function scenarioDir(id: string): string {
   return join(scenariosRoot(), id)
 }
 
-function scenarioFile(id: string): string {
+export function scenarioFile(id: string): string {
   return join(scenarioDir(id), 'scenario.json')
 }
 

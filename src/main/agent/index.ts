@@ -1,25 +1,18 @@
 import { app, desktopCapturer, ipcMain, screen, type BrowserWindow } from 'electron'
 import { promises as fsp } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { AgentError, type AgentDataChanged, type AgentMcpConfig } from '@shared/agent'
+import { AGENT_DISCOVERY_FILE, AgentError, type AgentDataChanged, type AgentMcpConfig } from '@shared/agent'
 import type { RecordingController } from '../recorder/controller'
 import type { ScenarioCapture } from '../scenario/capture'
 import type { ScenarioPreview } from '../scenario/preview'
-import { deleteScenario, listScenarios, loadScenario, newScenarioId, saveScenario, scenarioDir } from '../scenario/storage'
-import { deleteProject, exists, getSettings, listProjects, loadProject, projectDir } from '../storage'
+import { deleteScenario, listScenarios, loadScenario, newScenarioId, saveScenario, scenarioDir, scenarioFile } from '../scenario/storage'
+import { deleteProject, exists, getSettings, listProjects, loadProject, projectFile } from '../storage'
 import { getMainWindow } from '../windows'
 import { bridgeSourcePath, buildMcpConfig, portableBridgePath } from './mcpConfig'
 import { createAgentMethods, type AgentDisplayInfo } from './methods'
 import { RendererBridge, type RendererTarget } from './rendererBridge'
 import { AgentServer } from './server'
-
-export const AGENT_CONTROL_FLAG = '--agent-control'
-export const DISCOVERY_FILE = 'agent-control.json'
-
-/** Agent control only runs when asked for: `--agent-control` on the command line, or ZOOMCUT_AGENT_CONTROL=1. */
-export function agentControlRequested(argv: readonly string[]): boolean {
-  return argv.includes(AGENT_CONTROL_FLAG) || process.env['ZOOMCUT_AGENT_CONTROL'] === '1'
-}
+import { createWindowTarget } from './windowTarget'
 
 export interface AgentControl {
   /** starts the loopback server and writes the discovery file; safe to call again */
@@ -41,20 +34,7 @@ function windowTargetProvider(): () => RendererTarget | null {
   return () => {
     const win = getMainWindow()
     if (!win) return null
-    if (cached?.win !== win) {
-      const contents = win.webContents
-      cached = {
-        win,
-        target: {
-          send: (command) => contents.send('agent:command', command),
-          isLoaded: () => !contents.isDestroyed() && !contents.isLoading() && contents.getURL() !== '',
-          onGone: (cb) => {
-            win.once('closed', cb)
-            contents.once('render-process-gone', cb)
-          }
-        }
-      }
-    }
+    if (cached?.win !== win) cached = { win, target: createWindowTarget(win) }
     return cached.target
   }
 }
@@ -91,7 +71,8 @@ function mcpConfig(): Promise<AgentMcpConfig> {
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
     userData: app.getPath('userData'),
-    portableExe: process.env['PORTABLE_EXECUTABLE_FILE']
+    portableExe: process.env['PORTABLE_EXECUTABLE_FILE'],
+    userDataOverride: process.env['ZOOMCUT_USER_DATA']
   })
   // the config must not point at a file that is not there yet
   return (portable ? copyBridgeForPortable() : Promise.resolve()).then(() => config)
@@ -133,13 +114,13 @@ export function setupAgentControl({ recorder, scenarioCapture, scenarioPreview }
     projects: {
       list: listProjects,
       load: loadProject,
-      exists: (id) => exists(projectDir(id)),
+      exists: (id) => exists(projectFile(id)),
       remove: deleteProject
     },
     scenarios: {
       list: listScenarios,
       load: loadScenario,
-      exists: (id) => exists(scenarioDir(id)),
+      exists: (id) => exists(scenarioFile(id)),
       remove: deleteScenario,
       newId: newScenarioId,
       reserve: async (id) => {
@@ -161,7 +142,7 @@ export function setupAgentControl({ recorder, scenarioCapture, scenarioPreview }
   return {
     enable(): Promise<void> {
       if (server && starting) return starting
-      const s = new AgentServer({ methods, discoveryPath: join(app.getPath('userData'), DISCOVERY_FILE), version: app.getVersion() })
+      const s = new AgentServer({ methods, discoveryPath: join(app.getPath('userData'), AGENT_DISCOVERY_FILE), version: app.getVersion() })
       server = s
       starting = s.start().then(
         (info) => {
