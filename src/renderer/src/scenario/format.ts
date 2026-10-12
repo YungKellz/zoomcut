@@ -29,7 +29,7 @@ export function dotPositionPercent(shot: ScenarioShot, point: ScenarioPoint): { 
   return { left, top }
 }
 
-/** Which i18n key describes the audio sources `audio` will capture, for the "Record & replay"
+/** Which i18n key describes the audio sources `audio` will capture, for the "Record video from scenario"
  * hint on the review screen - the same AppSettings.audioDefaults the home screen's checkboxes
  * write to and a plain recording reads from. Null/undefined (settings never loaded yet) reads
  * the same as both sources off. */

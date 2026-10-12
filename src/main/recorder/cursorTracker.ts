@@ -1,5 +1,7 @@
 import { screen, type Display } from 'electron'
+import type { UiohookKeyboardEvent, UiohookMouseEvent, UiohookWheelEvent } from 'uiohook-napi'
 import type { CursorData, MouseButton } from '@shared/types'
+import { buildInputMarks, type RawHookEvent } from '@shared/inputMarks'
 import { acquireHook, releaseHook, type UioHook } from '../scenario/hook'
 
 interface RawSample {
@@ -14,20 +16,31 @@ interface RawClick extends RawSample {
 
 const POLL_HZ = 60
 
+function buttonOf(e: UiohookMouseEvent): MouseButton {
+  return e.button === 2 ? 'right' : e.button === 3 ? 'middle' : 'left'
+}
+
 /**
  * Records the mouse while a recording is running.
  *
  * Positions come from polling `screen.getCursorScreenPoint()` at 60 Hz (device-independent
- * pixels, no DPI calibration needed). Clicks come from the shared global mouse hook
- * (scenario/hook.ts, ref-counted since the scenario capture/replay may also want it live);
- * when the hook cannot be loaded the recording simply has no click ripples.
+ * pixels, no DPI calibration needed). Clicks come from the shared global hook (scenario/hook.ts,
+ * ref-counted since the scenario capture/replay may also want it live); when the hook cannot be
+ * loaded the recording simply has no click ripples. The same hook's button / wheel / key events
+ * are kept in memory (`input`, wall-clock times) and turned into the timeline's input tags at
+ * stop() (shared/inputMarks.ts) - which keys were pressed is never stored, nor logged.
  */
 export class CursorTracker {
   private samples: RawSample[] = []
   private clicks: RawClick[] = []
+  private input: RawHookEvent[] = []
   private timer: NodeJS.Timeout | null = null
   private hook: UioHook | null = null
-  private onMouseDown: ((e: { button: unknown }) => void) | null = null
+  private onMouseDown: ((e: UiohookMouseEvent) => void) | null = null
+  private onMouseUp: ((e: UiohookMouseEvent) => void) | null = null
+  private onWheel: ((e: UiohookWheelEvent) => void) | null = null
+  private onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null
+  private onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null
   private display: Display | null = null
   private source: CursorData['source'] = 'none'
 
@@ -36,6 +49,7 @@ export class CursorTracker {
     this.display = display
     this.samples = []
     this.clicks = []
+    this.input = []
     this.source = 'polling'
 
     const poll = (): void => {
@@ -52,24 +66,52 @@ export class CursorTracker {
     const hook = await acquireHook()
     if (hook) {
       this.hook = hook
+      // The drag / double-click distances of the input tags use the hook's own position, taken when
+      // the event happened (physical pixels, scaled to DIP size): read in a late callback while the
+      // mouse already moves on, the cursor position could turn a click into a drag.
+      const scale = display.scaleFactor || 1
+      const at = (e: UiohookMouseEvent): { x: number; y: number } | null =>
+        Number.isFinite(e.x) && Number.isFinite(e.y) ? { x: e.x / scale, y: e.y / scale } : null
       this.onMouseDown = (e) => {
         const p = screen.getCursorScreenPoint()
-        const button: MouseButton = e.button === 2 ? 'right' : e.button === 3 ? 'middle' : 'left'
-        this.clicks.push({ t: Date.now(), x: p.x, y: p.y, button })
+        const t = Date.now()
+        const button = buttonOf(e)
+        this.clicks.push({ t, x: p.x, y: p.y, button })
+        const q = at(e) ?? p
+        this.input.push({ t, type: 'down', button, x: q.x, y: q.y, clicks: e.clicks })
+      }
+      this.onMouseUp = (e) => {
+        const t = Date.now()
+        const q = at(e) ?? screen.getCursorScreenPoint()
+        this.input.push({ t, type: 'up', button: buttonOf(e), x: q.x, y: q.y })
+      }
+      this.onWheel = () => {
+        this.input.push({ t: Date.now(), type: 'wheel' })
+      }
+      this.onKeyDown = (e) => {
+        this.input.push({ t: Date.now(), type: 'keydown', keycode: e.keycode, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey })
+      }
+      this.onKeyUp = (e) => {
+        this.input.push({ t: Date.now(), type: 'keyup', keycode: e.keycode })
       }
       this.hook.on('mousedown', this.onMouseDown)
+      this.hook.on('mouseup', this.onMouseUp)
+      this.hook.on('wheel', this.onWheel)
+      this.hook.on('keydown', this.onKeyDown)
+      this.hook.on('keyup', this.onKeyUp)
       this.source = 'uiohook'
     }
   }
 
   /**
    * Stops tracking and converts the raw data into recording-relative, normalized samples.
-   * Clicks from `stopRequestedAt` on (the click on the Stop button itself) are dropped.
+   * Clicks and other input from `stopRequestedAt` on (the click on the Stop button itself) are dropped.
    */
   stop(startedAt: number | null, stopRequestedAt: number | null = null): CursorData {
     const display = this.display
     const rawSamples = this.samples
     const rawClicks = this.clicks
+    const rawInput = this.input
     const source = this.source
     this.stopInternal()
     if (!display || startedAt === null) return { samples: [], clicks: [], source: 'none' }
@@ -88,8 +130,14 @@ export class CursorTracker {
     const clicks = rawClicks
       .filter((c) => c.t >= startedAt && c.t < clickCutoff)
       .map((c) => ({ ...norm(c), button: c.button }))
+    if (source !== 'uiohook') return { samples, clicks, source }
 
-    return { samples, clicks, source }
+    // same time base and cutoff as the clicks (buildInputMarks drops t < 0 and t >= cutoffMs)
+    const input = buildInputMarks(
+      rawInput.map((e) => ({ ...e, t: e.t - startedAt })),
+      { cutoffMs: clickCutoff - startedAt }
+    )
+    return { samples, clicks, source, input }
   }
 
   dispose(): void {
@@ -101,13 +149,23 @@ export class CursorTracker {
       clearInterval(this.timer)
       this.timer = null
     }
+    // raw key events live only as long as the recording (stop() has taken its own reference)
+    this.input = []
     if (this.hook) {
       try {
         if (this.onMouseDown) this.hook.removeListener('mousedown', this.onMouseDown)
+        if (this.onMouseUp) this.hook.removeListener('mouseup', this.onMouseUp)
+        if (this.onWheel) this.hook.removeListener('wheel', this.onWheel)
+        if (this.onKeyDown) this.hook.removeListener('keydown', this.onKeyDown)
+        if (this.onKeyUp) this.hook.removeListener('keyup', this.onKeyUp)
       } catch (err) {
-        console.warn('[cursor] failed to remove mouse hook listener', err)
+        console.warn('[cursor] failed to remove input hook listeners', err)
       }
       this.onMouseDown = null
+      this.onMouseUp = null
+      this.onWheel = null
+      this.onKeyDown = null
+      this.onKeyUp = null
       this.hook = null
       releaseHook()
     }

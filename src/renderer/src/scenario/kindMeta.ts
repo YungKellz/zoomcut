@@ -1,10 +1,11 @@
 import type { ComponentType } from 'react'
-import { Keyboard, Mouse, MouseLeft, MousePointerClick, MouseRight, Move, Scroll, Type } from 'lucide-react'
-import type { ScenarioActionKind } from '@shared/types'
+import { Keyboard, Mouse, MouseLeft, MousePointer2, MousePointerClick, MouseRight, Move, Scroll, Type } from 'lucide-react'
+import type { ScenarioActionLabel } from '@shared/scenario'
 import type { TKey } from '../i18n/en'
 
-/** Icon for each captured action kind - shared by the action list, the big preview and the timeline markers. */
-export const KIND_ICON: Record<ScenarioActionKind, ComponentType<{ size?: number }>> = {
+/** Icon for each captured action kind, and for 'hover' (a click switched to "position only") -
+ * shared by the action list, the big preview and the timeline markers. Indexed by describeAction(a).kindKey. */
+export const KIND_ICON: Record<ScenarioActionLabel, ComponentType<{ size?: number }>> = {
   click: MouseLeft,
   doubleClick: MousePointerClick,
   rightClick: MouseRight,
@@ -12,11 +13,12 @@ export const KIND_ICON: Record<ScenarioActionKind, ComponentType<{ size?: number
   drag: Move,
   scroll: Scroll,
   type: Type,
-  key: Keyboard
+  key: Keyboard,
+  hover: MousePointer2
 }
 
-/** i18n key for each kind's label: t(KIND_LABEL_KEY[action.kind]). */
-export const KIND_LABEL_KEY: Record<ScenarioActionKind, TKey> = {
+/** i18n key for each kind's label: t(KIND_LABEL_KEY[describeAction(a).kindKey]). */
+export const KIND_LABEL_KEY: Record<ScenarioActionLabel, TKey> = {
   click: 'scenario.kind.click',
   doubleClick: 'scenario.kind.doubleClick',
   rightClick: 'scenario.kind.rightClick',
@@ -24,5 +26,6 @@ export const KIND_LABEL_KEY: Record<ScenarioActionKind, TKey> = {
   drag: 'scenario.kind.drag',
   scroll: 'scenario.kind.scroll',
   type: 'scenario.kind.type',
-  key: 'scenario.kind.key'
+  key: 'scenario.kind.key',
+  hover: 'scenario.kind.hover'
 }

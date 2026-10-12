@@ -170,10 +170,21 @@ export function insertZoomPart(z: ZoomSegment, at: number, id: string): { zoom: 
   return { zoom: { ...z, parts: next }, index: next.indexOf(part) + 1 }
 }
 
-/** Removes area `index` (>= 1); the previous area then lasts until the next boundary. */
+/**
+ * Removes area `index`. Any area can go as long as another one remains (a zoom always keeps at
+ * least one): removing a part makes the previous area last until the next boundary; removing area 0
+ * promotes the next area - its target and scale become the zoom's own and its boundary disappears,
+ * so the new area 0 starts at the zoom's start. Returns the same object when nothing can be removed.
+ */
 export function removeZoomPart(z: ZoomSegment, index: number): ZoomSegment {
   const parts = z.parts
-  if (!parts || index < 1 || index > parts.length) return z
+  if (!parts || index < 0 || index > parts.length) return z
+  if (index === 0) {
+    // parts only count in fixed mode: a follow zoom has the single area 0 and cannot lose it
+    if (z.mode !== 'fixed' || parts.length === 0) return z
+    const [first, ...rest] = parts
+    return withParts({ ...z, target: { ...first.target }, scale: first.scale }, rest)
+  }
   return withParts(z, parts.filter((_, i) => i !== index - 1))
 }
 
@@ -268,12 +279,13 @@ export const ZOOM_SCALE_MAX = 5
 /**
  * Applies a patch to a zoom. When the patch moves both edges alike (dragging the whole region)
  * the parts are carried along; any other change is left to resolveZoomOverlaps, which drops the
- * parts that no longer fit.
+ * parts that no longer fit. Both edges are rounded on their own, so "alike" allows the 1 ms that
+ * rounding can add.
  */
 export function patchZoom(z: ZoomSegment, patch: Partial<ZoomSegment>): ZoomSegment {
   const next = { ...z, ...patch }
   const ds = next.start - z.start
-  return Math.abs(ds - (next.end - z.end)) < 0.5 ? shiftZoomParts(next, ds) : next
+  return Math.abs(ds - (next.end - z.end)) <= 1 ? shiftZoomParts(next, ds) : next
 }
 
 /** Keeps zoom segments sorted and non-overlapping after one of them changed. */

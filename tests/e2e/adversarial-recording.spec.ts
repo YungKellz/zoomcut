@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  acceptConfirm,
   launch,
   projectIds,
   restoreUserSettings,
@@ -209,8 +210,8 @@ test('two recordings in a row both show up on Home', async () => {
 test('deleting a project from Home removes it from the list and from disk', async () => {
   const before = projectIds(h.recordingsDir)
   expect(before.length).toBeGreaterThan(0)
-  h.win.on('dialog', (d) => void d.accept())
   await h.win.locator('.project-row .btn-ghost.danger').first().click()
+  await acceptConfirm(h.win)
   await h.win.waitForFunction((n) => document.querySelectorAll('.project-row').length === n, before.length - 1, {
     timeout: 20_000
   })

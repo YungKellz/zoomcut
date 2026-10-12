@@ -223,7 +223,7 @@ test('cancelling while ffmpeg is already encoding must not leave a half-written 
 
 test('a 5% crop still exports to GIF and MP4', async () => {
   await closeExport()
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await h.win.click('button:has-text("Edit crop")')
   const stage = (await h.win.locator('.preview-stage').boundingBox())!
   const handle = (await h.win.locator('.crop-se').boundingBox())!
@@ -247,13 +247,13 @@ test('a 5% crop still exports to GIF and MP4', async () => {
   expect(statSync(join(h.exportDir, 'tiny.gif')).size).toBeGreaterThan(100)
   await closeExport()
   // back to the full frame for the next scenario
-  await h.win.click('.tab:has-text("Clip")')
+  await h.win.click('.tab[data-tab="clip"]')
   await h.win.click('.btn-row button:has-text("Reset")')
 })
 
 test('transparent background with padding, radius and shadow exports to GIF', async () => {
   await closeExport()
-  await h.win.click('.tab:has-text("Style")')
+  await h.win.click('.tab[data-tab="style"]')
   await h.win.locator('.panel input[type="range"] >> nth=0').fill('0.2') // padding
   await h.win.locator('.panel input[type="range"] >> nth=1').fill('40') // corner radius
   await h.win.click('.panel .field-row input[type="checkbox"]') // shadow

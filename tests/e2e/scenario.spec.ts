@@ -1,11 +1,12 @@
 import { expect, test, type Page } from '@playwright/test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { launch, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
+import { acceptConfirm, launch, projectIds, readProject, restoreUserSettings, sleep, useEnglish, waitForBar, type Harness } from './adv-helpers'
 
 /**
  * Scenario recorder: capture real input (injected through the app's own test-only helper over a
- * test window the app opens itself), review the actions, replay them while recording, abort a replay.
+ * test window the app opens itself), review the actions, dry-run them (Preview, also with a click
+ * switched to "position only"), replay them while recording, abort a replay.
  * Every injected click lands on the app's e2e target window, which is checked to be where we expect.
  */
 let h: Harness
@@ -20,7 +21,7 @@ type ZcWindow = Window & {
       getState(): Promise<{ phase: string; actions: number }>
       stop(): Promise<void>
       list(): Promise<Array<{ id: string; actions: number; durationMs: number }>>
-      load(id: string): Promise<{ id: string; actions: Array<{ kind: string; at: number; text?: string; durationMs: number; pauseMs: number }> }>
+      load(id: string): Promise<{ id: string; actions: Array<{ kind: string; at: number; text?: string; durationMs: number; pauseMs: number; hoverOnly?: boolean }> }>
     }
     displays: { list(): Promise<Array<{ id: number; primary: boolean }>> }
   }
@@ -50,6 +51,21 @@ function typeKeys(t: number, keys: Array<{ vk: number; scan: number }>): unknown
     out.push({ t: t + i * 160 + 60, op: 'key', vk: k.vk, scan: k.scan, extended: false, down: false })
   })
   return out
+}
+
+function mainWindowVisible(): Promise<boolean> {
+  return h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.getTitle() === 'ZoomCut' && w.isVisible()))
+}
+
+/** Runs "Preview" (the dry run) and waits for its notice: the main window hides meanwhile and comes back. */
+async function runPreview(): Promise<void> {
+  await h.win.click('.btn-preview')
+  await expect(h.win.locator('.scenario-notice')).toHaveCount(0)
+  await expect.poll(mainWindowVisible, { timeout: 20_000 }).toBe(false)
+  await h.win.waitForSelector('.scenario-notice', { timeout: 90_000 })
+  await expect(h.win.locator('.scenario-notice')).toContainText('Preview finished')
+  expect(await mainWindowVisible()).toBe(true)
+  await expect.poll(() => h.app.windows().some((w) => w.url().includes('#overlay')), { timeout: 5_000 }).toBe(false)
 }
 
 async function waitForCapture(phase: string, timeoutMs = 20_000): Promise<void> {
@@ -189,6 +205,47 @@ test('pauses, durations and text can be edited; actions can be deleted', async (
   expect(after[0].actions).toBe(4)
 })
 
+test('Preview replays the scenario on screen and records nothing', async () => {
+  await target.reload()
+  await target.waitForSelector('#hit')
+  expect(await target.textContent('#count')).toBe('0')
+  await runPreview()
+  // the target got the real input: both clicks, the click into the field and the typed text
+  expect(await target.textContent('#count')).toBe('2')
+  expect(await target.inputValue('#text')).toBe(capturedText)
+  expect(await target.textContent('#last')).toBe('')
+  // ... and nothing was recorded
+  expect(projectIds(h.recordingsDir)).toHaveLength(0)
+  await expect(h.win.locator('.scenario-review')).toHaveCount(1)
+})
+
+test('a click switched to "position only" brings the cursor there without clicking', async () => {
+  const first = h.win.locator('.scenario-action').first()
+  await first.locator('.scenario-hover-toggle input').check()
+  await expect(first).toHaveClass(/hover-only/)
+  await expect(first.locator('.scenario-action-label')).toContainText('Hover')
+  await sleep(800)
+  const list = await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())
+  const saved = await h.win.evaluate((id) => (window as unknown as ZcWindow).zc.scenario.load(id), list[0].id)
+  expect(saved.actions[0].hoverOnly).toBe(true)
+  expect(saved.actions[0].kind).toBe('click')
+
+  await target.reload()
+  await target.waitForSelector('#hit')
+  await runPreview()
+  // only the second click landed: the first one just moved the cursor over the button
+  expect(await target.textContent('#count')).toBe('1')
+  expect(await target.inputValue('#text')).toBe(capturedText)
+  expect(projectIds(h.recordingsDir)).toHaveLength(0)
+
+  // back to a real click for the recording below
+  await first.locator('.scenario-hover-toggle input').uncheck()
+  await expect(first).not.toHaveClass(/hover-only/)
+  await sleep(800)
+  const again = await h.win.evaluate((id) => (window as unknown as ZcWindow).zc.scenario.load(id), list[0].id)
+  expect('hoverOnly' in again.actions[0]).toBe(false)
+})
+
 test('replaying the scenario records a project and drives the target window', async () => {
   await target.reload()
   await target.waitForSelector('#hit')
@@ -207,10 +264,20 @@ test('replaying the scenario records a project and drives the target window', as
   expect(await target.textContent('#last')).toBe('')
   const ids = projectIds(h.recordingsDir)
   expect(ids).toHaveLength(1)
-  const project = readProject(h.recordingsDir, ids[0]) as unknown as { cursorData: { clicks: unknown[] }; recording: { durationMs: number } }
+  const project = readProject(h.recordingsDir, ids[0]) as unknown as {
+    cursorData: { clicks: unknown[]; input?: Array<{ kind: string }> }
+    recording: { durationMs: number }
+  }
   console.log('[replay] recorded clicks:', project.cursorData.clicks.length, 'duration', project.recording.durationMs)
   expect(project.cursorData.clicks.length).toBeGreaterThanOrEqual(3)
   expect(project.recording.durationMs).toBeGreaterThan(3000)
+  // the timeline's input tags saw the replayed input live: the clicks, and the typed text (sent with
+  // KEYEVENTF_UNICODE, keycode 0 in the hook); only the kinds are stored, never what was typed
+  const kinds = (project.cursorData.input ?? []).map((m) => m.kind)
+  console.log('[replay] input tags:', kinds.join(' '))
+  expect(kinds.some((k) => k === 'click' || k === 'doubleClick')).toBe(true)
+  expect(kinds).toContain('type')
+  expect(await h.win.locator('.track-video .input-mark[data-kind="type"]').count()).toBeGreaterThanOrEqual(1)
   await h.win.screenshot({ path: join(h.shotsDir, 'scenario-editor.png') })
 })
 
@@ -245,8 +312,8 @@ test('a saved scenario can be deleted from Home', async () => {
   await h.win.waitForSelector('.home')
   const recordingIds = projectIds(h.recordingsDir)
   expect(recordingIds).toHaveLength(1)
-  h.win.on('dialog', (d) => void d.accept())
   await h.win.click('.scenario-delete')
+  await acceptConfirm(h.win)
   await expect(h.win.locator('.scenario-block')).toHaveCount(0)
   await sleep(500)
   expect(await h.win.evaluate(() => (window as unknown as ZcWindow).zc.scenario.list())).toHaveLength(0)

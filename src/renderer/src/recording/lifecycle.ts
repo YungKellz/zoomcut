@@ -1,10 +1,12 @@
 import type { AudioCaptureOptions, Project, Scenario } from '@shared/types'
 import { useStore } from '../store'
 import { t } from '../i18n'
+import { confirmAt } from '../components/ConfirmPopover'
 
 /**
  * Delete / "Record again" for recordings and scenarios, shared by the editor, the scenario
- * review and Home. Everything destructive asks first, and nothing is deleted before everything
+ * review and Home. Everything destructive asks first - in place, with a popover at the button that
+ * was clicked (`anchor`, see components/ConfirmPopover.tsx) - and nothing is deleted before everything
  * the follow-up needs (the scenario, a display) has been checked: an aborted "Record again"
  * must leave the old recording untouched.
  *
@@ -17,8 +19,8 @@ function errorText(err: unknown): string {
 }
 
 /** Asks, then removes a recording's folder. True once it is gone; false when the user declined or the delete failed (alerted). */
-export async function confirmDeleteProject(id: string, name: string): Promise<boolean> {
-  if (!confirm(t('home.deleteConfirm', { name }))) return false
+export async function confirmDeleteProject(id: string, name: string, anchor?: Element | null): Promise<boolean> {
+  if (!(await confirmAt(anchor, t('home.deleteConfirm', { name })))) return false
   try {
     await window.zc.projects.remove(id)
     return true
@@ -29,8 +31,8 @@ export async function confirmDeleteProject(id: string, name: string): Promise<bo
 }
 
 /** Same for a scenario; the recordings made from it are kept (main only removes the scenario folder). */
-export async function confirmDeleteScenario(id: string, name: string): Promise<boolean> {
-  if (!confirm(t('editor.deleteScenarioConfirm', { name }))) return false
+export async function confirmDeleteScenario(id: string, name: string, anchor?: Element | null): Promise<boolean> {
+  if (!(await confirmAt(anchor, t('editor.deleteScenarioConfirm', { name })))) return false
   try {
     await window.zc.scenario.remove(id)
     return true
@@ -41,10 +43,10 @@ export async function confirmDeleteScenario(id: string, name: string): Promise<b
 }
 
 /** Editor header, Delete: removes the open recording and leaves the editor (to the composition it was opened from, if any). */
-export async function deleteOpenProject(project: Project): Promise<void> {
+export async function deleteOpenProject(project: Project, anchor?: Element | null): Promise<void> {
   // no more media requests for a folder that is about to disappear
   useStore.getState().setPlaying(false)
-  if (!(await confirmDeleteProject(project.id, project.name))) return
+  if (!(await confirmDeleteProject(project.id, project.name, anchor))) return
   // closing flushes the project autosave; main knows the folder is gone by then and ignores it
   useStore.getState().closeProject()
 }
@@ -62,7 +64,7 @@ async function legacyConditions(): Promise<{ displayId: number; audio: AudioCapt
  * same conditions (project.origin: display, audio, scenario). A scenario recording replays the
  * same scenario, so the scenario is loaded first - when it is gone nothing is deleted.
  */
-export async function recordProjectAgain(project: Project): Promise<void> {
+export async function recordProjectAgain(project: Project, anchor?: Element | null): Promise<void> {
   const origin = project.origin
   let scenario: Scenario | null = null
   if (origin?.scenarioId) {
@@ -82,7 +84,7 @@ export async function recordProjectAgain(project: Project): Promise<void> {
     }
   }
   const question = scenario ? 'editor.recordAgainScenarioConfirm' : origin ? 'editor.recordAgainConfirm' : 'editor.recordAgainLegacyConfirm'
-  if (!confirm(t(question))) return
+  if (!(await confirmAt(anchor, t(question), { confirmLabel: t('editor.recordAgain') }))) return
 
   useStore.getState().setPlaying(false)
   try {
@@ -105,15 +107,15 @@ export async function recordProjectAgain(project: Project): Promise<void> {
   }
 }
 
-/** Scenario review header, Delete: removes the scenario (its recordings stay) and returns to Home. */
-export async function deleteOpenScenario(scenario: Scenario): Promise<void> {
-  if (!(await confirmDeleteScenario(scenario.id, scenario.name))) return
+/** Scenario review footer, Delete: removes the scenario (its recordings stay) and returns to Home. */
+export async function deleteOpenScenario(scenario: Scenario, anchor?: Element | null): Promise<void> {
+  if (!(await confirmDeleteScenario(scenario.id, scenario.name, anchor))) return
   useStore.getState().closeScenario()
 }
 
-/** Scenario review header, Record again: replaces the scenario by a freshly captured one on the same display. */
-export async function recaptureScenario(scenario: Scenario): Promise<void> {
-  if (!confirm(t('editor.recaptureConfirm'))) return
+/** Scenario review footer, Record scenario again: replaces the scenario by a freshly captured one on the same display. */
+export async function recaptureScenario(scenario: Scenario, anchor?: Element | null): Promise<void> {
+  if (!(await confirmAt(anchor, t('editor.recaptureConfirm'), { confirmLabel: t('scenario.recordScenarioAgain') }))) return
   try {
     await window.zc.scenario.remove(scenario.id)
   } catch (err) {

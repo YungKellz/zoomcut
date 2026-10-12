@@ -1,9 +1,23 @@
 import type React from 'react'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Droplet, Maximize2, MousePointerClick, Scissors, Type, ZoomIn } from 'lucide-react'
-import type { TextOverlay, ZoomSegment } from '@shared/types'
+import {
+  Droplet,
+  HandGrab,
+  Keyboard,
+  Maximize2,
+  Mouse,
+  MousePointerClick,
+  MouseRight,
+  MoveVertical,
+  Scissors,
+  TextCursorInput,
+  Type,
+  ZoomIn
+} from 'lucide-react'
+import type { InputMarkKind, TextOverlay, ZoomSegment } from '@shared/types'
 import { audioClipPath, isRecordedClip } from '@shared/audio'
+import { clipMarksToSegments, marksFromClicks } from '@shared/inputMarks'
 import { useProject, useStore } from '../store'
 import { zoomAreas, type ZoomArea } from '../engine/camera'
 import { keepSegments, outToSrc, outputDuration, srcToOut } from '../engine/timeline'
@@ -11,10 +25,47 @@ import { useThumbnails } from '../hooks/useThumbnails'
 import { clipIcon, clipLabel } from '../audio/clipLabel'
 import { AudioWaveform } from './AudioWaveform'
 import { clamp, formatTimecode } from '../util/format'
-import { useT } from '../i18n'
+import { useT, type TKey } from '../i18n'
 
 const TICK_STEPS = [100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000]
 const END_PAD_PX = 56
+
+/** Tooltip names of the input tags; `key` tags are named by their label (see markTitle). */
+const MARK_NAMES: Record<Exclude<InputMarkKind, 'key'>, TKey> = {
+  click: 'timeline.markClick',
+  doubleClick: 'timeline.markDoubleClick',
+  rightClick: 'timeline.markRightClick',
+  middleClick: 'timeline.markMiddleClick',
+  drag: 'timeline.markDrag',
+  scroll: 'timeline.markScroll',
+  type: 'timeline.markType'
+}
+
+function markIcon(kind: InputMarkKind): JSX.Element {
+  switch (kind) {
+    case 'click':
+      return <MousePointerClick size={11} />
+    case 'doubleClick':
+      return (
+        <>
+          <MousePointerClick size={11} />
+          <span className="input-mark-badge">2</span>
+        </>
+      )
+    case 'rightClick':
+      return <MouseRight size={11} />
+    case 'middleClick':
+      return <Mouse size={11} />
+    case 'drag':
+      return <HandGrab size={11} />
+    case 'scroll':
+      return <MoveVertical size={11} />
+    case 'type':
+      return <TextCursorInput size={11} />
+    case 'key':
+      return <Keyboard size={11} />
+  }
+}
 
 /** A draggable / resizable block. All times are output-time milliseconds. */
 interface RegionProps {
@@ -172,9 +223,12 @@ export function Timeline(): JSX.Element {
   // initial fit
   const fitted = useRef(false)
   useEffect(() => {
-    if (fitted.current || viewportWidth < 50) return
+    // the element's own width: on the first render viewportWidth is still the 800 px default
+    // (the ResizeObserver effect's measurement lands one render later)
+    const width = scrollRef.current?.clientWidth ?? viewportWidth
+    if (fitted.current || width < 50) return
     fitted.current = true
-    setPxPerMs((viewportWidth - END_PAD_PX - 8) / Math.max(1000, outDur))
+    setPxPerMs((width - END_PAD_PX - 8) / Math.max(1000, outDur))
   }, [viewportWidth, outDur, setPxPerMs])
 
   // keep the playhead visible while playing
@@ -216,12 +270,32 @@ export function Timeline(): JSX.Element {
   const audioLanes = useMemo(() => assignLanes(audioLaneItems), [audioLaneItems])
   const audioLaneCount = Math.max(1, ...Array.from(audioLanes.values()).map((l) => l + 1))
 
-  const clickMarks = useMemo(() => {
-    return project.cursorData.clicks
-      .map((c) => c.t)
-      .filter((tm) => segments.some((s) => tm >= s.start && tm < s.end))
-      .map((tm) => ({ src: tm, out: srcToOut(tm, segments) }))
-  }, [project.cursorData.clicks, segments])
+  // input tags on the video lane: clicks, drags, scrolls, typing, key combinations (a recording
+  // without `input` still has its clicks); only what survives the cuts, in output time. The
+  // tooltips are built here too, not on every render (the timeline re-renders every playback frame).
+  const inputMarks = useMemo(() => {
+    const marks = project.cursorData.input ?? marksFromClicks(project.cursorData.clicks)
+    return clipMarksToSegments(marks, segments).map((m) => {
+      const out = srcToOut(m.t, segments)
+      const outEnd = srcToOut(m.end, segments)
+      const name =
+        m.kind === 'key'
+          ? t(m.label?.includes('+') ? 'timeline.markCombo' : 'timeline.markKey', { key: m.label ?? '' })
+          : t(MARK_NAMES[m.kind])
+      const title =
+        outEnd > out
+          ? t('timeline.markSpan', { kind: name, time: formatTimecode(out), end: formatTimecode(outEnd) })
+          : t('timeline.markAt', { kind: name, time: formatTimecode(out) })
+      return { kind: m.kind, out, outEnd, title }
+    })
+  }, [project.cursorData.input, project.cursorData.clicks, segments, t])
+
+  // lanes with nothing on them are not drawn: a fresh recording shows the ruler and the video
+  // only, adding the first zoom / text / blur (toolbar, Z / T / B) or audio clip brings its lane in
+  const showZoom = project.zooms.length > 0
+  const showText = project.texts.length > 0
+  const showBlur = project.blurs.length > 0
+  const showAudio = project.audio.length > 0
 
   const outFromEvent = (e: { clientX: number }, el: HTMLElement): number => {
     const rect = el.getBoundingClientRect()
@@ -360,16 +434,22 @@ export function Timeline(): JSX.Element {
         <div className="track-labels">
           <div className="track-label ruler-label">{t('timeline.trackTime')}</div>
           <div className="track-label video-label">{t('timeline.trackVideo')}</div>
-          <div className="track-label zoom-label">{t('timeline.trackZoom')}</div>
-          <div className="track-label text-label" style={{ height: 30 * laneCount }}>
-            {t('timeline.trackText')}
-          </div>
-          <div className="track-label blur-label" style={{ height: 30 * blurLaneCount }}>
-            {t('timeline.trackBlur')}
-          </div>
-          <div className="track-label audio-label" style={{ height: 30 * audioLaneCount }}>
-            {t('timeline.trackAudio')}
-          </div>
+          {showZoom && <div className="track-label zoom-label">{t('timeline.trackZoom')}</div>}
+          {showText && (
+            <div className="track-label text-label" style={{ height: 30 * laneCount }}>
+              {t('timeline.trackText')}
+            </div>
+          )}
+          {showBlur && (
+            <div className="track-label blur-label" style={{ height: 30 * blurLaneCount }}>
+              {t('timeline.trackBlur')}
+            </div>
+          )}
+          {showAudio && (
+            <div className="track-label audio-label" style={{ height: 30 * audioLaneCount }}>
+              {t('timeline.trackAudio')}
+            </div>
+          )}
         </div>
 
         <div className="timeline-scroll" ref={scrollRef}>
@@ -403,9 +483,16 @@ export function Timeline(): JSX.Element {
                   </div>
                 )
               })}
-              {clickMarks.map((m, i) => (
-                <div key={i} className="click-mark" style={{ left: m.out * pxPerMs }} title={t('timeline.click', { time: formatTimecode(m.out) })}>
-                  <MousePointerClick size={11} />
+              {inputMarks.map((m, i) => (
+                <div
+                  key={i}
+                  className="input-mark"
+                  data-kind={m.kind}
+                  style={{ left: m.out * pxPerMs, width: (m.outEnd - m.out) * pxPerMs }}
+                  title={m.title}
+                >
+                  {m.outEnd > m.out && <div className="input-mark-span" />}
+                  <div className="input-mark-icon">{markIcon(m.kind)}</div>
                 </div>
               ))}
               {rangeOut && (
@@ -416,154 +503,162 @@ export function Timeline(): JSX.Element {
               )}
             </div>
 
-            <div
-              className="track track-zoom"
-              onPointerDown={emptyTrackClick}
-              onDoubleClick={(e) => {
-                if ((e.target as HTMLElement).closest('.region')) return
-                addZoom(toSrc(outFromEvent(e, e.currentTarget)))
-              }}
-            >
-              {project.zooms.map((z) => {
-                const areas = zoomAreas(z)
-                const zoomOut = toOut(z.start)
-                return (
-                  <Region
-                    key={z.id}
-                    start={zoomOut}
-                    end={toOut(z.end)}
-                    pxPerMs={pxPerMs}
-                    maxEnd={outDur}
-                    className="zoom"
-                    label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}${areas.length > 1 ? ` · ${t('timeline.parts', { n: areas.length })}` : ''}`}
-                    selected={selection?.kind === 'zoom' && selection.id === z.id}
-                    onSelect={() => select({ kind: 'zoom', id: z.id })}
-                    onBegin={checkpoint}
-                    onChange={(s, e) => updateZoom(z.id, { start: toSrc(s), end: toSrc(e) }, false)}
-                  >
-                    {areas.slice(1).map((area) => (
-                      <div
-                        key={area.id}
-                        className="zoom-part-divider"
-                        style={{ left: (toOut(area.start) - zoomOut) * pxPerMs - 4 }}
-                        title={t('timeline.partTitle', { n: area.index + 1, time: formatTimecode(toOut(area.start)) })}
-                        onPointerDown={startPartDrag(z, area)}
-                      />
-                    ))}
-                  </Region>
-                )
-              })}
-            </div>
-
-            <div
-              className="track track-text"
-              style={{ height: 30 * laneCount }}
-              onPointerDown={emptyTrackClick}
-              onDoubleClick={(e) => {
-                if ((e.target as HTMLElement).closest('.region')) return
-                addText(toSrc(outFromEvent(e, e.currentTarget)))
-              }}
-            >
-              {project.texts.map((tx) => (
-                <div key={tx.id} className="lane" style={{ top: (textLanes.get(tx.id) ?? 0) * 30 }}>
-                  <Region
-                    start={toOut(tx.start)}
-                    end={toOut(tx.end)}
-                    pxPerMs={pxPerMs}
-                    maxEnd={outDur}
-                    className="text"
-                    label={tx.text.split('\n')[0] || t('timeline.text')}
-                    selected={selection?.kind === 'text' && selection.id === tx.id}
-                    onSelect={() => select({ kind: 'text', id: tx.id })}
-                    onBegin={checkpoint}
-                    onChange={(s, e) => updateText(tx.id, { start: toSrc(s), end: toSrc(e) }, false)}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div
-              className="track track-blur"
-              style={{ height: 30 * blurLaneCount }}
-              onPointerDown={emptyTrackClick}
-              onDoubleClick={(e) => {
-                if ((e.target as HTMLElement).closest('.region')) return
-                addBlur(toSrc(outFromEvent(e, e.currentTarget)))
-              }}
-            >
-              {project.blurs.map((b) => (
-                <div key={b.id} className="lane" style={{ top: (blurLanes.get(b.id) ?? 0) * 30 }}>
-                  <Region
-                    start={toOut(b.start)}
-                    end={toOut(b.end)}
-                    pxPerMs={pxPerMs}
-                    maxEnd={outDur}
-                    minLength={100}
-                    className="blur"
-                    label={b.style === 'pixelate' ? t('blur.style.pixelate') : t('blur.style.blur')}
-                    selected={selection?.kind === 'blur' && selection.id === b.id}
-                    onSelect={() => select({ kind: 'blur', id: b.id })}
-                    onBegin={checkpoint}
-                    onChange={(s, e) => updateBlur(b.id, { start: toSrc(s), end: toSrc(e) }, false)}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div className="track track-audio" style={{ height: 30 * audioLaneCount }} onPointerDown={emptyTrackClick}>
-              {project.audio.map((clip) => {
-                const lane = audioLanes.get(clip.id) ?? 0
-                const muted = clip.muted || clip.volume <= 0
-                const selected = selection?.kind === 'audio' && selection.id === clip.id
-                const url = window.zc.media.url(audioClipPath(project, clip))
-                if (isRecordedClip(clip)) {
-                  // recorded (system/mic) clips follow the video through cuts, which can split
-                  // them into several pieces – too fiddly to draw exactly, so this is a simple
-                  // fixed, non-draggable label spanning the whole output
+            {showZoom && (
+              <div
+                className="track track-zoom"
+                onPointerDown={emptyTrackClick}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest('.region')) return
+                  addZoom(toSrc(outFromEvent(e, e.currentTarget)))
+                }}
+              >
+                {project.zooms.map((z) => {
+                  const areas = zoomAreas(z)
+                  const zoomOut = toOut(z.start)
                   return (
-                    <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
-                      <div
-                        className={'region audio recorded' + (muted ? ' muted' : '') + (selected ? ' selected' : '')}
-                        style={{ left: 0, width: Math.max(4, outDur * pxPerMs) }}
-                        onClick={() => select({ kind: 'audio', id: clip.id })}
-                        title={clipLabel(t, clip)}
-                      >
-                        {selected && <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} />}
-                        <span className={'region-label' + (selected ? ' chip' : '')}>
-                          {clipIcon(clip.kind)}
-                          {clipLabel(t, clip)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                }
-                const end = Math.max(clip.start, clip.loop ? outDur : Math.min(outDur, clip.start + clip.durationMs))
-                return (
-                  <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
                     <Region
-                      start={clip.start}
-                      end={end}
+                      key={z.id}
+                      start={zoomOut}
+                      end={toOut(z.end)}
                       pxPerMs={pxPerMs}
                       maxEnd={outDur}
-                      // a looping clip always plays to the end of the output regardless of
-                      // where it starts, so its start can range all the way to outDur; a
-                      // non-looping clip should not be dragged so far right that most of it
-                      // would be truncated by the output end
-                      moveMax={clip.loop ? outDur : Math.max(0, outDur - clip.durationMs)}
-                      className={'audio' + (muted ? ' muted' : '')}
-                      label={clipLabel(t, clip)}
-                      icon={clipIcon(clip.kind)}
-                      overlay={selected ? <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} /> : undefined}
-                      selected={selected}
-                      resizable={false}
-                      onSelect={() => select({ kind: 'audio', id: clip.id })}
+                      className="zoom"
+                      label={`${z.scale.toFixed(1)}× ${z.mode === 'follow' ? t('timeline.follow') : t('timeline.fixed')}${areas.length > 1 ? ` · ${t('timeline.parts', { n: areas.length })}` : ''}`}
+                      selected={selection?.kind === 'zoom' && selection.id === z.id}
+                      onSelect={() => select({ kind: 'zoom', id: z.id })}
                       onBegin={checkpoint}
-                      onChange={(s) => updateAudioClip(clip.id, { start: Math.round(s) }, false)}
+                      onChange={(s, e) => updateZoom(z.id, { start: toSrc(s), end: toSrc(e) }, false)}
+                    >
+                      {areas.slice(1).map((area) => (
+                        <div
+                          key={area.id}
+                          className="zoom-part-divider"
+                          style={{ left: (toOut(area.start) - zoomOut) * pxPerMs - 4 }}
+                          title={t('timeline.partTitle', { n: area.index + 1, time: formatTimecode(toOut(area.start)) })}
+                          onPointerDown={startPartDrag(z, area)}
+                        />
+                      ))}
+                    </Region>
+                  )
+                })}
+              </div>
+            )}
+
+            {showText && (
+              <div
+                className="track track-text"
+                style={{ height: 30 * laneCount }}
+                onPointerDown={emptyTrackClick}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest('.region')) return
+                  addText(toSrc(outFromEvent(e, e.currentTarget)))
+                }}
+              >
+                {project.texts.map((tx) => (
+                  <div key={tx.id} className="lane" style={{ top: (textLanes.get(tx.id) ?? 0) * 30 }}>
+                    <Region
+                      start={toOut(tx.start)}
+                      end={toOut(tx.end)}
+                      pxPerMs={pxPerMs}
+                      maxEnd={outDur}
+                      className="text"
+                      label={tx.text.split('\n')[0] || t('timeline.text')}
+                      selected={selection?.kind === 'text' && selection.id === tx.id}
+                      onSelect={() => select({ kind: 'text', id: tx.id })}
+                      onBegin={checkpoint}
+                      onChange={(s, e) => updateText(tx.id, { start: toSrc(s), end: toSrc(e) }, false)}
                     />
                   </div>
-                )
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+
+            {showBlur && (
+              <div
+                className="track track-blur"
+                style={{ height: 30 * blurLaneCount }}
+                onPointerDown={emptyTrackClick}
+                onDoubleClick={(e) => {
+                  if ((e.target as HTMLElement).closest('.region')) return
+                  addBlur(toSrc(outFromEvent(e, e.currentTarget)))
+                }}
+              >
+                {project.blurs.map((b) => (
+                  <div key={b.id} className="lane" style={{ top: (blurLanes.get(b.id) ?? 0) * 30 }}>
+                    <Region
+                      start={toOut(b.start)}
+                      end={toOut(b.end)}
+                      pxPerMs={pxPerMs}
+                      maxEnd={outDur}
+                      minLength={100}
+                      className="blur"
+                      label={b.style === 'pixelate' ? t('blur.style.pixelate') : t('blur.style.blur')}
+                      selected={selection?.kind === 'blur' && selection.id === b.id}
+                      onSelect={() => select({ kind: 'blur', id: b.id })}
+                      onBegin={checkpoint}
+                      onChange={(s, e) => updateBlur(b.id, { start: toSrc(s), end: toSrc(e) }, false)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showAudio && (
+              <div className="track track-audio" style={{ height: 30 * audioLaneCount }} onPointerDown={emptyTrackClick}>
+                {project.audio.map((clip) => {
+                  const lane = audioLanes.get(clip.id) ?? 0
+                  const muted = clip.muted || clip.volume <= 0
+                  const selected = selection?.kind === 'audio' && selection.id === clip.id
+                  const url = window.zc.media.url(audioClipPath(project, clip))
+                  if (isRecordedClip(clip)) {
+                    // recorded (system/mic) clips follow the video through cuts, which can split
+                    // them into several pieces – too fiddly to draw exactly, so this is a simple
+                    // fixed, non-draggable label spanning the whole output
+                    return (
+                      <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
+                        <div
+                          className={'region audio recorded' + (muted ? ' muted' : '') + (selected ? ' selected' : '')}
+                          style={{ left: 0, width: Math.max(4, outDur * pxPerMs) }}
+                          onClick={() => select({ kind: 'audio', id: clip.id })}
+                          title={clipLabel(t, clip)}
+                        >
+                          {selected && <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} />}
+                          <span className={'region-label' + (selected ? ' chip' : '')}>
+                            {clipIcon(clip.kind)}
+                            {clipLabel(t, clip)}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  }
+                  const end = Math.max(clip.start, clip.loop ? outDur : Math.min(outDur, clip.start + clip.durationMs))
+                  return (
+                    <div key={clip.id} className="lane" style={{ top: lane * 30 }}>
+                      <Region
+                        start={clip.start}
+                        end={end}
+                        pxPerMs={pxPerMs}
+                        maxEnd={outDur}
+                        // a looping clip always plays to the end of the output regardless of
+                        // where it starts, so its start can range all the way to outDur; a
+                        // non-looping clip should not be dragged so far right that most of it
+                        // would be truncated by the output end
+                        moveMax={clip.loop ? outDur : Math.max(0, outDur - clip.durationMs)}
+                        className={'audio' + (muted ? ' muted' : '')}
+                        label={clipLabel(t, clip)}
+                        icon={clipIcon(clip.kind)}
+                        overlay={selected ? <AudioWaveform clip={clip} url={url} pxPerMs={pxPerMs} segments={segments} /> : undefined}
+                        selected={selected}
+                        resizable={false}
+                        onSelect={() => select({ kind: 'audio', id: clip.id })}
+                        onBegin={checkpoint}
+                        onChange={(s) => updateAudioClip(clip.id, { start: Math.round(s) }, false)}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             <div className="timeline-end" style={{ left: outDur * pxPerMs }}>
               <span>{t('timeline.end')} · {formatTimecode(outDur)}</span>

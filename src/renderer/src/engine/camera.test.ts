@@ -197,9 +197,59 @@ describe('zoom parts', () => {
       [1000, 4500],
       [4500, 6000]
     ])
-    expect(removeZoomPart(base, 0)).toBe(base)
     expect(removeZoomPart(base, 3)).toBe(base)
+    expect(removeZoomPart(base, -1)).toBe(base)
     expect(removeZoomPart(removeZoomPart(base, 2), 1).parts).toBeUndefined()
+  })
+
+  it('removes the last part and leaves the earlier areas as they are', () => {
+    const res = removeZoomPart(base, 2)
+    expect(res.parts!.map((p) => p.id)).toEqual(['a'])
+    expect(zoomAreas(res).map((a) => [a.start, a.end])).toEqual([
+      [1000, 3000],
+      [3000, 6000]
+    ])
+  })
+
+  it("removing area 0 promotes the next area: its target and scale become the zoom's own", () => {
+    const res = removeZoomPart(base, 0)
+    expect(res).not.toBe(base)
+    expect(res.target).toEqual({ x: 0.2, y: 0.2 })
+    expect(res.scale).toBe(4)
+    expect(res.start).toBe(1000)
+    expect(res.end).toBe(6000)
+    expect(res.parts!.map((p) => p.id)).toEqual(['b'])
+    // the boundary of the promoted area is gone: the new area 0 starts at the zoom start
+    expect(zoomAreas(res).map((a) => [a.index, a.id, a.start, a.end, a.scale])).toEqual([
+      [0, null, 1000, 4500, 4],
+      [1, 'b', 4500, 6000, 2]
+    ])
+    // the original is untouched
+    expect(base.parts).toHaveLength(2)
+    expect(base.target).toEqual({ x: 0.8, y: 0.8 })
+  })
+
+  it('removing area 0 of a two-area zoom leaves a plain single-area zoom without a parts key', () => {
+    const res = removeZoomPart(removeZoomPart(base, 2), 0)
+    expect(res.target).toEqual({ x: 0.2, y: 0.2 })
+    expect(res.scale).toBe(4)
+    expect(res.parts).toBeUndefined()
+    expect('parts' in res).toBe(false)
+    expect(zoomAreas(res)).toHaveLength(1)
+  })
+
+  it('the only area of a zoom cannot be removed (no parts, empty parts, follow mode)', () => {
+    expect(removeZoomPart(noParts, 0)).toBe(noParts)
+    const empty = { ...base, parts: [] }
+    expect(removeZoomPart(empty, 0)).toBe(empty)
+    const follow: ZoomSegment = { ...base, mode: 'follow' }
+    expect(removeZoomPart(follow, 0)).toBe(follow)
+    // repeated deletes of area 0 stop at one area
+    let z = base
+    for (let i = 0; i < 5; i++) z = removeZoomPart(z, 0)
+    expect(zoomAreas(z)).toHaveLength(1)
+    expect(z.target).toEqual({ x: 0.5, y: 0.5 }) // the last part's target survived
+    expect(z.scale).toBe(2)
   })
 
   it('shifts every boundary', () => {

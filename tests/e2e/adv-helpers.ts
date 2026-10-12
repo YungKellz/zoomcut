@@ -85,6 +85,13 @@ export async function waitForBar(app: ElectronApplication): Promise<Page> {
   throw new Error('recorder bar window did not appear')
 }
 
+/** Confirms the in-place confirmation popover (components/ConfirmPopover.tsx) that a destructive
+ * button opens - the app no longer uses the native window.confirm(). */
+export async function acceptConfirm(win: Page): Promise<void> {
+  await win.locator('.confirm-pop .confirm-yes').click({ timeout: 10_000 })
+  await win.locator('.confirm-pop').waitFor({ state: 'detached', timeout: 5_000 })
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }

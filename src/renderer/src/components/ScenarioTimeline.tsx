@@ -3,7 +3,7 @@ import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ScenarioAction } from '@shared/types'
 import { SCENARIO_MAX_MS } from '@shared/defaults'
-import { scenarioEnd, scenarioSchedule } from '@shared/scenario'
+import { describeAction, scenarioEnd, scenarioSchedule } from '@shared/scenario'
 import type { ScheduledAction } from '@shared/scenario'
 import { KIND_ICON } from '../scenario/kindMeta'
 import { formatStartTime, formatMinSec, spanLabel, spanWidthPx } from '../scenario/format'
@@ -108,7 +108,7 @@ interface MarkerProps {
 
 function ScenarioMarker(props: MarkerProps): JSX.Element {
   const { action, slot, pinned, pxPerMs, pxPerMsRef, selected, onSelect, onMove } = props
-  const Icon = KIND_ICON[action.kind]
+  const Icon = KIND_ICON[describeAction(action).kindKey]
   const over = slot.end > SCENARIO_MAX_MS
   const label = spanLabel(action)
 

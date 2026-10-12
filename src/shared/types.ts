@@ -45,6 +45,28 @@ export interface CursorData {
   clicks: ClickEvent[]
   /** how the data was captured; polling has no click events */
   source: 'uiohook' | 'polling' | 'none'
+  /**
+   * Input tags for the timeline (shared/inputMarks.ts), same time base and stop cutoff as
+   * `clicks`. Missing in recordings made before 0.4.1 or without the global hook - the timeline
+   * then derives its click tags from `clicks`.
+   */
+  input?: InputMark[]
+}
+
+/** What an input tag on the timeline stands for. */
+export type InputMarkKind = 'click' | 'doubleClick' | 'rightClick' | 'middleClick' | 'drag' | 'scroll' | 'type' | 'key'
+
+/**
+ * One input tag on the timeline. Never carries typed text: a `type` mark is only its span, and
+ * `label` exists for `key` marks only - a combination or a special key ("Ctrl+C", "Enter").
+ */
+export interface InputMark {
+  /** source ms */
+  t: number
+  /** source ms where it ends; equal to `t` for an instant (the clicks) */
+  end: number
+  kind: InputMarkKind
+  label?: string
 }
 
 export interface RecordingInfo {
@@ -204,11 +226,21 @@ export interface WindowRect {
   y: number
   w: number
   h: number
+  /** exe name of the window's process, lower case (e.g. 'chrome.exe'); since 0.4.1 */
+  app?: string
+  /** browsers only: the page itself, without the tab strip and the address bar, normalized to the
+   * display like the window (and inside it); since 0.4.1 */
+  content?: { x: number; y: number; w: number; h: number }
+  /** share of the window that was really visible, not covered by other windows. Set by snapshots
+   * since 0.4.1, which already leave out windows hidden behind others (with every window on screen as
+   * an occluder); older snapshots list every window and are filtered in the editor instead. */
+  visible?: number
 }
 
 export interface WindowSnapshot {
   /** ms since recording start (0 = at start, duration = at the end) */
   t: number
+  /** topmost first */
   windows: WindowRect[]
 }
 
@@ -477,7 +509,13 @@ export interface ScenarioActionBase {
    * ends after the last one's). Read it through actionPauseMs(). */
   pauseMs: number
 }
-export interface ScenarioClickAction extends ScenarioActionBase { kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick' }
+export interface ScenarioClickAction extends ScenarioActionBase {
+  kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick'
+  /** "Position only, no click": the replay only brings the cursor to (x, y) and presses nothing
+   * (no button, no modifiers), for hover effects. Absent = false; only `true` survives
+   * migrateScenario. Set it through setActionHoverOnly() (shared/scenario.ts). */
+  hoverOnly?: boolean
+}
 export interface ScenarioDragAction extends ScenarioActionBase { kind: 'drag'; toX: number; toY: number; dragPath: ScenarioPathPoint[] }
 /** deltaY/deltaX in wheel notches (positive = down / right); replayed as that many wheel events spread over the action's durationMs */
 export interface ScenarioScrollAction extends ScenarioActionBase { kind: 'scroll'; deltaY: number; deltaX: number }
@@ -525,6 +563,13 @@ export interface ReplayState {
   index: number
   total: number
   message?: string
+  /** true for a dry run (window.zc.scenario.preview): the same replay, but nothing is recorded */
+  preview?: boolean
+}
+/** How a dry run (window.zc.scenario.preview) ended: it ran to the end, it was aborted (Escape, Stop), or the replay helper failed. */
+export interface ScenarioPreviewResult {
+  outcome: 'done' | 'aborted' | 'error'
+  message?: string
 }
 /** what the overlay window draws; x/y (and toX/toY) are DIP relative to the display's top-left */
 export interface OverlayEffect {
@@ -540,6 +585,8 @@ export interface OverlayEffect {
   /** scroll only: wheel notches, same sign convention as ScenarioScrollAction (positive = down/right) */
   deltaY?: number
   deltaX?: number
+  /** a click kind with ScenarioClickAction.hoverOnly: the cursor only arrives, so a hover marker instead of a ripple */
+  hoverOnly?: boolean
 }
 
 /** Options for recording.prepare() / useRecorder's start(): what to capture besides the screen

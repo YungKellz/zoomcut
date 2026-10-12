@@ -122,6 +122,17 @@ describe('scenario storage: version migration', () => {
     await saveScenario(original)
     expect(await loadScenario('s2')).toEqual(original)
   })
+
+  it('keeps a "position only" click through save and load, and drops a flag that is not a real true', async () => {
+    await fsp.mkdir(scenarioDir('s6'), { recursive: true })
+    const hovered = { ...click('a'), hoverOnly: true } as ScenarioAction
+    const garbage = { ...click('b'), hoverOnly: 'yes' } as unknown as ScenarioAction
+    await saveScenario(scenario('s6', [hovered, garbage]))
+    const loaded = await loadScenario('s6')
+    expect(loaded.version).toBe(2)
+    expect(loaded.actions[0]).toEqual(hovered)
+    expect(loaded.actions[1]).toEqual(click('b'))
+  })
 })
 
 describe('scenario storage: save and delete share one queue per scenario', () => {
