@@ -137,14 +137,27 @@ export class ScenarioCapture extends EventEmitter<ScenarioCaptureEvents> {
     return this.state.phase !== 'idle'
   }
 
+  /** the scenario being captured or saved: its folder exists from start() on, its scenario.json only once it is saved */
+  activeId(): string | null {
+    return this.id
+  }
+
   async start(displayId: number): Promise<void> {
     if (this.state.phase !== 'idle') throw new Error('A scenario capture is already in progress')
     if (this.otherBusyCheck?.()) throw new Error('A recording is already in progress')
 
     const display = screen.getAllDisplays().find((d) => d.id === displayId) ?? screen.getPrimaryDisplay()
-    const id = await newScenarioId()
-    const dir = scenarioDir(id)
-    await fsp.mkdir(join(dir, 'shots'), { recursive: true })
+    let id: string
+    let dir: string
+    try {
+      id = await newScenarioId()
+      dir = scenarioDir(id)
+      await fsp.mkdir(join(dir, 'shots'), { recursive: true })
+    } catch (err) {
+      // the agent control waits for this to be reported (it would otherwise time out)
+      this.emit('failed', err instanceof Error ? err : new Error(String(err)))
+      throw err
+    }
 
     const hook = await acquireHook()
     if (!hook) {
