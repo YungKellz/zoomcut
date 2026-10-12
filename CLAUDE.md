@@ -47,10 +47,16 @@ an NSIS installer and a portable exe; installed copies auto-update from them.
 - `src/preload/index.ts` – exposes `window.zc`, typed by `src/shared/api.ts`.
 - `src/main/agent` – agent control (MCP): `server.ts` (loopback `POST /rpc`, Electron-free), `methods.ts` (the RPC table, Electron and
   disk injected), `rendererBridge.ts` (`agent:command` / `agent:reply` with a pending map, the renderer's `agent:status`
-  cache), `waiter.ts`, `mcpConfig.ts` (what the Home dialog shows), `index.ts` (Electron wiring, `agent:*` IPC, discovery file).
+  cache; commands time out after 60 s except exports, a reload / crash / closed window rejects them; `windowTarget.ts` detects
+  those from the window / webContents events), `waiter.ts`,
+  `mcpConfig.ts` (what the Home dialog shows), `launchArgs.ts` (`--agent-control` / env decisions, pure), `index.ts` (Electron
+  wiring, `agent:*` IPC, discovery file). A client that hangs up aborts the signal handlers get (`AgentMethodHandler`): starts
+  are discarded, exports are cancelled through the renderer's `cancel` command, `stop_recording` and edits are not abortable.
   `src/mcp` – the stdio MCP bridge: `tools.ts` (the 18 tools and their descriptions), `rpc.ts` (finds / starts the app,
-  node:http client), `zoomcut-mcp.ts` (entry); built by `mcp.vite.config.ts`, shipped as `resources/mcp/zoomcut-mcp.cjs`
-  (`extraResources`). The renderer side is `src/renderer/src/agent/` (executor, edits, params).
+  node:http client; ignores a discovery file whose pid is gone and a `ZOOMCUT_EXE` that is not an absolute existing path),
+  `zoomcut-mcp.ts` (entry); built by `mcp.vite.config.ts`, shipped as `resources/mcp/zoomcut-mcp.cjs`
+  (`extraResources`). The flag and discovery file names live in `src/shared/agent.ts` (`AGENT_CONTROL_FLAG`,
+  `AGENT_DISCOVERY_FILE`) and are the only copy. The renderer side is `src/renderer/src/agent/` (executor, edits, params).
 - `src/shared` – data model (`types.ts`), defaults, the API contract, `audio.ts` helpers and the pure scenario
   engine `scenario.ts` (event grouping, timing model and edits, v1 → v2 migration, replay compilation), `videoFiles.ts`
   (video extensions + the coded `video-file:<code>` errors main throws), the agent contract (`agent.ts` types + `AgentError`,
