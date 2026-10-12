@@ -68,6 +68,7 @@ describe('toAgentProjectView', () => {
       blurs: [],
       crop: { x: 0, y: 0, w: 1, h: 1 },
       frame: DEFAULT_FRAME_STYLE,
+      cursor: DEFAULT_CURSOR_SETTINGS,
       export: p.export,
       origin: { displayId: 7, audio: null, scenarioId: 's1' },
       clicks: [{ t: 500, x: 0.1, y: 0.2, button: 'left' }],
