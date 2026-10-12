@@ -108,6 +108,7 @@ const api: ZcApi = {
     onCommand: (cb) => subscribe('agent:command', cb),
     reply: (r) => ipcRenderer.invoke('agent:reply', r),
     pushStatus: (s) => ipcRenderer.invoke('agent:status', s),
+    onDataChanged: (cb) => subscribe('agent:data-changed', cb),
     mcpConfig: () => ipcRenderer.invoke('agent:mcp-config')
   },
   e2e: {

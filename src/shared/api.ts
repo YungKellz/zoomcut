@@ -33,7 +33,7 @@ import type {
   VideoFileInfo
 } from './types'
 import type { ReplayStep } from './scenario'
-import type { AgentCommand, AgentMcpConfig, AgentReply, AgentUiStatus } from './agent'
+import type { AgentCommand, AgentDataChanged, AgentMcpConfig, AgentReply, AgentUiStatus } from './agent'
 
 export type Unsubscribe = () => void
 
@@ -189,6 +189,8 @@ export interface ZcApi {
     reply(r: AgentReply): Promise<void>
     /** tells main which screen / project is open, for the agent's get_status */
     pushStatus(s: AgentUiStatus): Promise<void>
+    /** an agent changed projects / scenarios on disk (delete, create): reload the lists */
+    onDataChanged(cb: (c: AgentDataChanged) => void): Unsubscribe
     /** MCP client configuration for this installation (paths of the exe and the bridge) */
     mcpConfig(): Promise<AgentMcpConfig>
   }

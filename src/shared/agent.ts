@@ -10,6 +10,7 @@ import type {
   BlurStyle,
   ClickEvent,
   CropRect,
+  CursorSettings,
   CutRange,
   ExportSettings,
   FrameStyle,
@@ -117,6 +118,7 @@ export interface AgentProjectView {
   blurs: BlurRegion[]
   crop: CropRect
   frame: FrameStyle
+  cursor: CursorSettings
   export: ExportSettings
   origin: RecordingOrigin | null
   /** recorded clicks (source ms, source-normalized position) – where zooms usually belong; at most 500 */
@@ -183,6 +185,12 @@ export type AgentReply =
 export interface AgentUiStatus {
   screen: string
   openProjectId: string | null
+}
+
+/** main → renderer after an agent changed stored data behind the UI's back (projects.delete,
+ * scenarios.create / delete), so lists can reload */
+export interface AgentDataChanged {
+  what: 'projects' | 'scenarios'
 }
 
 /** what the "AI agents (MCP)" dialog shows */

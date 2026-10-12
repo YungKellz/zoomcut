@@ -64,6 +64,7 @@ export function toAgentProjectView(project: Project): AgentProjectView {
     blurs: project.blurs,
     crop: project.crop,
     frame: project.frame,
+    cursor: project.cursor,
     export: project.export,
     origin: project.origin ?? null,
     clicks: thin(project.cursorData?.clicks ?? [], AGENT_MAX_CLICKS),
