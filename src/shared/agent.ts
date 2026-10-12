@@ -22,6 +22,11 @@ import type {
   ZoomSegment
 } from './types'
 
+/** command-line switch that turns the control server on for this run (first or second instance) */
+export const AGENT_CONTROL_FLAG = '--agent-control'
+/** discovery file name inside userData, shared by main (writes it) and the bridge (reads it) */
+export const AGENT_DISCOVERY_FILE = 'agent-control.json'
+
 export type AgentErrorCode = 'bad_params' | 'not_found' | 'busy' | 'cancelled' | 'failed' | 'no_window' | 'unknown_method'
 
 /** Thrown by RPC handlers; the server turns it into `{ ok: false, error: { code, message } }`. */
@@ -144,8 +149,9 @@ interface AgentTiming {
   pauseMs?: number
 }
 export type AgentScenarioActionInput =
-  | ({ kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick'; x: number; y: number; modifiers?: AgentModifier[] } & AgentTiming)
-  | ({ kind: 'drag'; x: number; y: number; toX: number; toY: number } & AgentTiming)
+  /** hoverOnly: the cursor only travels to (x, y), nothing is pressed (ScenarioClickAction.hoverOnly, "position only") */
+  | ({ kind: 'click' | 'doubleClick' | 'rightClick' | 'middleClick'; x: number; y: number; modifiers?: AgentModifier[]; hoverOnly?: boolean } & AgentTiming)
+  | ({ kind: 'drag'; x: number; y: number; toX: number; toY: number; modifiers?: AgentModifier[] } & AgentTiming)
   | ({ kind: 'scroll'; x: number; y: number; deltaY?: number; deltaX?: number } & AgentTiming)
   | ({ kind: 'type'; text: string } & AgentTiming)
   /** "Enter", "Ctrl+S", "Alt+Tab", "Ctrl+Shift+T", "F5" – see parseKeyChord in agentKeys.ts */
@@ -168,8 +174,10 @@ export interface AgentScenarioView {
 }
 
 /** Methods main forwards to the renderer (`agent:command`). recording.start, scenarios.record and
- * capture.start only hand the start to the right screen; main waits for the real phase itself. */
-export type AgentRendererMethod = 'projects.edit' | 'projects.export' | 'recording.start' | 'scenarios.record' | 'capture.start'
+ * capture.start only hand the start to the right screen; main waits for the real phase itself.
+ * `cancel` ({ requestId }) aborts that earlier command if it is still running (an export whose
+ * MCP call was cancelled); the cancelled command then replies `cancelled`, `cancel` itself replies ok. */
+export type AgentRendererMethod = 'projects.edit' | 'projects.export' | 'recording.start' | 'scenarios.record' | 'capture.start' | 'cancel'
 
 export interface AgentCommand {
   requestId: string
