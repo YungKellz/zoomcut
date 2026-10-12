@@ -9,7 +9,7 @@ export interface TargetContents {
   isLoading(): boolean
   getURL(): string
   on(event: 'render-process-gone', listener: () => void): unknown
-  on(event: 'did-start-navigation', listener: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void): unknown
+  on(event: 'did-navigate', listener: () => void): unknown
 }
 
 /** The slice of a BrowserWindow the adapter uses. */
@@ -20,10 +20,12 @@ export interface TargetWindow {
 
 /**
  * A window as a place to send commands to. The page the commands go to is lost when the window
- * closes, when it navigates away from the document (Ctrl+R, a dev full reload; a hash change or
- * pushState keeps the document) and when its renderer process dies, as many times as that
- * happens - so those listeners stay. A crashed page still looks loaded to isLoading() and
- * getURL(), hence the extra isCrashed() check.
+ * closes, when a navigation of the main frame commits (Ctrl+R, a dev full reload; `did-navigate`
+ * is not emitted for a hash change or pushState, which keep the document) and when its renderer
+ * process dies, as many times as that happens - so those listeners stay. Not on
+ * `did-start-navigation`: a navigation that starts is not one that commits (windows.ts cancels
+ * some in `will-navigate`, after the start), and the page lives on then. A crashed page still
+ * looks loaded to isLoading() and getURL(), hence the extra isCrashed() check.
  */
 export function createWindowTarget(win: TargetWindow): RendererTarget {
   const contents = win.webContents
@@ -33,9 +35,7 @@ export function createWindowTarget(win: TargetWindow): RendererTarget {
     onGone: (cb) => {
       win.once('closed', cb)
       contents.on('render-process-gone', cb)
-      contents.on('did-start-navigation', (details) => {
-        if (details.isMainFrame && !details.isSameDocument) cb()
-      })
+      contents.on('did-navigate', cb)
     }
   }
 }

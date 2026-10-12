@@ -38,12 +38,6 @@ function setup(): { win: FakeWindow; contents: FakeContents; gone: ReturnType<ty
   return { win, contents: win.webContents, gone, target }
 }
 
-const navigation = (over: Partial<{ isMainFrame: boolean; isSameDocument: boolean }> = {}): { isMainFrame: boolean; isSameDocument: boolean } => ({
-  isMainFrame: true,
-  isSameDocument: false,
-  ...over
-})
-
 describe('createWindowTarget', () => {
   it('sends commands over agent:command', () => {
     const { contents, target } = setup()
@@ -87,17 +81,29 @@ describe('createWindowTarget', () => {
       expect(gone).toHaveBeenCalledTimes(2)
     })
 
-    it('fires for every reload: a main frame navigation that leaves the document', () => {
+    it('fires for every reload: a main frame navigation that committed', () => {
       const { contents, gone } = setup()
-      contents.emit('did-start-navigation', navigation())
-      contents.emit('did-start-navigation', navigation())
+      contents.emit('did-navigate', {}, 'file:///app/index.html', 200, 'OK')
+      contents.emit('did-navigate', {}, 'file:///app/index.html', 200, 'OK')
       expect(gone).toHaveBeenCalledTimes(2)
     })
 
-    it('ignores navigations that keep the page: same-document ones (hash, pushState) and those of sub frames', () => {
+    it('does not fire for a navigation that started but never committed (windows.ts cancels some in will-navigate): the page lives on', () => {
       const { contents, gone } = setup()
-      contents.emit('did-start-navigation', navigation({ isSameDocument: true }))
-      contents.emit('did-start-navigation', navigation({ isMainFrame: false }))
+      // a file dropped outside a drop zone: Chromium starts a main frame navigation, will-navigate cancels it
+      contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+      contents.emit('will-navigate', { url: 'file:///dropped/audio.mp3' })
+      expect(gone).not.toHaveBeenCalled()
+      // ... and the next reload that does commit still counts
+      contents.emit('did-navigate', {}, 'file:///app/index.html', 200, 'OK')
+      expect(gone).toHaveBeenCalledTimes(1)
+    })
+
+    it('ignores navigations that keep the document: hash changes and pushState, and sub frames', () => {
+      const { contents, gone } = setup()
+      contents.emit('did-navigate-in-page', {}, 'file:///app/index.html#bar', true)
+      contents.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false })
+      contents.emit('did-frame-navigate', {}, 'file:///app/frame.html', 200, 'OK', false)
       expect(gone).not.toHaveBeenCalled()
     })
   })
