@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   acceptConfirm,
   launch,
+  mainWindowVisible,
   projectIds,
   restoreUserSettings,
   sleep,
@@ -96,7 +97,7 @@ test('discarding from the bar during the countdown leaves no project', async () 
   const state = await barReport(bar, 'cancel countdown')
   const ids = projectIds(h.recordingsDir)
   const overlay = await h.win.evaluate(() => document.querySelector('.overlay-card p')?.textContent ?? '(no overlay)')
-  const windowVisible = await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())
+  const windowVisible = await mainWindowVisible(h)
   console.log('[cancel countdown] project dirs:', JSON.stringify(ids), '| main window says:', overlay, '| visible:', windowVisible)
   await recover(bar)
   expect(state.live, 'Discard during the countdown must not leave the app recording').toBe(false)

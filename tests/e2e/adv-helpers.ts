@@ -1,4 +1,5 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import type { BrowserWindow } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
@@ -83,6 +84,20 @@ export async function waitForBar(app: ElectronApplication): Promise<Page> {
     await sleep(100)
   }
   throw new Error('recorder bar window did not appear')
+}
+
+/**
+ * Whether the main window (the one showing `h.win`) is visible. Found through its page: every window
+ * that loads the renderer ends up titled 'ZoomCut' (index.html's <title> replaces the BrowserWindow
+ * title: the bar, the replay overlay, the e2e target), and getAllWindows() is not in creation order.
+ */
+export async function mainWindowVisible(h: Harness): Promise<boolean> {
+  const win = await h.app.browserWindow(h.win)
+  try {
+    return await win.evaluate((w: BrowserWindow) => w.isVisible())
+  } finally {
+    await win.dispose()
+  }
 }
 
 /** Confirms the in-place confirmation popover (components/ConfirmPopover.tsx) that a destructive
