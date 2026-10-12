@@ -39,6 +39,10 @@ export interface SendOptions {
   signal?: AbortSignal
 }
 
+function cancelled(): AgentError {
+  return new AgentError('cancelled', 'The request was cancelled')
+}
+
 /** Exports take as long as the video is long; everything else only hands something over or edits the open project. */
 const UNLIMITED: ReadonlySet<AgentRendererMethod> = new Set(['projects.export'])
 
@@ -83,22 +87,17 @@ export class RendererBridge {
       openScenarioId: typeof openScenarioId === 'string' ? openScenarioId : null,
       compositionProjectIds: Array.isArray(compositionProjectIds) ? compositionProjectIds.filter((id): id is string => typeof id === 'string') : []
     }
+    // a status the bridge holds must be one it notices going stale: watch the page as soon as it reports
+    const target = this.getTarget()
+    if (target) this.watch(target)
   }
 
   /** Sends one command and resolves with the renderer's reply (or rejects with its error). */
   async send(method: AgentRendererMethod, params: unknown, opts: SendOptions = {}): Promise<unknown> {
     const { signal } = opts
-    const cancelled = (): AgentError => new AgentError('cancelled', 'The request was cancelled')
     if (signal?.aborted) throw cancelled()
-    const target = await this.readyTarget()
+    const target = await this.readyTarget(signal)
     if (signal?.aborted) throw cancelled()
-    if (!this.watched.has(target)) {
-      this.watched.add(target)
-      target.onGone(() => {
-        this.status = null
-        this.rejectAll('no_window', 'The ZoomCut window was closed, reloaded or crashed')
-      })
-    }
     const requestId = randomUUID()
     return new Promise((resolve, reject) => {
       let timer: NodeJS.Timeout | null = null
@@ -169,15 +168,34 @@ export class RendererBridge {
     for (const p of all) p.reject(new AgentError(code, message))
   }
 
-  private async readyTarget(): Promise<RendererTarget> {
+  /**
+   * Hears about the page going away (window closed, reload, crashed renderer): the status is
+   * forgotten and every command in flight fails. The listener stays for good and is added once
+   * per target - from setStatus() and the first readiness check, so it is there before any
+   * command is sent and a page lost in between cannot leave a stale status behind.
+   */
+  private watch(target: RendererTarget): void {
+    if (this.watched.has(target)) return
+    this.watched.add(target)
+    target.onGone(() => {
+      this.status = null
+      this.rejectAll('no_window', 'The ZoomCut window was closed, reloaded or crashed')
+    })
+  }
+
+  /** Waits for a page that can take the command; a caller that gives up meanwhile is not kept waiting. */
+  private async readyTarget(signal?: AbortSignal): Promise<RendererTarget> {
     const noWindow = (): AgentError => new AgentError('no_window', 'ZoomCut has no open window to do this in')
     const started = Date.now()
     let loadedSince: number | null = null
     for (;;) {
+      if (signal?.aborted) throw cancelled()
       const target = this.getTarget()
       if (!target) throw noWindow()
-      if (this.status !== null) return target
+      this.watch(target)
+      // a status is only good for a page that is up: one that crashed or is reloading holds commands back like a new one
       if (target.isLoaded()) {
+        if (this.status !== null) return target
         loadedSince ??= Date.now()
         if (Date.now() - loadedSince >= this.graceMs) return target
       } else {

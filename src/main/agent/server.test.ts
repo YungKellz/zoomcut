@@ -250,12 +250,14 @@ describe('a client that hangs up', () => {
 
   it('tolerates a handler that fails after the client left', async () => {
     let signal: AbortSignal | undefined
+    let release: () => void = () => undefined
+    const failNow = new Promise<void>((r) => (release = r))
     const logError = vi.fn()
     const { port } = await start(
       {
         long: async (_params, s) => {
           signal = s
-          await new Promise((r) => setTimeout(r, 60))
+          await failNow
           throw new Error('too late to matter')
         }
       },
@@ -264,8 +266,9 @@ describe('a client that hangs up', () => {
     const { req } = post(port, 'long')
     await vi.waitFor(() => expect(signal).toBeDefined())
     req.destroy()
-    await new Promise((r) => setTimeout(r, 120))
-    expect(signal!.aborted).toBe(true)
+    await vi.waitFor(() => expect(signal!.aborted).toBe(true)) // the server noticed the hang-up before the handler fails
+    release()
+    await new Promise((r) => setTimeout(r, 60))
     expect((await rpc(port, 'long')).json.ok).toBe(false) // and still serving
   })
 })

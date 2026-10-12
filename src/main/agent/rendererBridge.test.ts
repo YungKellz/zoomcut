@@ -241,13 +241,24 @@ describe('RendererBridge', () => {
       const slow = new RendererBridge(() => loading, { loadTimeoutMs: 5_000 })
       const ac = new AbortController()
       const waiting = slow.send('projects.export', {}, { signal: ac.signal })
-      setTimeout(() => {
-        slow.setStatus({ screen: 'home', openProjectId: null }) // the page is up, but the caller left a moment before
-        ac.abort()
-      }, 80)
-      expect((await rejection(waiting)).code).toBe('cancelled')
+      setTimeout(() => ac.abort(), 80)
+      expect((await rejection(waiting)).code).toBe('cancelled') // right away, not after the load timeout
       expect(target.sent).toHaveLength(0)
       expect(loading.sent).toHaveLength(0)
+
+      // ... or the page comes up a moment after the caller left
+      const late = new FakeTarget()
+      late.loaded = false
+      const slower = new RendererBridge(() => late, { loadTimeoutMs: 5_000 })
+      const leaving = new AbortController()
+      const waitingToo = slower.send('projects.export', {}, { signal: leaving.signal })
+      setTimeout(() => {
+        late.loaded = true
+        slower.setStatus({ screen: 'home', openProjectId: null })
+        leaving.abort()
+      }, 80)
+      expect((await rejection(waitingToo)).code).toBe('cancelled')
+      expect(late.sent).toHaveLength(0)
     })
 
     it('keeps no listener on the signal after the command settled', async () => {
@@ -273,6 +284,7 @@ describe('RendererBridge', () => {
       await new Promise((r) => setTimeout(r, 120))
       expect(target.sent).toHaveLength(0)
       bridge.setStatus({ screen: 'home', openProjectId: null })
+      target.loaded = true // the executor starts while the page is still loading, the command goes once it is up
       await vi.waitFor(() => expect(target.sent).toHaveLength(1))
       bridge.reply({ requestId: target.sent[0].requestId, ok: true, result: {} })
       await result
@@ -298,13 +310,72 @@ describe('RendererBridge', () => {
       expect(err.message).toContain('finish loading')
     })
 
-    it('does not wait once a status is known', async () => {
+    it('does not wait once a status is known and the page is up', async () => {
       const target = new FakeTarget()
-      target.loaded = false
       const bridge = new RendererBridge(() => target)
       bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
       void bridge.send('projects.edit', {}).catch(() => undefined)
       await vi.waitFor(() => expect(target.sent).toHaveLength(1), { timeout: 200 })
+    })
+
+    it('never hands a command to a page that is not up, whatever status it reported before', async () => {
+      const target = new FakeTarget()
+      const bridge = new RendererBridge(() => target, { loadTimeoutMs: 150 })
+      bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
+      target.loaded = false // crashed, or a reload under way
+      const err = await rejection(bridge.send('projects.export', {}))
+      expect(err.code).toBe('no_window')
+      expect(err.message).toContain('finish loading')
+      expect(target.sent).toHaveLength(0)
+    })
+
+    it('goes ahead once that page is back', async () => {
+      const target = new FakeTarget()
+      const bridge = new RendererBridge(() => target)
+      bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
+      target.loaded = false
+      void bridge.send('projects.edit', {}).catch(() => undefined)
+      await new Promise((r) => setTimeout(r, 120))
+      expect(target.sent).toHaveLength(0)
+      target.loaded = true
+      await vi.waitFor(() => expect(target.sent).toHaveLength(1), { timeout: 500 })
+    })
+  })
+
+  describe('losing the page before the first command', () => {
+    it('watches the page as soon as it reports, not only when a command is sent', () => {
+      const target = new FakeTarget()
+      const bridge = new RendererBridge(() => target)
+      bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
+      expect(target.gone).toHaveLength(1)
+      bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
+      expect(target.gone).toHaveLength(1) // once per target
+      target.gone[0]() // the renderer crashed or reloaded while the agent only used main-side tools
+      expect(bridge.getStatus()).toBeNull()
+    })
+
+    it('rejects a command no_window after such a crash instead of sending it into the void', async () => {
+      const target = new FakeTarget()
+      const bridge = new RendererBridge(() => target, { loadTimeoutMs: 150 })
+      bridge.setStatus({ screen: 'editor', openProjectId: 'p1' })
+      target.loaded = false
+      target.gone[0]()
+      const err = await rejection(bridge.send('projects.export', {}))
+      expect(err.code).toBe('no_window')
+      expect(target.sent).toHaveLength(0)
+    })
+
+    it('watches a window that only appeared after the status arrived on the first readiness check', async () => {
+      let target: FakeTarget | null = null
+      const bridge = new RendererBridge(() => target, { graceMs: 0 })
+      bridge.setStatus({ screen: 'home', openProjectId: null }) // no window to watch yet
+      target = new FakeTarget()
+      expect(target.gone).toHaveLength(0)
+      const result = bridge.send('projects.edit', {})
+      await vi.waitFor(() => expect(target!.sent).toHaveLength(1))
+      expect(target.gone).toHaveLength(1)
+      target.gone[0]()
+      expect((await rejection(result)).code).toBe('no_window')
     })
   })
 
