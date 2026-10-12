@@ -5,6 +5,8 @@ directories:
   buildResources: build
 files:
   - out/**
+  # the MCP bridge ships next to the exe (extraResources below), not inside the asar
+  - '!out/mcp/**'
   - package.json
 asarUnpack:
   - node_modules/ffmpeg-static/**
@@ -12,6 +14,10 @@ asarUnpack:
 # bundled CC0 music library (resources/music) for the "Add music" picker - see
 # src/main/audio/musicLibrary.ts musicDir(), which reads it from here once packaged
 extraResources:
+  # the stdio MCP bridge for AI agents (src/mcp), run under ZoomCut.exe with ELECTRON_RUN_AS_NODE=1 -
+  # see src/main/agent/mcpConfig.ts
+  - from: out/mcp/zoomcut-mcp.cjs
+    to: mcp/zoomcut-mcp.cjs
   - from: resources/music
     to: music
     filter:
