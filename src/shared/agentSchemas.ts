@@ -12,7 +12,8 @@ import { z } from 'zod'
 import type { AgentEditOp, AgentExportParams, AgentScenarioInput } from './agent'
 import { AGENT_SCENARIO_MAX_ACTIONS, AGENT_SCROLL_MAX_NOTCHES } from './agentScenario'
 import { KEY_CHORD_HELP } from './agentKeys'
-import { GIF_FPS_OPTIONS, GRADIENT_PRESETS, MP4_FPS_OPTIONS } from './defaults'
+import { GIF_FPS_OPTIONS, GRADIENT_PRESETS, MP4_FPS_OPTIONS, SCENARIO_MAX_MS } from './defaults'
+import { DURATION_MAX_MS, PAUSE_MAX_MS } from './scenario'
 
 /** ids of recordings and scenarios are timestamp folder names: "2026-01-02_03-04-05" or "...-2" */
 export const ID_PATTERN = /^[0-9A-Za-z_-]+$/
@@ -207,14 +208,27 @@ export const agentEditOpSchema = z.discriminatedUnion('op', [
     .describe('Cursor highlight, click ripples and follow-zoom behaviour; omitted fields stay as they are, at least one must be given')
 ])
 
-const timing = {
+/**
+ * durationMs and pauseMs of an action. A duration is raised to the kind's minimum and never lowered:
+ * above the maximum is an error (buildAgentScenario checks it exactly). The maximum is a minute, but a
+ * scroll of over 900 notches cannot be replayed in one, so its schema allows the longest scenario instead.
+ */
+const timing = (maxDurationMs: number) => ({
   durationMs: z
     .number()
     .min(0)
-    .describe('How long the action takes, ms. A mouse action first glides there, then happens near the end of this time. Raised to the kind minimum (click 200, double click 300, drag 500, key 150, type 25 per character, scroll about 300). Defaults: click and scroll 1000, drag 1500, key 500, type 80 per character')
+    .max(maxDurationMs)
+    .describe(
+      `How long the action takes, ms, at most ${DURATION_MAX_MS}` +
+        (maxDurationMs > DURATION_MAX_MS ? ' (or the scroll\'s own minimum when that is longer)' : '') +
+        '; more is an error. A mouse action first glides there, then happens near the end of this time. Raised to the kind minimum ' +
+        '(click 200, double click 300, drag 500, position-only click 150, key 150, type 25 per character, scroll 40 per notch and at least 300). ' +
+        `Defaults: click and scroll 1000, drag 1500, key 500, type 80 per character (at most ${DURATION_MAX_MS} in all)`
+    )
     .optional(),
-  pauseMs: z.number().min(0).max(60_000).describe('Stillness after the action, ms (default 1500). Replay is strictly sequential: each action starts when the previous one and its pause are over').optional()
-}
+  pauseMs: z.number().min(0).max(PAUSE_MAX_MS).describe('Stillness after the action, ms, at most 60000 (default 1500). Replay is strictly sequential: each action starts when the previous one and its pause are over').optional()
+})
+const modifiers = (what: string) => z.array(z.enum(['ctrl', 'shift', 'alt', 'meta'])).describe(what).optional()
 const point = {
   x: z.number().describe('Horizontal position in DIP, relative to the left edge of the display (0,0 = its top-left corner). A take_screenshot image pixel divided by its `scale`'),
   y: z.number().describe('Vertical position in DIP, relative to the top edge of the display')
@@ -225,18 +239,23 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.enum(['click', 'doubleClick', 'rightClick', 'middleClick']),
       ...point,
-      modifiers: z.array(z.enum(['ctrl', 'shift', 'alt', 'meta'])).describe('Keys held during the click, e.g. ["ctrl"]').optional(),
-      ...timing
+      modifiers: modifiers('Keys held during the click, e.g. ["ctrl"]. Not together with hoverOnly'),
+      hoverOnly: z
+        .boolean()
+        .describe('true = only move the pointer to (x, y) and press nothing, not even `modifiers` (for hover effects and tooltips); the kind is then irrelevant. Default false')
+        .optional(),
+      ...timing(DURATION_MAX_MS)
     })
     .strict()
-    .describe('Move the mouse to (x, y) and click'),
+    .describe('Move the mouse to (x, y) and click; with hoverOnly only move it there'),
   z
     .object({
       kind: z.literal('drag'),
       ...point,
       toX: z.number().describe('Where the button is released, DIP relative to the display'),
       toY: z.number().describe('Where the button is released, DIP relative to the display'),
-      ...timing
+      modifiers: modifiers('Keys held during the drag, e.g. ["shift"]'),
+      ...timing(DURATION_MAX_MS)
     })
     .strict()
     .describe('Press the left button at (x, y), move to (toX, toY), release'),
@@ -244,9 +263,21 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('scroll'),
       ...point,
-      deltaY: z.number().int().min(-AGENT_SCROLL_MAX_NOTCHES).max(AGENT_SCROLL_MAX_NOTCHES).describe('Wheel notches, positive = content scrolls down (default 3 when deltaX is not given either)').optional(),
-      deltaX: z.number().int().min(-AGENT_SCROLL_MAX_NOTCHES).max(AGENT_SCROLL_MAX_NOTCHES).describe('Horizontal wheel notches, positive = right').optional(),
-      ...timing
+      deltaY: z
+        .number()
+        .int()
+        .min(-AGENT_SCROLL_MAX_NOTCHES)
+        .max(AGENT_SCROLL_MAX_NOTCHES)
+        .describe(`Wheel notches, positive = content scrolls down, at most ${AGENT_SCROLL_MAX_NOTCHES} either way (default 3 when deltaX is not given either)`)
+        .optional(),
+      deltaX: z
+        .number()
+        .int()
+        .min(-AGENT_SCROLL_MAX_NOTCHES)
+        .max(AGENT_SCROLL_MAX_NOTCHES)
+        .describe(`Horizontal wheel notches, positive = right, at most ${AGENT_SCROLL_MAX_NOTCHES} either way`)
+        .optional(),
+      ...timing(SCENARIO_MAX_MS)
     })
     .strict()
     .describe('Move the mouse to (x, y) and turn the wheel'),
@@ -254,7 +285,7 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('type'),
       text: z.string().min(1).max(1000).describe('Text to type into whatever has focus (any language; typed as Unicode). No newlines or tabs: use key actions "Enter" / "Tab"'),
-      ...timing
+      ...timing(DURATION_MAX_MS)
     })
     .strict()
     .describe('Type text, one character at a time, into the focused field'),
@@ -262,7 +293,7 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('key'),
       key: z.string().min(1).describe(`A key or shortcut, e.g. "Enter", "Escape", "Ctrl+S", "Ctrl+Shift+T", "Alt+Tab", "F5". ${KEY_CHORD_HELP}`),
-      ...timing
+      ...timing(DURATION_MAX_MS)
     })
     .strict()
     .describe('Press a key or a shortcut chord')

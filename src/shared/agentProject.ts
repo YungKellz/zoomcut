@@ -4,39 +4,15 @@
  * answers projects.get from disk while the renderer answers projects.edit from the edited project.
  */
 import type { AgentProjectView } from './agent'
+import { keepSegments, outputDuration } from './timeline'
 import type { CutRange, Project } from './types'
 
 /** at most this many recorded clicks are listed; more are thinned out evenly so the whole recording stays covered */
 export const AGENT_MAX_CLICKS = 500
 
-/**
- * Length of the project once the cuts are applied. Mirrors renderer/engine/timeline.ts
- * (normalizeCuts → keepSegments → outputDuration, which drops kept pieces shorter than
- * MIN_SEGMENT_MS); shared code cannot import renderer code, agentProject.test.ts pins the two together.
- */
+/** Length of the project once the cuts are applied: the same rule the editor, export and compositions use (shared/timeline.ts). */
 export function outputDurationMs(durationMs: number, cuts: CutRange[]): number {
-  const MIN_SEGMENT_MS = 40
-  const spans = cuts
-    .map((c) => ({
-      start: Math.max(0, Math.min(durationMs, Math.min(c.start, c.end))),
-      end: Math.max(0, Math.min(durationMs, Math.max(c.start, c.end)))
-    }))
-    .filter((c) => c.end - c.start >= 1)
-    .sort((a, b) => a.start - b.start)
-  const merged: Array<{ start: number; end: number }> = []
-  for (const cut of spans) {
-    const last = merged[merged.length - 1]
-    if (last && cut.start <= last.end) last.end = Math.max(last.end, cut.end)
-    else merged.push({ ...cut })
-  }
-  let total = 0
-  let cursor = 0
-  for (const cut of merged) {
-    if (cut.start - cursor >= MIN_SEGMENT_MS) total += cut.start - cursor
-    cursor = Math.max(cursor, cut.end)
-  }
-  if (durationMs - cursor >= MIN_SEGMENT_MS) total += durationMs - cursor
-  return total
+  return outputDuration(keepSegments(durationMs, cuts))
 }
 
 function thin<T>(items: T[], max: number): T[] {
