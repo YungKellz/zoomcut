@@ -356,6 +356,53 @@ describe('projects', () => {
     expect(await call(h, 'projects.export', { projectId: 'p1', format: 'gif', folder: 'C:\\out', gifColors: 64 })).toEqual({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
     expect(h.sent).toEqual([{ method: 'projects.export', params: { projectId: 'p1', format: 'gif', folder: 'C:\\out', gifColors: 64 } }])
   })
+
+  describe('an export while the machine is busy', () => {
+    it('is refused during a recording (also one being saved), a capture and a scenario preview, and goes through after', async () => {
+      const h = harness()
+      h.rendererReply.value = () => ({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+      h.recorder.active = true
+      const recording = await code(call(h, 'projects.export', { projectId: 'p1' }))
+      expect(recording.code).toBe('busy')
+      expect(recording.message).toMatch(/recording.*in progress/)
+      h.recorder.bar = { phase: 'recording', startedAt: 1, countdownEndsAt: null }
+      expect((await code(call(h, 'projects.export', { projectId: 'p1' }))).code).toBe('busy')
+      h.recorder.active = false
+
+      h.capture.state = { phase: 'capturing', actions: 0, startedAt: 1 }
+      expect((await code(call(h, 'projects.export', { projectId: 'p1' }))).code).toBe('busy')
+      h.capture.state = { phase: 'idle', actions: 0, startedAt: null }
+
+      let preview = true
+      const p = harness({ otherBusy: () => preview })
+      p.rendererReply.value = () => ({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+      expect((await code(call(p, 'projects.export', { projectId: 'p1' }))).code).toBe('busy')
+      preview = false
+
+      // nothing reached the renderer while it was refused
+      expect(h.sent).toEqual([])
+      expect(p.sent).toEqual([])
+      expect(await call(h, 'projects.export', { projectId: 'p1' })).toEqual({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+      expect(await call(p, 'projects.export', { projectId: 'p1' })).toEqual({ outputPath: 'C:\\out\\x.mp4', bytes: 10 })
+    })
+
+    it('is refused while a start is on its way to the renderer', async () => {
+      const h = harness()
+      h.rendererReply.value = (method) => (method === 'recording.start' ? new Promise(() => undefined) : { outputPath: 'x.mp4', bytes: 1 })
+      const start = call(h, 'recording.start')
+      await vi.waitFor(() => expect(h.sent).toHaveLength(1))
+      expect((await code(call(h, 'projects.export', { projectId: 'p1' }))).code).toBe('busy')
+      expect(h.sent.map((s) => s.method)).toEqual(['recording.start'])
+      expect((await code(start)).code).toBe('failed') // the start times out and lets go of the lock
+      expect(await call(h, 'projects.export', { projectId: 'p1' })).toEqual({ outputPath: 'x.mp4', bytes: 1 })
+    })
+
+    it('still answers not_found for an unknown recording before it says busy', async () => {
+      const h = harness()
+      h.recorder.active = true
+      expect((await code(call(h, 'projects.export', { projectId: 'ghost' }))).code).toBe('not_found')
+    })
+  })
 })
 
 describe('scenarios', () => {

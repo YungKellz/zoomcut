@@ -465,6 +465,27 @@ describe('projects.export', () => {
     expect(okResult(await call('projects.export', { projectId: 'p2' }))).toEqual({ outputPath: 'b.mp4', bytes: 2 })
   })
 
+  it.each([
+    ['recording', /recording is in progress/],
+    ['replay', /replay/],
+    ['capture', /capture is in progress/]
+  ] as const)('answers busy while a %s runs, touches nothing, and exports once it has ended', async (kind, message) => {
+    disk.set('p2', makeProject('p2'))
+    useStore.getState().setBusy(kind, true)
+    const error = errorOf(await call('projects.export', { projectId: 'p2' }))
+    expect(error.code).toBe('busy')
+    expect(error.message).toMatch(/cannot export now/)
+    expect(error.message).toMatch(message)
+    expect(runExportMock).not.toHaveBeenCalled()
+    expect(zc.projects.save).not.toHaveBeenCalled()
+    expect(useStore.getState().notice).toBeNull()
+
+    // the refusal did not take the export slot
+    useStore.getState().setBusy(kind, false)
+    runExportMock.mockResolvedValueOnce({ outputPath: 'after.mp4', bytes: 3 })
+    expect(okResult(await call('projects.export', { projectId: 'p2' }))).toEqual({ outputPath: 'after.mp4', bytes: 3 })
+  })
+
   it('reports an exporter failure, clears the notice and frees the slot', async () => {
     disk.set('p2', makeProject('p2'))
     runExportMock.mockRejectedValueOnce(new Error('ffmpeg exploded'))

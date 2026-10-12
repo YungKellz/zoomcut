@@ -438,6 +438,11 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
 
     'projects.export': define('projects.export', async (p, signal) => {
       await assertProjectExists(p.projectId)
+      // an export and a recording / replay / capture would compete for the machine; checked after the await,
+      // as one may have started meanwhile
+      if (starting || recorder.isActive() || capture.isActive() || deps.otherBusy?.()) {
+        fail('busy', 'A recording (also one that is being saved), a scenario replay or preview, or a scenario capture is in progress; export once it has ended (see get_status)')
+      }
       // a client that gave up must not leave the export running: the renderer is told to stop it
       return renderer.send('projects.export', p, { signal })
     }),

@@ -28,7 +28,8 @@ import {
  *   from disk) and saves it at once, so the main process, which answers get_project from disk,
  *   never sees stale data.
  * - projects.export runs the editor's own exporter, with no dialog; a store notice tells the user.
- *   `cancel` aborts such an export by its request id (the export then replies `cancelled`).
+ *   It answers `busy` while a recording, replay or capture runs. `cancel` aborts such an export by
+ *   its request id (the export then replies `cancelled`).
  * - recording.start, scenarios.record and capture.start only hand the start to the screen that owns
  *   the recorder (store.pendingStart, like "Record again") and reply once that screen took it;
  *   the main process waits for the real recorder / capture phase itself. They leave the screen they
@@ -237,9 +238,14 @@ function throwIfCancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new AgentError('cancelled', 'the export was cancelled')
 }
 
+/** What an export must not run alongside: it would compete with them for the machine. */
+const EXPORT_BLOCKERS: readonly BusyKind[] = ['recording', 'replay', 'capture']
+
 async function exportProject(params: unknown, requestId: string): Promise<ExportFinishResult> {
   const p = parseExportParams(params)
   if (exporting) throw new AgentError('busy', 'another export is already running; wait for it to finish')
+  const blocker = EXPORT_BLOCKERS.find((kind) => useStore.getState().busy[kind])
+  if (blocker) throw new AgentError('busy', `cannot export now: ${BUSY_MESSAGES[blocker]}`)
   exporting = true
   // registered before the first await: a `cancel` may arrive while the project is still loading
   const controller = new AbortController()
