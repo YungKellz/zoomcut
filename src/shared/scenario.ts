@@ -221,7 +221,8 @@ function baseKeyLabel(e: { scan: number; vk: number; extended: boolean }): strin
   return `Key${e.scan}`
 }
 
-function describeKeyLabel(e: RawKeyEvent): string {
+/** "Ctrl+Shift+T" style label of a key chord: held modifiers in Ctrl, Shift, Alt, Win order, then the key. */
+export function describeKeyLabel(e: Pick<RawKeyEvent, 'mods' | 'scan' | 'vk' | 'extended'>): string {
   const parts: string[] = []
   if (e.mods.ctrl) parts.push('Ctrl')
   if (e.mods.shift) parts.push('Shift')
@@ -704,7 +705,7 @@ export function setAllPauses(actions: ScenarioAction[], ms: number): ScenarioAct
 }
 
 /** Control characters (C0, DEL, C1) cannot be typed as text: Enter and Tab are `key` actions of their own. */
-function stripControlChars(text: string): string {
+export function stripControlChars(text: string): string {
   let out = ''
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0
