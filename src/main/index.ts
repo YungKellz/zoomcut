@@ -10,6 +10,12 @@ import { ensureDirs } from './storage'
 import { ScenarioCapture } from './scenario/capture'
 import { ScenarioPreview } from './scenario/preview'
 import { cleanupHelperScripts } from './scenario/inputHelper'
+import { agentControlRequested, setupAgentControl, type AgentControl } from './agent'
+
+// Lets a test (or a second install) keep this run's userData - settings, agent-control.json - apart from
+// the real one; must happen before anything reads the path, the single-instance lock included.
+const userDataOverride = process.env['ZOOMCUT_USER_DATA']
+if (userDataOverride) app.setPath('userData', userDataOverride)
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -29,13 +35,21 @@ let recorder: RecordingController | null = null
 let scenarioCapture: ScenarioCapture | null = null
 let scenarioPreview: ScenarioPreview | null = null
 let updater: Updater | null = null
+let agentControl: AgentControl | null = null
+// MCP agent control is off unless this run (or a second launch handing over to it) asks for it
+let agentWanted = agentControlRequested(process.argv)
 
 // Tests launch their own instance next to a running dev app, so they skip the lock.
 const gotLock = process.env['ZOOMCUT_E2E'] ? true : app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // `ZoomCut.exe --agent-control` started while the app already runs: this copy switches it on
+    if (agentControlRequested(argv)) {
+      agentWanted = true
+      void agentControl?.enable()
+    }
     const win = getMainWindow()
     if (win) {
       if (win.isMinimized()) win.restore()
@@ -60,6 +74,9 @@ if (!gotLock) {
     updater = new Updater()
     registerIpc({ recorder, scenarioCapture, scenarioPreview, exporter, updater, converter: new GifConverter() })
 
+    agentControl = setupAgentControl({ recorder, scenarioCapture, scenarioPreview })
+    if (agentWanted) void agentControl.enable()
+
     createMainWindow()
     updater.start()
 
@@ -77,6 +94,7 @@ if (!gotLock) {
     recorder?.dispose()
     scenarioCapture?.dispose()
     scenarioPreview?.dispose()
+    agentControl?.dispose()
     updater?.dispose()
     void cleanupHelperScripts()
   })

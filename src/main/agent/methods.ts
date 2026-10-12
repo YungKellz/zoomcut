@@ -1,5 +1,4 @@
 import type { EventEmitter } from 'node:events'
-import { isAbsolute } from 'node:path'
 import type { z } from 'zod'
 import { AgentError, type AgentErrorCode } from '@shared/agent'
 import { buildAgentScenario, toAgentScenarioView } from '@shared/agentScenario'
@@ -289,7 +288,6 @@ export function createAgentMethods(deps: AgentDeps): AgentMethodTable {
     }),
 
     'projects.export': define('projects.export', async (p) => {
-      if (p.folder !== undefined && !isAbsolute(p.folder)) fail('bad_params', `projects.export: folder must be an absolute path, got "${p.folder}"`)
       await assertProjectExists(p.projectId)
       return renderer.send('projects.export', p)
     }),
