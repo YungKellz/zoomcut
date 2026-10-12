@@ -1,5 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, screen, session } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { createWriteStream, promises as fsp, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 import type {
@@ -110,7 +111,19 @@ function closeAudioStreams(a: ActiveRecording): Promise<void> {
   ).then(() => undefined)
 }
 
-export class RecordingController {
+/** What the agent control (src/main/agent) listens to; the renderer never sees these. */
+export interface RecorderEvents {
+  /** every change of the floating bar state: countdown, recording, processing, idle */
+  state: [RecorderBarState]
+  /** a recording was saved (after the folder is complete and the controller is free again) */
+  finished: [{ project: Project; warnings: RecordingWarning[] }]
+  /** an attempt was discarded: bar X, Esc during a replay, or a start that fell through */
+  cancelled: [{ id: string }]
+  /** an attempt failed: prepare() threw (id null), or finish() did */
+  failed: [{ id: string | null; error: Error }]
+}
+
+export class RecordingController extends EventEmitter<RecorderEvents> {
   private active: ActiveRecording | null = null
   private selectedSource: Electron.DesktopCapturerSource | null = null
   private sources = new Map<string, Electron.DesktopCapturerSource>()
@@ -259,6 +272,7 @@ export class RecordingController {
       if (this.active?.loopback) await this.active.loopback.dispose()
       this.active = null
       this.selectedSource = null
+      this.emit('failed', { id: null, error: err instanceof Error ? err : new Error(String(err)) })
       throw err
     }
   }
@@ -400,6 +414,17 @@ export class RecordingController {
   }
 
   async finish(id: string): Promise<{ project: Project; warnings: RecordingWarning[] }> {
+    try {
+      const result = await this.finishRecording(id)
+      this.emit('finished', result)
+      return result
+    } catch (err) {
+      this.emit('failed', { id, error: err instanceof Error ? err : new Error(String(err)) })
+      throw err
+    }
+  }
+
+  private async finishRecording(id: string): Promise<{ project: Project; warnings: RecordingWarning[] }> {
     const a = this.requireActive(id)
     const progress = (p: Omit<RecordingProgress, 'id'>): void => {
       getMainWindow()?.webContents.send('recording:progress', { id, ...p })
@@ -605,6 +630,7 @@ export class RecordingController {
     // maxRetries/retryDelay: a still-closing audio stream fd (or antivirus) can otherwise make
     // this fail on Windows even after closeAudioStreams() above has resolved
     await fsp.rm(a.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    this.emit('cancelled', { id })
   }
 
   dispose(): void {
@@ -643,6 +669,7 @@ export class RecordingController {
   private setBarState(state: RecorderBarState): void {
     this.barState = state
     if (this.bar && !this.bar.isDestroyed()) this.bar.webContents.send('bar:state', state)
+    this.emit('state', state)
   }
 
   private requireActive(id: string): ActiveRecording {
