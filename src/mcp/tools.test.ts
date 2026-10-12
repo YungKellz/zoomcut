@@ -84,6 +84,33 @@ describe('the tool list', () => {
     expect(by['stop_scenario_capture']).toContain('already ended')
   })
 
+  it('lists what a start is refused for, and what an export is', () => {
+    const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.description]))
+    for (const name of ['start_recording', 'record_scenario', 'start_scenario_capture']) {
+      expect(by[name], name).toContain('`busy`')
+      for (const refusal of ['an export is running', 'export dialog', 'composition export', 'export_project', 'voiceover', 'GIF conversion', 'scenario Preview', 'recording', 'scenario capture']) {
+        expect(by[name], `${name}: ${refusal}`).toContain(refusal)
+      }
+    }
+    expect(by['export_project']).toMatch(/`busy` while a recording.*scenario replay.*scenario capture/)
+    expect(by['delete_project']).toContain('exported')
+  })
+
+  it('documents what a scenario action can hold, and what get_scenario hands back', () => {
+    const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.description]))
+    const create = by['create_scenario']
+    expect(create).toMatch(/hoverOnly: true.*only move the cursor.*press nothing/)
+    expect(create).toMatch(/only on these click kinds, and not together with modifiers/)
+    expect(create).toMatch(/drag \(x, y to toX, toY, optional `modifiers`/)
+    expect(create).toContain('`id` is ignored')
+    expect(create).toContain('rejected as outside the display')
+    const get = by['get_scenario']
+    expect(get).toContain('hoverOnly: true')
+    expect(get).toContain('passed back as they are')
+    expect(get).toContain('`id`')
+    expect(get).toContain('rejects it as outside the display')
+  })
+
   it('marks reads as read-only and deletes as destructive', async () => {
     const c = await connect(recording().rpc)
     const { tools } = await c.listTools()

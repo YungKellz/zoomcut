@@ -7,6 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import type { z } from 'zod'
+import { AGENT_SCENARIO_MAX_ACTIONS, AGENT_TYPE_MAX_CHARS } from '@shared/agentScenario'
 import { agentParamSchemas, type AgentMethodName } from '@shared/agentSchemas'
 import { BridgeError } from './rpc'
 
@@ -34,6 +35,16 @@ const DESTROYS: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, 
 const UNITS =
   'Units: times are milliseconds. Positions on a display are DIP (device-independent pixels, what Windows reports at the ' +
   "display's scaling) relative to the display's top-left corner. Positions inside a recording are fractions 0..1 of its frame."
+
+/**
+ * What start_recording, record_scenario and start_scenario_capture are refused for. They leave the screen they find
+ * (closing the editor), so they wait for the user's own work too: see assertIdle in src/main/agent/methods.ts and
+ * assertUiIdle in src/renderer/src/agent/executor.ts.
+ */
+const BUSY_WHEN_STARTING =
+  'Fails with `busy`, changing nothing, while ZoomCut is occupied: an export is running (the export dialog, a composition export or export_project), ' +
+  'a voiceover is being recorded, a GIF conversion is running, a scenario Preview is playing on the scenario review screen, ' +
+  'or a recording or a scenario capture is already going on.'
 
 export const SERVER_INSTRUCTIONS =
   'ZoomCut is a screen recorder and demo editor. Typical flow: get_status, then record the screen (start_recording / stop_recording) ' +
@@ -115,7 +126,7 @@ export const TOOLS: ToolDef[] = [
       '(not recorded) shows the state. Returns after the ~3 second countdown, once recording is running; it keeps going until stop_recording ' +
       '(or cancel_recording). While it runs the machine can be used normally, for example by the user, or by an agent driving ' +
       'another app. Audio: `mic` and `systemAudio` (what the computer plays) default to the app\'s last choice, usually off. ' +
-      'Fails with `busy` if a recording or scenario capture is already running. If this call is cancelled (the client interrupts it) before ' +
+      `${BUSY_WHEN_STARTING} If this call is cancelled (the client interrupts it) before ` +
       'the recording is running, ZoomCut discards the recording.'
   },
   {
@@ -189,8 +200,9 @@ export const TOOLS: ToolDef[] = [
       'it takes about as long as the video (a minute or more for long ones) and the call waits for it. Everything is optional and defaults to ' +
       'the export settings saved in the project (set from the last export dialog); what you pass is saved back to the project. ' +
       'Frame rates: mp4 24 / 30 / 60, gif 10 / 12 / 15 / 20 / 25. `folder` must be an absolute path. An existing file is never overwritten ' +
-      '("-2" is appended). GIFs have no audio; large GIFs get big fast, so prefer scale 0.5 and 10-15 fps. If this call is cancelled (the client ' +
-      'interrupts it) ZoomCut stops the export.'
+      '("-2" is appended). GIFs have no audio; large GIFs get big fast, so prefer scale 0.5 and 10-15 fps. Fails with `busy` while a recording ' +
+      '(also one that is being saved), a scenario replay or Preview, or a scenario capture is running, and while another export is running: ' +
+      'export once it has ended. If this call is cancelled (the client interrupts it) ZoomCut stops the export.'
   },
   {
     name: 'delete_project',
@@ -216,8 +228,14 @@ export const TOOLS: ToolDef[] = [
     method: 'scenarios.get',
     annotations: READ_ONLY,
     description:
-      'The actions of one scenario in the same form create_scenario takes: kind, display-relative DIP coordinates, text or key, and the ' +
-      'effective durationMs and pauseMs of each action (and the total replay length). Works for scenarios captured by a person too.'
+      'The actions of one scenario in the form create_scenario takes, so they can be passed back as they are (create_scenario ignores the `id` ' +
+      'each action carries; pass `displayId` too to stay on the same display): kind, display-relative DIP coordinates, modifiers, text or key, and the ' +
+      'effective durationMs and pauseMs of each action (and the total replay length). Works for scenarios captured by a person too. ' +
+      'A click can come back with `hoverOnly: true`: the cursor only travels there and nothing is pressed (a click the user switched to "position only"; ' +
+      'it has no modifiers). Keys a capture has no common name for come back as names create_scenario accepts again. ' +
+      `The exception when passing actions back (besides create_scenario's limit of ${AGENT_SCENARIO_MAX_ACTIONS} actions): a captured click, drag or scroll on a ` +
+      'monitor other than the scenario\'s display comes back with coordinates outside that display, and create_scenario rejects it as outside the display; ' +
+      'leave it out or give it new coordinates.'
   },
   {
     name: 'create_scenario',
@@ -226,13 +244,18 @@ export const TOOLS: ToolDef[] = [
     annotations: CHANGES,
     description:
       'Write a scenario: a script of actions ZoomCut replays on the REAL screen with the real mouse and keyboard (see record_scenario). ' +
-      'Actions: click / doubleClick / rightClick / middleClick (x, y, optional modifiers), drag (x, y to toX, toY), scroll (x, y, deltaY / deltaX in wheel ' +
-      'notches, positive = down / right), type (text), key ("Enter", "Ctrl+S", "Alt+Tab", "F5"; "Win" alone opens Start). Coordinates are DIP relative ' +
+      'Actions: click / doubleClick / rightClick / middleClick (x, y, optional modifiers; or `hoverOnly: true` to only move the cursor to (x, y) and ' +
+      'press nothing, for hover effects and tooltips - only on these click kinds, and not together with modifiers), drag (x, y to toX, toY, optional ' +
+      '`modifiers` held during the drag, e.g. ["shift"]), scroll (x, y, deltaY / deltaX in wheel notches, positive = down / right), type (text), ' +
+      'key ("Enter", "Ctrl+S", "Alt+Tab", "F5"; "Win" alone opens Start). Coordinates are DIP relative ' +
       'to the display\'s top-left: find them with take_screenshot (image pixel / scale) and list_displays. Replay is strictly sequential: ' +
       'each action takes `durationMs` (the mouse glides there, then acts; defaults click/scroll 1000, drag 1500, key 500, typing 80 per character) ' +
       'and is followed by `pauseMs` of stillness (default 1500) - give slow things (page loads, animations) a longer pause so the recording shows them. ' +
       'Click a field before typing into it. Typed text goes to whatever has focus; no newlines or tabs (use key actions). ' +
-      'The total may not exceed 10 minutes. Does not touch the machine yet: returns { scenarioId }. Then record_scenario.'
+      `At most ${AGENT_SCENARIO_MAX_ACTIONS} actions and ${AGENT_TYPE_MAX_CHARS} characters per type action; the total may not exceed 10 minutes. ` +
+      'The actions from get_scenario can be passed in as they are (their `id` is ignored); the exception is a captured click, drag or scroll on a ' +
+      'monitor other than the scenario\'s display, which is rejected as outside the display. ' +
+      'Does not touch the machine yet: returns { scenarioId }. Then record_scenario.'
   },
   {
     name: 'delete_scenario',
@@ -256,7 +279,7 @@ export const TOOLS: ToolDef[] = [
       'the replay and discards the recording, unless it is already being saved. ' +
       'The windows and pages the scenario clicks must already be set up as the scenario expects. Takes as long as the scenario, plus a few ' +
       'seconds, plus the time to convert and save the recording (longer for long scenarios). The new recording opens in the ZoomCut editor. ' +
-      'Audio flags work like start_recording.'
+      `Audio flags work like start_recording. ${BUSY_WHEN_STARTING}`
   },
   {
     name: 'start_scenario_capture',
@@ -267,7 +290,7 @@ export const TOOLS: ToolDef[] = [
       'Start capturing the clicks, drags, scrolls and keystrokes the USER performs on a display, to turn them into a scenario (the user must ' +
       'demonstrate it; the agent cannot click for them). Returns after the ~3 second countdown, once capturing runs. Tell the user to perform the steps, ' +
       'then call stop_scenario_capture (they can also press Ctrl+Alt+R or Stop on the floating bar - then just call stop_scenario_capture to get the id). ' +
-      'If this call is cancelled (the client interrupts it) before the capture is running, ZoomCut discards the capture.'
+      `${BUSY_WHEN_STARTING} If this call is cancelled (the client interrupts it) before the capture is running, ZoomCut discards the capture.`
   },
   {
     name: 'stop_scenario_capture',
