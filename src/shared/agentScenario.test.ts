@@ -211,6 +211,16 @@ describe('buildAgentScenario', () => {
     expect(s.actions[1]).toMatchObject({ deltaY: 0, deltaX: 4 })
   })
 
+  it('takes a scroll of no notches at all as a cursor move when both deltas are given, and only then', () => {
+    const scroll = (extra: Record<string, unknown>): AgentScenarioInput => ({ name: 'x', actions: [{ kind: 'scroll', x: 10, y: 10, ...extra } as never] })
+    const s = build(scroll({ deltaY: 0, deltaX: 0 }))
+    expect(s.actions[0]).toMatchObject({ kind: 'scroll', deltaY: 0, deltaX: 0, durationMs: 1000 })
+    expect(compileScenario(s, { startPos: s.startPoint! }).some((step) => step.op === 'wheel')).toBe(false)
+    // one delta of 0 on its own is a mistake (the other would default or be missing), not a choice
+    expect(failure(() => build(scroll({ deltaY: 0 })))).toContain('non-zero')
+    expect(failure(() => build(scroll({ deltaX: 0 })))).toContain('non-zero')
+  })
+
   it('survives a JSON round trip and the migration untouched, and compiles to replay steps', () => {
     const s = build({
       name: 'round trip',
@@ -463,6 +473,9 @@ describe('a captured scenario through get_scenario and back into create_scenario
     // 150 notches down and 3 to the left, merged into one scroll
     ...Array.from({ length: 150 }, (_, i) => wheel(`w${i}`, 9000 + i * 10, 1)),
     ...Array.from({ length: 3 }, (_, i) => wheel(`x${i}`, 10_600 + i * 10, -1, true)),
+    // a notch down and back up within the merge window: one scroll of 0 and 0 notches
+    wheel('z0', 11_500, 1),
+    wheel('z1', 11_550, -1),
     // typed text
     ...[...'hello'].map((ch, i) => keyEvent(`t${i}`, 12_000 + i * 100, 0x23 + i, ch.toUpperCase().charCodeAt(0), { text: ch })),
     // keys a capture has other names for than the chords an agent writes
@@ -500,6 +513,8 @@ describe('a captured scenario through get_scenario and back into create_scenario
     expect(byId['d1']).toMatchObject({ kind: 'drag', x: 300, y: 300, toX: 500, toY: 400, modifiers: ['shift'] })
     expect(byId['r1']).toMatchObject({ kind: 'rightClick' })
     expect(byId['w0']).toMatchObject({ kind: 'scroll', deltaY: 150, deltaX: -3 })
+    // reported as it is, 0 and 0: create_scenario takes that back
+    expect(byId['z0']).toMatchObject({ kind: 'scroll', deltaY: 0, deltaX: 0 })
     expect(view.actions.filter((a) => a.kind === 'key').map((a) => (a.kind === 'key' ? a.key : ''))).toEqual([
       // the keys of the table by name, every other one by scancode, "e" for the extended ones and "@" its virtual key
       'NumpadEnter', 'Numpad5', 'NumLock', 'ScrollLock', 'IntlBackslash', 'Ctrl+Numpad+', 'Menu', 'Ctrl+S',
@@ -551,6 +566,24 @@ describe('a captured scenario through get_scenario and back into create_scenario
     // the media keys in particular: a replay presses Volume Up, not the B key
     expect(keys(again)).toContainEqual({ vk: 0xaf, scan: 0x30, extended: true, modifiers: NONE })
     expect(keys(again).filter((k) => k.vk === 0x42)).toEqual([])
+  })
+
+  it('keeps a scroll that adds up to no notch, which replays as a cursor move', () => {
+    const original = captured([
+      // a touchpad: libuiohook sends each small delta as rotation 0 until a whole notch has built up
+      wheel('z0', 1000, 0),
+      wheel('z1', 1100, 0),
+      wheel('u0', 5000, 1),
+      wheel('u1', 5100, -1),
+      wheel('h0', 9000, 0, true)
+    ])
+    expect(original.actions.map((a) => a.kind)).toEqual(['scroll', 'scroll', 'scroll'])
+    expect(original.actions).toMatchObject([{ deltaY: 0, deltaX: 0 }, { deltaY: 0, deltaX: 0 }, { deltaY: 0, deltaX: 0 }])
+    const again = viaAgentApi(original)
+    expect(again.actions).toMatchObject([{ deltaY: 0, deltaX: 0 }, { deltaY: 0, deltaX: 0 }, { deltaY: 0, deltaX: 0 }])
+    expect(again.actions.map(actionDurationMs)).toEqual(original.actions.map(actionDurationMs))
+    expect(steps(again)).toEqual(steps(original))
+    expect(steps(again).some((step) => step.op === 'wheel')).toBe(false)
   })
 
   it('keeps a scroll of more notches than anyone scripts, with the time it needs', () => {

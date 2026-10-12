@@ -278,7 +278,7 @@ export const agentScenarioActionSchema = z.discriminatedUnion('kind', [
         .int()
         .min(-AGENT_SCROLL_MAX_NOTCHES)
         .max(AGENT_SCROLL_MAX_NOTCHES)
-        .describe(`Wheel notches, positive = content scrolls down, at most ${AGENT_SCROLL_MAX_NOTCHES} either way (default 3 when deltaX is not given either)`)
+        .describe(`Wheel notches, positive = content scrolls down, at most ${AGENT_SCROLL_MAX_NOTCHES} either way (default 3 when deltaX is not given either; both 0 only moves the cursor)`)
         .optional(),
       deltaX: z
         .number()

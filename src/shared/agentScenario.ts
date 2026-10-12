@@ -197,8 +197,13 @@ export function buildAgentScenario(input: AgentScenarioInput, display: AgentDisp
         const p = absolutePoint(where, raw, 'x', 'y', bounds)
         let deltaY = notches(where, raw, 'deltaY')
         const deltaX = notches(where, raw, 'deltaX')
-        if (raw['deltaY'] === undefined && raw['deltaX'] === undefined) deltaY = AGENT_DEFAULT_SCROLL_NOTCHES
-        if (deltaY === 0 && deltaX === 0) bad(`${where}: a scroll needs a non-zero deltaY or deltaX (wheel notches, positive = down / right)`)
+        const given = (raw['deltaY'] !== undefined ? 1 : 0) + (raw['deltaX'] !== undefined ? 1 : 0)
+        if (given === 0) deltaY = AGENT_DEFAULT_SCROLL_NOTCHES
+        // both given as 0 is what a capture can hold (a touchpad's small deltas add up to no notch, a scroll down and
+        // back up cancels out) and replays as a cursor move: accepted, so that get_scenario's actions can be passed back
+        if (deltaY === 0 && deltaX === 0 && given < 2) {
+          bad(`${where}: a scroll needs a non-zero deltaY or deltaX (wheel notches, positive = down / right); give both as 0 to only move the cursor`)
+        }
         action = { ...common, kind: 'scroll', ...p, modifiers: { ...NO_MODIFIERS }, deltaY, deltaX }
         cursor = p
         break
