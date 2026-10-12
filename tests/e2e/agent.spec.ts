@@ -211,7 +211,8 @@ test('records, edits and exports through the agent', async () => {
   expect(edited.outputDurationMs).toBeLessThan(before.outputDurationMs)
   // saved before the reply, and visible in the open editor
   expect(readProject(recordingsDir, projectId).name).toBe('Agent demo')
-  await expect(win.locator('.editor')).toContainText('Agent demo')
+  await expect(win.locator('.editor .name-input')).toHaveValue('Agent demo')
+  await expect(win.locator('.editor')).toContainText('Made by an agent')
 
   // one undo step in the editor
   await win.keyboard.press('Control+z')
@@ -263,7 +264,7 @@ test('scenarios: create, read back, list, delete', async () => {
   expect(list.map((s) => s.id)).toContain(created.scenarioId)
 
   // Home picks up agent changes without a reload
-  await win.locator('button:has-text("Back")').first().click()
+  await win.locator('.editor-top > button').first().click()
   await win.waitForSelector('.home')
   await expect(win.locator('.scenario-block:has-text("Agent scenario")')).toHaveCount(1)
   await call('delete_scenario', { scenarioId: created.scenarioId })
@@ -276,7 +277,7 @@ test('deleting a project: refused while open, then gone from disk and Home', asy
   await win.locator(`.project-row:has-text("Agent demo")`).first().click()
   await win.waitForSelector('.editor')
   expect(await callError('delete_project', { projectId })).toContain('busy')
-  await win.locator('button:has-text("Back")').first().click()
+  await win.locator('.editor-top > button').first().click()
   await win.waitForSelector('.home')
   await call('delete_project', { projectId })
   expect(projectIds(recordingsDir)).not.toContain(projectId)
@@ -285,11 +286,12 @@ test('deleting a project: refused while open, then gone from disk and Home', asy
 
 test('the MCP config dialog shows a ready-to-paste config', async () => {
   await win.locator('button:has-text("AI agents")').click()
-  const dialog = win.locator('.agent-dialog, [role="dialog"]').first()
+  const dialog = win.locator('.modal')
   await expect(dialog).toContainText('mcpServers')
   await expect(dialog).toContainText('zoomcut-mcp.cjs')
   await expect(dialog).toContainText('claude mcp add')
   await win.keyboard.press('Escape')
+  await expect(win.locator('.modal')).toHaveCount(0)
 })
 
 // Moves nothing but presses Shift on the real keyboard while recording: run only on an idle machine.
