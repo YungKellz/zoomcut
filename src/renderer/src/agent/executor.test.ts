@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AppSettings, Project, Scenario, ScenarioClickAction } from '@shared/types'
-import type { AgentCommand, AgentProjectView, AgentReply, AgentRendererMethod } from '@shared/agent'
+import type { AppSettings, Composition, Project, Scenario, ScenarioClickAction } from '@shared/types'
+import type { AgentCommand, AgentProjectView, AgentReply, AgentRendererMethod, AgentUiStatus } from '@shared/agent'
 import { DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from '@shared/defaults'
 
 // The executor talks to `window.zc` (the preload API) and the zustand store only; a fake `zc` on
@@ -21,7 +21,7 @@ const h = vi.hoisted(() => {
 })
 vi.mock('../export/exporter', () => ({ runExport: vi.fn() }))
 
-import { useStore } from '../store'
+import { useStore, type BusyKind } from '../store'
 import { useI18n } from '../i18n'
 import { runExport } from '../export/exporter'
 import { installAgentExecutor } from './executor'
@@ -86,6 +86,22 @@ function makeScenario(id = 's1', withAction = true): Scenario {
     dir: `C:\\scenarios\\${id}`
   }
 }
+
+function makeComposition(projectIds: string[]): Composition {
+  return {
+    version: 1,
+    id: 'c1',
+    name: 'Tour',
+    createdAt: 0,
+    updatedAt: 0,
+    items: projectIds.map((projectId, i) => ({ id: `i${i}`, projectId })),
+    size: null,
+    background: '#000000',
+    export: { ...DEFAULT_EXPORT_SETTINGS }
+  }
+}
+
+const idleStatus: AgentUiStatus = { screen: 'home', openProjectId: null, openScenarioId: null, compositionProjectIds: [] }
 
 const settings = (patch: Partial<AppSettings> = {}): AppSettings => ({
   lastExportFolder: null,
@@ -152,7 +168,8 @@ beforeEach(() => {
     selection: null,
     mode: 'normal',
     history: [],
-    future: []
+    future: [],
+    busy: {}
   })
   zc.agent.onCommand.mockImplementation((cb: (c: AgentCommand) => void) => {
     handler = cb
@@ -183,14 +200,36 @@ afterEach(() => {
 describe('status', () => {
   it('pushes the screen and the open project, only when they change', () => {
     expect(zc.agent.pushStatus).toHaveBeenCalledTimes(1)
-    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'home', openProjectId: null })
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith(idleStatus)
     useStore.getState().openProject(makeProject())
-    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'editor', openProjectId: 'p1' })
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ ...idleStatus, screen: 'editor', openProjectId: 'p1' })
     useStore.getState().setPlayhead(500)
     useStore.getState().select({ kind: 'zoom', id: 'x' })
     expect(zc.agent.pushStatus).toHaveBeenCalledTimes(2)
     useStore.getState().closeProject()
-    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'home', openProjectId: null })
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith(idleStatus)
+  })
+
+  it('reports the open scenario and the recordings of the open composition, and pushes again when they change', () => {
+    const scenario = makeScenario('s7')
+    useStore.getState().openScenario(scenario)
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ ...idleStatus, screen: 'scenario', openScenarioId: 's7' })
+    // renaming the scenario changes nothing the status carries
+    useStore.getState().setScenario({ ...scenario, name: 'renamed' })
+    expect(zc.agent.pushStatus).toHaveBeenCalledTimes(2)
+    useStore.getState().closeScenario()
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith(idleStatus)
+
+    useStore.getState().openComposition(makeComposition(['a', 'b', 'a']))
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ ...idleStatus, screen: 'composition', compositionProjectIds: ['a', 'b'] })
+    useStore.getState().setComposition((c) => ({ ...c, items: [...c.items, { id: 'i9', projectId: 'c' }] }))
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ ...idleStatus, screen: 'composition', compositionProjectIds: ['a', 'b', 'c'] })
+    // editing one of its recordings keeps the composition open, so its recordings stay protected
+    useStore.getState().openProject(makeProject('a'))
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'editor', openProjectId: 'a', openScenarioId: null, compositionProjectIds: ['a', 'b', 'c'] })
+    useStore.getState().closeProject()
+    useStore.getState().closeComposition()
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith(idleStatus)
   })
 
   it('survives a main process that does not answer', () => {
@@ -219,7 +258,7 @@ describe('status', () => {
     expect(order).toEqual(['listen', 'push'])
     await vi.advanceTimersByTimeAsync(500)
     expect(order).toEqual(['listen', 'push', 'push'])
-    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith({ screen: 'home', openProjectId: null })
+    expect(zc.agent.pushStatus).toHaveBeenLastCalledWith(idleStatus)
     // once it got through nothing is repeated
     await vi.advanceTimersByTimeAsync(5000)
     expect(zc.agent.pushStatus).toHaveBeenCalledTimes(2)
@@ -297,6 +336,19 @@ describe('projects.edit', () => {
     await call('projects.edit', { projectId: 'p1', operations: [{ op: 'removeZoom', id: 'z1' }] })
     expect(useStore.getState().selection).toBeNull()
     expect(useStore.getState().project?.zooms).toEqual([])
+  })
+
+  it('ends an area pick together with the zoom it was picking', async () => {
+    const p = makeProject()
+    p.zooms = [{ id: 'z1', start: 1000, end: 3000, scale: 2, mode: 'follow', target: { x: 0.5, y: 0.5 }, easeInMs: 600, easeOutMs: 500 }]
+    useStore.getState().openProject(p)
+    useStore.getState().beginPick('z1')
+    expect(useStore.getState().mode).toBe('pickTarget')
+    await call('projects.edit', { projectId: 'p1', operations: [{ op: 'removeZoom', id: 'z1' }] })
+    // select() ignores everything but the zoom being picked, so the pick has to end first
+    expect(useStore.getState().selection).toBeNull()
+    expect(useStore.getState().mode).toBe('normal')
+    expect(useStore.getState().pickRect).toBeNull()
   })
 
   it('keeps a selection that still exists', async () => {
@@ -446,6 +498,79 @@ describe('projects.export', () => {
   })
 })
 
+describe('cancel', () => {
+  it('aborts the running export, which then replies cancelled, and answers ok itself', async () => {
+    disk.set('p2', makeProject('p2'))
+    runExportMock.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new DOMException('Export cancelled', 'AbortError')))
+        })
+    )
+    const exported = call('projects.export', { projectId: 'p2' }, 'exp-1')
+    await vi.waitFor(() => expect(runExportMock).toHaveBeenCalledTimes(1))
+    expect(runExportMock.mock.calls[0][0].signal.aborted).toBe(false)
+
+    expect(okResult(await call('cancel', { requestId: 'exp-1' }))).toEqual({})
+
+    expect(runExportMock.mock.calls[0][0].signal.aborted).toBe(true)
+    expect(errorOf(await exported)).toMatchObject({ code: 'cancelled' })
+    expect(useStore.getState().notice).toBeNull()
+    // the slot is free again
+    runExportMock.mockResolvedValueOnce({ outputPath: 'again.mp4', bytes: 1 })
+    expect(okResult(await call('projects.export', { projectId: 'p2' }))).toEqual({ outputPath: 'again.mp4', bytes: 1 })
+  })
+
+  it('cancels an export that is still loading, before the exporter starts', async () => {
+    let release: () => void = () => undefined
+    zc.projects.load.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(makeProject('p2'))
+        })
+    )
+    const exported = call('projects.export', { projectId: 'p2' }, 'exp-2')
+    await vi.waitFor(() => expect(zc.projects.load).toHaveBeenCalledTimes(1))
+    okResult(await call('cancel', { requestId: 'exp-2' }))
+    release()
+    expect(errorOf(await exported).code).toBe('cancelled')
+    expect(runExportMock).not.toHaveBeenCalled()
+    expect(zc.projects.save).not.toHaveBeenCalled()
+  })
+
+  it('reports an exporter failure as cancelled once the export was cancelled', async () => {
+    disk.set('p2', makeProject('p2'))
+    runExportMock.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('ffmpeg was killed')))
+        })
+    )
+    const exported = call('projects.export', { projectId: 'p2' }, 'exp-3')
+    await vi.waitFor(() => expect(runExportMock).toHaveBeenCalledTimes(1))
+    okResult(await call('cancel', { requestId: 'exp-3' }))
+    expect(errorOf(await exported)).toMatchObject({ code: 'cancelled' })
+  })
+
+  it('is a no-op for an unknown or finished request', async () => {
+    expect(okResult(await call('cancel', { requestId: 'nobody' }))).toEqual({})
+    disk.set('p2', makeProject('p2'))
+    runExportMock.mockResolvedValueOnce({ outputPath: 'x.mp4', bytes: 1 })
+    okResult(await call('projects.export', { projectId: 'p2' }, 'exp-4'))
+    expect(okResult(await call('cancel', { requestId: 'exp-4' }))).toEqual({})
+  })
+
+  it('leaves other commands alone and needs a request id', async () => {
+    disk.set('p2', makeProject('p2'))
+    expect(errorOf(await call('cancel', {})).code).toBe('bad_params')
+    expect(errorOf(await call('cancel', undefined)).code).toBe('bad_params')
+    // an edit that already runs is not an export: nothing to abort
+    const edited = call('projects.edit', { projectId: 'p2', operations: [{ op: 'rename', name: 'Kept' }] }, 'edit-1')
+    okResult(await call('cancel', { requestId: 'edit-1' }))
+    expect(okResult<AgentProjectView>(await edited).name).toBe('Kept')
+  })
+})
+
 describe('recording.start', () => {
   it('closes the editor, hands over a record start with the remembered audio and replies once it was taken', async () => {
     useStore.getState().openProject(makeProject())
@@ -568,5 +693,98 @@ describe('capture.start', () => {
     okResult(await call('capture.start', undefined))
     off()
     expect(taken).toEqual([{ kind: 'capture', displayId: 9 }])
+  })
+})
+
+describe('start commands while the user is busy', () => {
+  const starts: Array<[AgentRendererMethod, unknown]> = [
+    ['recording.start', { displayId: 1 }],
+    ['scenarios.record', { scenarioId: 's1' }],
+    ['capture.start', { displayId: 1 }]
+  ]
+
+  beforeEach(() => {
+    zc.scenario.load.mockResolvedValue(makeScenario('s1'))
+    useStore.getState().openProject(makeProject())
+  })
+
+  it.each(starts)('%s answers busy for each kind of running work and leaves the screen alone', async (method, params) => {
+    const messages: Record<string, RegExp> = {
+      export: /exporting a video/,
+      voiceover: /voiceover/,
+      converter: /GIF conversion/,
+      replay: /replay/,
+      recording: /recording is in progress/,
+      capture: /capture is in progress/
+    }
+    for (const [kind, message] of Object.entries(messages)) {
+      useStore.getState().setBusy(kind as BusyKind, true)
+      const error = errorOf(await call(method, params))
+      useStore.getState().setBusy(kind as BusyKind, false)
+      expect(error.code).toBe('busy')
+      expect(error.message).toMatch(message)
+    }
+    expect(useStore.getState().screen).toBe('editor')
+    expect(useStore.getState().project?.id).toBe('p1')
+    expect(useStore.getState().scenario).toBeNull()
+    expect(useStore.getState().pendingStart).toBeNull()
+  })
+
+  it.each(starts)('%s starts as soon as nothing is running any more', async (method, params) => {
+    const taken: unknown[] = []
+    const off = fakeScreenTakingStarts(taken)
+    useStore.getState().setBusy('voiceover', true)
+    expect(errorOf(await call(method, params)).code).toBe('busy')
+    useStore.getState().setBusy('voiceover', false)
+    okResult(await call(method, params))
+    off()
+    expect(taken).toHaveLength(1)
+    expect(useStore.getState().project).toBeNull()
+  })
+
+  it.each(starts)('%s checks again right before it leaves the screen', async (method, params) => {
+    // the user starts a voiceover while the command is still looking up the settings
+    zc.app.getSettings.mockImplementation(async () => {
+      useStore.getState().setBusy('voiceover', true)
+      return settings()
+    })
+    zc.displays.list.mockResolvedValue([{ id: 1, primary: true }])
+    expect(errorOf(await call(method, params)).code).toBe('busy')
+    expect(useStore.getState().project?.id).toBe('p1')
+    expect(useStore.getState().pendingStart).toBeNull()
+  })
+
+  it.each(starts)('%s answers busy while an agent export still runs, without touching it', async (method, params) => {
+    disk.set('p2', makeProject('p2'))
+    let finish: () => void = () => undefined
+    runExportMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ outputPath: 'a.mp4', bytes: 1 })
+        })
+    )
+    const exported = call('projects.export', { projectId: 'p2' })
+    await vi.waitFor(() => expect(runExportMock).toHaveBeenCalledTimes(1))
+
+    const error = errorOf(await call(method, params))
+    expect(error.code).toBe('busy')
+    expect(error.message).toMatch(/export is still running/)
+    expect(useStore.getState().project?.id).toBe('p1')
+
+    finish()
+    expect(okResult(await exported)).toEqual({ outputPath: 'a.mp4', bytes: 1 })
+  })
+
+  it('tracks the kinds independently in the store', () => {
+    const store = useStore.getState()
+    store.setBusy('export', true)
+    store.setBusy('replay', true)
+    store.setBusy('export', false)
+    expect(Object.keys(useStore.getState().busy)).toEqual(['replay'])
+    // setting the same value again does not notify anyone
+    const before = useStore.getState().busy
+    store.setBusy('replay', true)
+    store.setBusy('capture', false)
+    expect(useStore.getState().busy).toBe(before)
   })
 })

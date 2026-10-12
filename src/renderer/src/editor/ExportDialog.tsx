@@ -5,6 +5,7 @@ import { FolderOpen, X } from 'lucide-react'
 import type { ExportFinishResult, ExportProgress, ExportSettings, GifSettings } from '@shared/types'
 import { SCALE_OPTIONS } from '@shared/defaults'
 import { useProject, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import type { FollowPath } from '../engine/cursor'
 import { outputSize, TRANSPARENT_BACKGROUND } from '../engine/compose'
 import { keepSegments, outputDuration } from '../engine/timeline'
@@ -130,6 +131,8 @@ export function ExportDialogView(props: ExportDialogViewProps): JSX.Element {
       })
     }
   }, [settings.folder])
+
+  useBusy('export', running)
 
   useEffect(() => window.zc.export.onProgress(setFfmpeg), [])
 

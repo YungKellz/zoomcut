@@ -60,6 +60,14 @@ export type PendingStart =
   | { kind: 'replay'; scenarioId: string; audio: AudioCaptureOptions | null }
   | { kind: 'capture'; displayId: number }
 
+/**
+ * Long-running work a screen has going that leaving the screen would throw away: an export (editor
+ * dialog or composition), a voiceover take, a GIF conversion, a scenario replay / preview on the
+ * review screen, a recording, a scenario capture. Set through hooks/useBusy.ts (one place per kind);
+ * the agent executor answers `busy` to a command that would close the screen meanwhile.
+ */
+export type BusyKind = 'export' | 'voiceover' | 'converter' | 'replay' | 'recording' | 'capture'
+
 export const PICK_MIN_SIZE = 1 / 5
 export const PICK_MAX_SIZE = 1 / 1.2
 
@@ -114,6 +122,8 @@ export interface EditorState {
   /** clip ids whose <audio> element reported a load/decode error (e.g. a missing file);
    * AudioPlayer sets this instead of retrying play() forever, the Audio panel shows a warning */
   audioErrors: Record<string, boolean>
+  /** what is running right now, see BusyKind (one instance of each kind exists at a time) */
+  busy: Partial<Record<BusyKind, true>>
 
   openProject(project: Project): void
   closeProject(): void
@@ -178,6 +188,7 @@ export interface EditorState {
   removeAudioClip(id: string): void
   setAudioMuted(muted: boolean): void
   setAudioError(id: string, hasError: boolean): void
+  setBusy(kind: BusyKind, on: boolean): void
 }
 
 export const useStore = create<EditorState>((set, get) => ({
@@ -201,6 +212,7 @@ export const useStore = create<EditorState>((set, get) => ({
   exportOpen: false,
   audioMuted: false,
   audioErrors: {},
+  busy: {},
 
   openProject: (project) =>
     set({
@@ -612,6 +624,15 @@ export const useStore = create<EditorState>((set, get) => ({
       if (hasError) next[id] = true
       else delete next[id]
       return { audioErrors: next }
+    }),
+
+  setBusy: (kind, on) =>
+    set((s) => {
+      if (Boolean(s.busy[kind]) === on) return s
+      const next = { ...s.busy }
+      if (on) next[kind] = true
+      else delete next[kind]
+      return { busy: next }
     }),
 
   setNotice: (notice) => set({ notice }),

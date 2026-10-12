@@ -30,6 +30,7 @@ import type { AudioClip, BlurRegion, MusicTrack, TextOverlay, ZoomSegment } from
 import { DEFAULT_AUDIO_CAPTURE, GRADIENT_PRESETS } from '@shared/defaults'
 import { isRecordedClip, newAudioClipDefaults } from '@shared/audio'
 import { useProject, useStore } from '../store'
+import { useBusy } from '../hooks/useBusy'
 import { uid } from '../engine/ids'
 import { generateZoomsFromClicks } from '../engine/zoomAuto'
 import { ZOOM_SCALE_MAX, ZOOM_SCALE_MIN, findZoom, insertZoomPart, zoomAreaFocusMs, zoomAreaIndexAt, zoomAreas } from '../engine/camera'
@@ -674,6 +675,8 @@ function VoiceoverRecorder({ t }: PanelProps): JSX.Element {
   // (double-click, Escape racing the button) cannot re-enter and stop the mic tracks early.
   const stoppingRef = useRef(false)
   const startWallRef = useRef(0)
+  // a take that is being recorded, or still being saved, is lost when the editor closes
+  useBusy('voiceover', recording || busy)
 
   // the last used device is shared with Home's mic checkbox (AppSettings.audioDefaults.micDeviceId)
   useEffect(() => {

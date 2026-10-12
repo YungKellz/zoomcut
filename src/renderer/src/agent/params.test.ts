@@ -4,6 +4,7 @@ import { AgentError } from '@shared/agent'
 import { DEFAULT_AUDIO_CAPTURE, DEFAULT_CURSOR_SETTINGS, DEFAULT_EXPORT_SETTINGS, DEFAULT_FRAME_STYLE } from '@shared/defaults'
 import {
   errorPayload,
+  parseCancelParams,
   parseCaptureParams,
   parseEditParams,
   parseExportParams,
@@ -138,6 +139,15 @@ describe('resolveExportSettings', () => {
     const before = JSON.stringify(p)
     resolveExportSettings(p, { projectId: 'p1', format: 'gif', gifColors: 32 }, ctx)
     expect(JSON.stringify(p)).toBe(before)
+  })
+})
+
+describe('parseCancelParams', () => {
+  it('needs the request id to cancel', () => {
+    expect(parseCancelParams({ requestId: 'r7' })).toEqual({ requestId: 'r7' })
+    expect(badParams(() => parseCancelParams({}))).toMatch(/requestId is required/)
+    expect(badParams(() => parseCancelParams({ requestId: '  ' }))).toMatch(/requestId is required/)
+    expect(badParams(() => parseCancelParams(undefined))).toMatch(/params must be an object/)
   })
 })
 

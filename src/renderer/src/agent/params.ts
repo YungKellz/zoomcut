@@ -123,6 +123,12 @@ export function resolveExportSettings(project: Project, p: AgentExportParams, ct
   return s
 }
 
+// ---- cancel ----
+
+export function parseCancelParams(params: unknown): { requestId: string } {
+  return { requestId: str(asObject(params), 'requestId') }
+}
+
 // ---- recording.start / scenarios.record / capture.start ----
 
 export interface RecordParams {
